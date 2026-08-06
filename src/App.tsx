@@ -13,7 +13,9 @@ import {
   Unplug,
   Send,
   ArrowLeft,
+  Camera,
 } from 'lucide-react';
+import QrScannerModal from './QrScannerModal';
 import {
   generateSecretKey,
   exportKey,
@@ -89,6 +91,8 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [peerLabel, setPeerLabel] = useState('Близкий');
   const [routeBusy, setRouteBusy] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [connectingAnswer, setConnectingAnswer] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -373,8 +377,51 @@ export default function App() {
     setCallState('idle');
     setInviteUrl('');
     setQrUrl('');
+    setScannerOpen(false);
+    setConnectingAnswer(false);
     setScreen('home');
   };
+
+  const applyAnswerFromText = useCallback(
+    async (raw: string) => {
+      setError('');
+      setConnectingAnswer(true);
+      try {
+        const invite = await parseInviteFromPastedText(raw);
+        if (invite?.role === 'answer') {
+          await ensureP2P().acceptAnswer(invite.sdp);
+        } else if (invite?.role === 'offer') {
+          throw new Error('Это ссылка-приглашение, нужен QR ответа от близкого');
+        } else {
+          const sdp = await extractSdpFromPaste(raw);
+          await ensureP2P().acceptAnswer(sdp);
+        }
+        setRemoteSignal('');
+        setScannerOpen(false);
+        setInviteHint('');
+        setScreen('home');
+      } catch (e) {
+        setError(
+          e instanceof InviteTruncatedError
+            ? INVITE_TRUNCATED_MESSAGE
+            : e instanceof Error
+              ? e.message
+              : 'Не удалось принять ответ'
+        );
+        throw e;
+      } finally {
+        setConnectingAnswer(false);
+      }
+    },
+    [ensureP2P]
+  );
+
+  const onQrScanned = useCallback(
+    async (text: string) => {
+      await applyAnswerFromText(text);
+    },
+    [applyAnswerFromText]
+  );
 
   const startCall = async () => {
     setError('');
@@ -640,7 +687,29 @@ export default function App() {
 
             {p2pStatus === 'waiting-answer' && (
               <div className="answer-paste">
-                <p className="hint">Когда близкий пришлёт ответную ссылку — вставьте её сюда:</p>
+                <p className="hint">Когда близкий покажет QR ответа — отсканируйте его камерой:</p>
+                <button
+                  type="button"
+                  className="mega-btn primary compact scan-btn"
+                  onClick={() => {
+                    setError('');
+                    setScannerOpen(true);
+                  }}
+                  disabled={connectingAnswer}
+                >
+                  {connectingAnswer ? (
+                    <>
+                      <span className="btn-spinner" aria-hidden />
+                      Подключаем…
+                    </>
+                  ) : (
+                    <>
+                      <Camera size={28} />
+                      Сканировать QR-код ответа
+                    </>
+                  )}
+                </button>
+                <p className="hint muted-sep">или вставьте ответную ссылку вручную</p>
                 <div className="adv-row">
                   <input
                     value={remoteSignal}
@@ -649,27 +718,10 @@ export default function App() {
                   />
                   <button
                     type="button"
-                    onClick={async () => {
-                      try {
-                        const invite = await parseInviteFromPastedText(remoteSignal);
-                        if (invite?.role === 'answer') {
-                          await ensureP2P().acceptAnswer(invite.sdp);
-                        } else {
-                          const sdp = await extractSdpFromPaste(remoteSignal);
-                          await ensureP2P().acceptAnswer(sdp);
-                        }
-                        setRemoteSignal('');
-                        setScreen('home');
-                      } catch (e) {
-                        setError(
-                          e instanceof InviteTruncatedError
-                            ? INVITE_TRUNCATED_MESSAGE
-                            : e instanceof Error
-                              ? e.message
-                              : 'Не удалось принять ответ'
-                        );
-                      }
+                    onClick={() => {
+                      void applyAnswerFromText(remoteSignal).catch(() => undefined);
                     }}
+                    disabled={connectingAnswer || !remoteSignal.trim()}
                   >
                     Подключить
                   </button>
@@ -679,6 +731,11 @@ export default function App() {
           </section>
         )}
 
+        <QrScannerModal
+          open={scannerOpen}
+          onClose={() => setScannerOpen(false)}
+          onScan={onQrScanned}
+        />
         {screen === 'chat' && (
           <section className="chat">
             <div className="chat-top">
