@@ -113,6 +113,52 @@ function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEO
   });
 }
 
+const SDP_FORMAT_ERROR = 'Неверный формат ответа (ошибка декомпрессии)';
+
+/**
+ * После fflate SDP может прийти как JSON-объект, JSON-строка объекта,
+ * дважды сериализованная строка или «голый» SDP (v=0…). Нормализуем в RTCSessionDescriptionInit.
+ */
+export function parseSessionDescription(
+  input: unknown,
+  fallbackType: RTCSdpType
+): RTCSessionDescriptionInit {
+  if (input == null) throw new Error(SDP_FORMAT_ERROR);
+
+  if (typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    if (typeof obj.sdp === 'string' && obj.sdp.length > 0) {
+      const type =
+        obj.type === 'offer' || obj.type === 'answer' || obj.type === 'pranswer' || obj.type === 'rollback'
+          ? obj.type
+          : fallbackType;
+      return { type, sdp: obj.sdp };
+    }
+    throw new Error(SDP_FORMAT_ERROR);
+  }
+
+  if (typeof input !== 'string') throw new Error(SDP_FORMAT_ERROR);
+
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error(SDP_FORMAT_ERROR);
+
+  if (trimmed.startsWith('v=')) {
+    return { type: fallbackType, sdp: trimmed };
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    // Двойная сериализация: JSON.parse вернул строку
+    if (typeof parsed === 'string') {
+      return parseSessionDescription(parsed, fallbackType);
+    }
+    return parseSessionDescription(parsed, fallbackType);
+  } catch (e) {
+    if (e instanceof Error && e.message === SDP_FORMAT_ERROR) throw e;
+    throw new Error(SDP_FORMAT_ERROR);
+  }
+}
+
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     echoCancellation: true,
@@ -196,8 +242,18 @@ export class P2PConnection {
 
     pc.ondatachannel = (event) => this.bindChannel(event.channel);
 
-    const offer = JSON.parse(offerJson) as RTCSessionDescriptionInit;
-    await pc.setRemoteDescription(offer);
+    try {
+      const offer = parseSessionDescription(offerJson, 'offer');
+      await pc.setRemoteDescription(offer);
+    } catch (e) {
+      this.setStatus('failed');
+      const err =
+        e instanceof Error && e.message === SDP_FORMAT_ERROR
+          ? e
+          : new Error(SDP_FORMAT_ERROR);
+      this.handlers.onError?.(err);
+      throw err;
+    }
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -209,8 +265,19 @@ export class P2PConnection {
   async acceptAnswer(answerJson: string): Promise<void> {
     if (!this.pc) throw new Error('Сначала создайте приглашение');
     this.setStatus('connecting');
-    const answer = JSON.parse(answerJson) as RTCSessionDescriptionInit;
-    await this.pc.setRemoteDescription(answer);
+
+    try {
+      const answer = parseSessionDescription(answerJson, 'answer');
+      await this.pc.setRemoteDescription(answer);
+    } catch (e) {
+      this.setStatus('failed');
+      const err =
+        e instanceof Error && e.message === SDP_FORMAT_ERROR
+          ? e
+          : new Error(SDP_FORMAT_ERROR);
+      this.handlers.onError?.(err);
+      throw err;
+    }
   }
 
   send(payload: string): void {

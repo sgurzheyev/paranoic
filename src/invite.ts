@@ -215,12 +215,12 @@ export function clearInviteHash(): void {
   }
 }
 
-export async function makeQrDataUrl(text: string, size = 280): Promise<string> {
+export async function makeQrDataUrl(text: string, size = 320): Promise<string> {
   return QRCode.toDataURL(text, {
     width: size,
-    margin: 2,
+    margin: 0,
     color: { dark: '#0f1117', light: '#ffffff' },
-    errorCorrectionLevel: 'M',
+    errorCorrectionLevel: 'L',
   });
 }
 

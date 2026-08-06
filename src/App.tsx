@@ -100,6 +100,7 @@ export default function App() {
   const keyStringRef = useRef('');
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const answerInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bcRef = useRef<BroadcastChannel | null>(null);
 
@@ -401,13 +402,13 @@ export default function App() {
         setInviteHint('');
         setScreen('home');
       } catch (e) {
-        setError(
+        const msg =
           e instanceof InviteTruncatedError
             ? INVITE_TRUNCATED_MESSAGE
             : e instanceof Error
               ? e.message
-              : 'Не удалось принять ответ'
-        );
+              : 'Не удалось принять ответ';
+        setError(msg);
         throw e;
       } finally {
         setConnectingAnswer(false);
@@ -712,6 +713,7 @@ export default function App() {
                 <p className="hint muted-sep">или вставьте ответную ссылку вручную</p>
                 <div className="adv-row">
                   <input
+                    ref={answerInputRef}
                     value={remoteSignal}
                     onChange={(e) => setRemoteSignal(e.target.value)}
                     placeholder="Вставьте ответную ссылку"
@@ -735,6 +737,13 @@ export default function App() {
           open={scannerOpen}
           onClose={() => setScannerOpen(false)}
           onScan={onQrScanned}
+          onManualEntry={() => {
+            setScannerOpen(false);
+            requestAnimationFrame(() => {
+              answerInputRef.current?.focus();
+              answerInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+          }}
         />
         {screen === 'chat' && (
           <section className="chat">

@@ -6,9 +6,28 @@ type QrScannerModalProps = {
   open: boolean;
   onClose: () => void;
   onScan: (text: string) => void | Promise<void>;
+  /** Запасной вариант при бликах экрана — закрыть сканер и ввести ссылку вручную. */
+  onManualEntry?: () => void;
 };
 
-export default function QrScannerModal({ open, onClose, onScan }: QrScannerModalProps) {
+const HIGH_RES_CAMERA: MediaTrackConstraints = {
+  facingMode: 'environment',
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
+};
+
+const HIGH_RES_USER_CAMERA: MediaTrackConstraints = {
+  facingMode: 'user',
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
+};
+
+export default function QrScannerModal({
+  open,
+  onClose,
+  onScan,
+  onManualEntry,
+}: QrScannerModalProps) {
   const reactId = useId().replace(/:/g, '');
   const regionId = `qr-reader-${reactId}`;
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -28,49 +47,36 @@ export default function QrScannerModal({ open, onClose, onScan }: QrScannerModal
     scannerRef.current = scanner;
 
     const config: Html5QrcodeCameraScanConfig = {
-      fps: 10,
+      fps: 12,
       qrbox: (viewW, viewH) => {
-        const side = Math.floor(Math.min(viewW, viewH) * 0.72);
+        const side = Math.floor(Math.min(viewW, viewH) * 0.78);
         return { width: side, height: side };
       },
       aspectRatio: 1,
       disableFlip: false,
+      videoConstraints: HIGH_RES_CAMERA,
+    };
+
+    const onSuccess = async (decoded: string) => {
+      if (handlingRef.current || cancelled) return;
+      handlingRef.current = true;
+      try {
+        await onScan(decoded);
+      } catch {
+        handlingRef.current = false;
+      }
     };
 
     async function start() {
       try {
-        await scanner.start(
-          { facingMode: 'environment' },
-          config,
-          async (decoded) => {
-            if (handlingRef.current || cancelled) return;
-            handlingRef.current = true;
-            try {
-              await onScan(decoded);
-            } catch {
-              handlingRef.current = false;
-            }
-          },
-          () => {
-            /* кадр без QR — норма */
-          }
-        );
+        await scanner.start(HIGH_RES_CAMERA, config, onSuccess, () => undefined);
         if (!cancelled) setStatus('scanning');
       } catch {
-        // Запасной вариант: любая камера (на Mac часто user-facing)
         try {
           await scanner.start(
-            { facingMode: 'user' },
-            config,
-            async (decoded) => {
-              if (handlingRef.current || cancelled) return;
-              handlingRef.current = true;
-              try {
-                await onScan(decoded);
-              } catch {
-                handlingRef.current = false;
-              }
-            },
+            HIGH_RES_USER_CAMERA,
+            { ...config, videoConstraints: HIGH_RES_USER_CAMERA },
+            onSuccess,
             () => undefined
           );
           if (!cancelled) setStatus('scanning');
@@ -147,6 +153,17 @@ export default function QrScannerModal({ open, onClose, onScan }: QrScannerModal
         {status === 'scanning' && (
           <p className="qr-hint">Наведите камеру на QR-код с телефона близкого</p>
         )}
+
+        <button
+          type="button"
+          className="text-link qr-manual"
+          onClick={() => {
+            onClose();
+            onManualEntry?.();
+          }}
+        >
+          Ввести ссылку вручную
+        </button>
       </div>
     </div>
   );
