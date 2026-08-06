@@ -1,46 +1,97 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Send, Key, Radio, Link2, Copy, Unplug } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Phone,
+  MessageCircle,
+  ImagePlus,
+  Shield,
+  Copy,
+  Check,
+  X,
+  PhoneOff,
+  Settings2,
+  Link2,
+  Unplug,
+  Send,
+  ArrowLeft,
+} from 'lucide-react';
 import {
   generateSecretKey,
   exportKey,
   importKey,
   encryptMessage,
   decryptMessage,
+  encryptBytes,
+  decryptBytes,
 } from './crypto';
-import { P2PConnection, type P2PStatus } from './p2p';
+import { P2PConnection, type CallState, type P2PStatus } from './p2p';
+import {
+  buildInviteUrl,
+  clearInviteHash,
+  makeQrDataUrl,
+  parseInviteFromLocation,
+  SIGNAL_CHANNEL,
+  type InvitePayload,
+  type SignalMessage,
+} from './invite';
+
+type Screen = 'home' | 'invite' | 'chat' | 'call';
 
 type ChatMessage = {
+  id: string;
   sender: string;
-  text: string;
   time: string;
   mine: boolean;
+  kind: 'text' | 'media';
+  text?: string;
+  mediaUrl?: string;
+  mediaMime?: string;
+  mediaName?: string;
 };
 
-const STATUS_LABELS: Record<P2PStatus, string> = {
-  idle: 'Ожидание P2P-соединения',
-  'creating-offer': 'Создание offer…',
-  'waiting-answer': 'Ожидание answer от пира',
-  connecting: 'Установка WebRTC…',
-  connected: 'P2P DataChannel активен',
-  disconnected: 'Соединение разорвано',
-  failed: 'Ошибка соединения',
+const FRIENDLY_STATUS: Record<P2PStatus, string> = {
+  idle: 'Пока никого нет',
+  'creating-offer': 'Готовим приглашение…',
+  'waiting-answer': 'Ждём, пока близкий откроет ссылку',
+  connecting: 'Соединяемся…',
+  connected: 'Вы на связи',
+  disconnected: 'Связь прервалась',
+  failed: 'Не получилось связаться',
 };
+
+function nowTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 export default function App() {
-  const [myId, setMyId] = useState<string>('');
+  const [myId, setMyId] = useState('');
+  const [myName] = useState('Я');
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
-  const [keyString, setKeyString] = useState<string>('');
-  const [importKeyInput, setImportKeyInput] = useState<string>('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputText, setInputText] = useState<string>('');
+  const [keyString, setKeyString] = useState('');
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('idle');
-  const [localSignal, setLocalSignal] = useState<string>('');
-  const [remoteSignal, setRemoteSignal] = useState<string>('');
-  const [error, setError] = useState<string>('');
+  const [callState, setCallState] = useState<CallState>('idle');
+  const [screen, setScreen] = useState<Screen>('home');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [error, setError] = useState('');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [qrUrl, setQrUrl] = useState('');
+  const [inviteHint, setInviteHint] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [remoteSignal, setRemoteSignal] = useState('');
+  const [importKeyInput, setImportKeyInput] = useState('');
+  const [localSignal, setLocalSignal] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [peerLabel, setPeerLabel] = useState('Близкий');
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
-  const myIdRef = useRef<string>('');
+  const myIdRef = useRef('');
+  const keyStringRef = useRef('');
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const bcRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
     secretKeyRef.current = secretKey;
@@ -51,125 +102,276 @@ export default function App() {
   }, [myId]);
 
   useEffect(() => {
-    async function initCrypto() {
-      const generatedId = 'PRN-' + Math.random().toString(36).substring(2, 9).toUpperCase();
-      setMyId(generatedId);
-      myIdRef.current = generatedId;
+    keyStringRef.current = keyString;
+  }, [keyString]);
 
-      const key = await generateSecretKey();
-      setSecretKey(key);
-      secretKeyRef.current = key;
-      const exported = await exportKey(key);
-      setKeyString(exported);
+  const attachLocalVideo = useCallback((stream: MediaStream | null) => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
     }
-    initCrypto();
-
-    return () => {
-      p2pRef.current?.close();
-    };
   }, []);
 
-  const ensureP2P = () => {
+  const ensureP2P = useCallback(() => {
     if (!p2pRef.current) {
       p2pRef.current = new P2PConnection({
         onStatus: (status) => {
           setP2pStatus(status);
-          if (status === 'connected') setError('');
+          if (status === 'connected') {
+            setError('');
+            setScreen((s) => (s === 'invite' ? 'home' : s));
+          }
+        },
+        onCallState: (state) => {
+          setCallState(state);
+          if (state === 'in-call' || state === 'calling') setScreen('call');
+          if (state === 'idle') {
+            attachLocalVideo(null);
+            setScreen((s) => (s === 'call' ? 'home' : s));
+          }
+        },
+        onIncomingCall: () => setScreen('call'),
+        onRemoteStream: (stream) => {
+          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
         },
         onMessage: async (payload) => {
           const key = secretKeyRef.current;
           if (!key) return;
           try {
-            const packet = JSON.parse(payload) as {
-              cipher: string;
-              iv: string;
-              sender: string;
-            };
+            const packet = JSON.parse(payload) as { cipher: string; iv: string; sender: string };
             const text = await decryptMessage(packet.cipher, packet.iv, key);
             setMessages((prev) => [
               ...prev,
               {
-                sender: packet.sender || 'Пир',
+                id: `m-${Date.now()}`,
+                sender: packet.sender || 'Близкий',
                 text,
-                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                time: nowTime(),
                 mine: false,
+                kind: 'text',
               },
             ]);
+            setPeerLabel(packet.sender || 'Близкий');
           } catch {
-            setError('Не удалось расшифровать входящее сообщение (проверьте общий ключ)');
+            setError('Сообщение не удалось прочитать. Проверьте общий ключ.');
           }
         },
+        onEncryptedFile: async (meta, cipher, iv) => {
+          const key = secretKeyRef.current;
+          if (!key) return;
+          try {
+            const plain = await decryptBytes(cipher, iv, key);
+            const blob = new Blob([plain], { type: meta.mime });
+            const url = URL.createObjectURL(blob);
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: meta.id,
+                sender: 'Близкий',
+                time: nowTime(),
+                mine: false,
+                kind: 'media',
+                mediaUrl: url,
+                mediaMime: meta.mime,
+                mediaName: meta.name,
+              },
+            ]);
+            setScreen('chat');
+          } catch {
+            setError('Не удалось открыть файл');
+          }
+        },
+        onFileProgress: (_id, progress) => setUploadProgress(progress),
         onError: (err) => setError(err.message),
       });
     }
     return p2pRef.current;
-  };
+  }, [attachLocalVideo]);
 
-  const handleCreateOffer = async () => {
+  const publishAnswer = useCallback(
+    async (answerSdp: string, key: string, to: string) => {
+      const payload: InvitePayload = {
+        v: 1,
+        role: 'answer',
+        sdp: answerSdp,
+        key,
+        from: myIdRef.current,
+        name: myName,
+      };
+      const url = await buildInviteUrl(payload);
+      setInviteUrl(url);
+      try {
+        setQrUrl(await makeQrDataUrl(url));
+      } catch {
+        setQrUrl('');
+      }
+      setInviteHint('Покажите этот код тому, кто вас пригласил — или отправьте ссылку обратно');
+      setScreen('invite');
+
+      try {
+        bcRef.current?.postMessage({ kind: 'answer', payload, to } satisfies SignalMessage);
+      } catch {
+        /* */
+      }
+    },
+    [myName]
+  );
+
+  const handleIncomingInvite = useCallback(
+    async (invite: InvitePayload) => {
+      setError('');
+      try {
+        const key = await importKey(invite.key);
+        setSecretKey(key);
+        secretKeyRef.current = key;
+        setKeyString(invite.key);
+        keyStringRef.current = invite.key;
+        if (invite.name) setPeerLabel(invite.name);
+
+        const p2p = ensureP2P();
+
+        if (invite.role === 'offer') {
+          const answer = await p2p.acceptOffer(invite.sdp);
+          setLocalSignal(answer);
+          await publishAnswer(answer, invite.key, invite.from);
+        } else if (invite.role === 'answer') {
+          await p2p.acceptAnswer(invite.sdp);
+        }
+
+        clearInviteHash();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Не удалось принять приглашение');
+      }
+    },
+    [ensureP2P, publishAnswer]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const bc = new BroadcastChannel(SIGNAL_CHANNEL);
+    bcRef.current = bc;
+
+    async function init() {
+      const id = 'PRN-' + Math.random().toString(36).substring(2, 9).toUpperCase();
+      if (cancelled) return;
+      setMyId(id);
+      myIdRef.current = id;
+
+      const key = await generateSecretKey();
+      if (cancelled) return;
+      setSecretKey(key);
+      secretKeyRef.current = key;
+      const exported = await exportKey(key);
+      setKeyString(exported);
+      keyStringRef.current = exported;
+
+      const invite = await parseInviteFromLocation();
+      if (!cancelled && invite) {
+        await handleIncomingInvite(invite);
+      }
+    }
+
+    bc.onmessage = (event: MessageEvent<SignalMessage>) => {
+      const msg = event.data;
+      if (msg.kind === 'answer' && msg.to === myIdRef.current) {
+        void (async () => {
+          try {
+            const p2p = ensureP2P();
+            await p2p.acceptAnswer(msg.payload.sdp);
+            setInviteHint('');
+            setScreen('home');
+          } catch (e) {
+            setError(e instanceof Error ? e.message : 'Ответ не принят');
+          }
+        })();
+      }
+    };
+
+    void init();
+
+    return () => {
+      cancelled = true;
+      bc.close();
+      bcRef.current = null;
+      p2pRef.current?.close();
+      p2pRef.current = null;
+    };
+    // Инициализация сессии один раз при монтировании
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (screen === 'call' && p2pRef.current) {
+      attachLocalVideo(p2pRef.current.getLocalStream());
+    }
+  }, [screen, callState, attachLocalVideo]);
+
+  const createInvite = async () => {
     setError('');
+    setCopied(false);
     try {
       const p2p = ensureP2P();
       const offer = await p2p.createOffer();
       setLocalSignal(offer);
-      setRemoteSignal('');
+      const payload: InvitePayload = {
+        v: 1,
+        role: 'offer',
+        sdp: offer,
+        key: keyStringRef.current,
+        from: myIdRef.current,
+        name: myName,
+      };
+      const url = await buildInviteUrl(payload);
+      setInviteUrl(url);
+      try {
+        setQrUrl(await makeQrDataUrl(url));
+      } catch {
+        setQrUrl('');
+      }
+      setInviteHint('Отправьте ссылку близкому или покажите QR-код');
+      setScreen('invite');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось создать offer');
+      setError(e instanceof Error ? e.message : 'Не удалось создать приглашение');
     }
   };
 
-  const handleAcceptOffer = async () => {
-    if (!remoteSignal.trim()) return;
-    setError('');
-    try {
-      const p2p = ensureP2P();
-      const answer = await p2p.acceptOffer(remoteSignal.trim());
-      setLocalSignal(answer);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось принять offer');
-    }
+  const copyInvite = async () => {
+    if (!inviteUrl) return;
+    await navigator.clipboard.writeText(inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleAcceptAnswer = async () => {
-    if (!remoteSignal.trim()) return;
-    setError('');
-    try {
-      const p2p = ensureP2P();
-      await p2p.acceptAnswer(remoteSignal.trim());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось принять answer');
-    }
-  };
-
-  const handleDisconnect = () => {
+  const disconnect = () => {
     p2pRef.current?.close();
     p2pRef.current = null;
-    setLocalSignal('');
-    setRemoteSignal('');
     setP2pStatus('disconnected');
+    setCallState('idle');
+    setInviteUrl('');
+    setQrUrl('');
+    setScreen('home');
   };
 
-  const handleImportKey = async () => {
-    if (!importKeyInput.trim()) return;
+  const startCall = async () => {
     setError('');
     try {
-      const key = await importKey(importKeyInput.trim());
-      setSecretKey(key);
-      secretKeyRef.current = key;
-      setKeyString(importKeyInput.trim());
-      setImportKeyInput('');
-    } catch {
-      setError('Неверный формат ключа');
+      const p2p = ensureP2P();
+      const stream = await p2p.startCall();
+      attachLocalVideo(stream);
+      setScreen('call');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Камера или микрофон недоступны');
     }
   };
 
-  const copySignal = async () => {
-    if (!localSignal) return;
-    await navigator.clipboard.writeText(localSignal);
+  const hangUp = async () => {
+    await p2pRef.current?.hangUp();
+    attachLocalVideo(null);
+    setScreen('home');
   };
 
-  const sendMessage = async (e: React.FormEvent) => {
+  const sendText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !secretKey) return;
+    if (!inputText.trim() || !secretKey || !p2pRef.current?.isReady) return;
 
     const encrypted = await encryptMessage(inputText, secretKey);
     const packet = JSON.stringify({
@@ -178,222 +380,333 @@ export default function App() {
       sender: myIdRef.current,
     });
 
-    const p2p = p2pRef.current;
-    if (!p2p?.isReady) {
-      setError('Сначала установите P2P-соединение');
-      return;
-    }
-
     try {
-      p2p.send(packet);
+      p2pRef.current.send(packet);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `m-${Date.now()}`,
+          sender: 'Я',
+          text: inputText,
+          time: nowTime(),
+          mine: true,
+          kind: 'text',
+        },
+      ]);
+      setInputText('');
+      setError('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка отправки');
-      return;
+      setError(err instanceof Error ? err.message : 'Не отправилось');
     }
+  };
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        sender: 'Я',
-        text: inputText,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        mine: true,
-      },
-    ]);
-    setInputText('');
+  const sendMedia = async (file: File) => {
+    if (!secretKey || !p2pRef.current?.isReady) return;
     setError('');
+    setUploadProgress(0);
+    try {
+      await p2pRef.current.sendFile(file, (data) => encryptBytes(data, secretKey));
+      const url = URL.createObjectURL(file);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          sender: 'Я',
+          time: nowTime(),
+          mine: true,
+          kind: 'media',
+          mediaUrl: url,
+          mediaMime: file.type,
+          mediaName: file.name,
+        },
+      ]);
+      setScreen('chat');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Файл не отправился');
+    } finally {
+      setUploadProgress(null);
+    }
   };
 
   const connected = p2pStatus === 'connected';
 
   return (
-    <div className="min-h-screen bg-[#16171d] text-[#9ca3af] flex flex-col font-sans">
-      <header className="border-b border-[#2e303a] bg-[#16171d]/80 backdrop-blur p-4 flex justify-between items-center">
-        <div className="flex items-center space-x-3">
-          <Shield className="w-7 h-7 text-[#c084fc] animate-pulse" />
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="brand">
+          <Shield className="brand-icon" strokeWidth={2.2} />
           <div>
-            <h1 className="text-xl font-medium tracking-tight text-[#f3f4f6] m-0 flex items-center gap-2">
-              PARANOIC{' '}
-              <span className="text-xs bg-[rgba(192,132,252,0.15)] text-[#c084fc] px-2 py-0.5 rounded border border-[rgba(192,132,252,0.5)]">
-                E2EE · WebRTC P2P
-              </span>
-            </h1>
-            <p className="text-xs text-[#9ca3af]">
-              ID: <span className="font-mono text-[#c084fc]">{myId || 'Инициализация...'}</span>
-            </p>
+            <h1>Paranoic</h1>
+            <p className="brand-sub">Семейная связь без чужих серверов</p>
           </div>
         </div>
-        <div className="flex items-center space-x-2 bg-[rgba(47,48,58,0.5)] px-3 py-1.5 rounded-md border border-[#2e303a] text-xs text-[#f3f4f6]">
-          <Radio className={`w-3.5 h-3.5 ${connected ? 'text-emerald-400' : 'text-amber-400'}`} />
-          <span>{STATUS_LABELS[p2pStatus]}</span>
+        <div className={`status-pill ${connected ? 'ok' : ''}`}>
+          <span className="status-dot" />
+          {FRIENDLY_STATUS[p2pStatus]}
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className="w-80 border-r border-[#2e303a] bg-[rgba(23,24,31,0.5)] p-4 flex flex-col gap-4 overflow-y-auto">
-          <div className="bg-[#1f2028] p-3 rounded-md border border-[#2e303a]">
-            <h2 className="text-xs font-medium text-[#f3f4f6] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <Key className="w-3.5 h-3.5 text-[#c084fc]" /> Сессионный ключ семьи
-            </h2>
-            <p className="text-xs text-[#9ca3af] mb-2">Передайте этот ключ близким по защищенному каналу:</p>
-            <div className="bg-[#16171d] p-2 rounded border border-[#2e303a] text-[11px] font-mono text-[#c084fc] break-all select-all">
-              {keyString || 'Генерация ключа...'}
-            </div>
-            <div className="mt-3 flex gap-2">
-              <input
-                type="text"
-                placeholder="Вставить чужой ключ…"
-                value={importKeyInput}
-                onChange={(e) => setImportKeyInput(e.target.value)}
-                className="flex-1 bg-[#16171d] border border-[#2e303a] rounded-md px-2 py-1.5 text-[11px] font-mono text-[#f3f4f6] focus:outline-none focus:border-[#c084fc]"
-              />
-              <button
-                type="button"
-                onClick={handleImportKey}
-                className="text-xs px-2 py-1.5 rounded-md border border-[rgba(192,132,252,0.5)] bg-[rgba(192,132,252,0.15)] text-[#f3f4f6] hover:bg-[rgba(192,132,252,0.25)]"
-              >
-                Импорт
-              </button>
-            </div>
-          </div>
+      {error && (
+        <div className="banner error" role="alert">
+          {error}
+          <button type="button" className="icon-btn" onClick={() => setError('')} aria-label="Закрыть">
+            <X size={18} />
+          </button>
+        </div>
+      )}
 
-          <div className="bg-[#1f2028] p-3 rounded-md border border-[#2e303a] flex flex-col gap-3">
-            <h2 className="text-xs font-medium text-[#f3f4f6] uppercase tracking-wider flex items-center gap-1.5">
-              <Link2 className="w-3.5 h-3.5 text-[#c084fc]" /> WebRTC P2P
-            </h2>
-            <p className="text-xs text-[#9ca3af]">
-              Обменяйтесь SDP вручную. Сообщения идут напрямую через DataChannel — без сервера чата.
-            </p>
+      {uploadProgress !== null && (
+        <div className="banner info">Отправка… {Math.round(uploadProgress * 100)}%</div>
+      )}
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleCreateOffer}
-                disabled={connected}
-                className="text-xs px-2.5 py-1.5 rounded-md border border-[rgba(192,132,252,0.5)] bg-[rgba(192,132,252,0.15)] text-[#f3f4f6] hover:bg-[rgba(192,132,252,0.25)] disabled:opacity-40"
-              >
-                Создать offer
-              </button>
-              <button
-                type="button"
-                onClick={handleAcceptOffer}
-                disabled={connected || !remoteSignal.trim()}
-                className="text-xs px-2.5 py-1.5 rounded-md border border-[#2e303a] bg-[#16171d] text-[#f3f4f6] hover:border-[#c084fc] disabled:opacity-40"
-              >
-                Принять offer
-              </button>
-              <button
-                type="button"
-                onClick={handleAcceptAnswer}
-                disabled={connected || !remoteSignal.trim()}
-                className="text-xs px-2.5 py-1.5 rounded-md border border-[#2e303a] bg-[#16171d] text-[#f3f4f6] hover:border-[#c084fc] disabled:opacity-40"
-              >
-                Принять answer
-              </button>
-              {p2pStatus !== 'idle' && (
-                <button
-                  type="button"
-                  onClick={handleDisconnect}
-                  className="text-xs px-2.5 py-1.5 rounded-md border border-red-900/50 bg-red-950/30 text-red-300 hover:bg-red-950/50 flex items-center gap-1"
-                >
-                  <Unplug className="w-3 h-3" /> Отключить
+      <main className="app-main">
+        {screen === 'home' && (
+          <section className="home">
+            {!connected ? (
+              <>
+                <p className="lead">
+                  Один клик — и вы на прямой защищённой связи с близким. Без регистрации и без облака.
+                </p>
+                <button type="button" className="mega-btn primary" onClick={createInvite}>
+                  <Link2 size={32} />
+                  Пригласить близкого
                 </button>
+                <p className="hint">Появится ссылка и QR-код — отправьте их маме или папе</p>
+              </>
+            ) : (
+              <>
+                <p className="lead">
+                  На связи: <strong>{peerLabel}</strong>
+                </p>
+                <div className="mega-grid">
+                  <button type="button" className="mega-btn call" onClick={startCall}>
+                    <Phone size={36} />
+                    Позвонить
+                  </button>
+                  <button type="button" className="mega-btn chat" onClick={() => setScreen('chat')}>
+                    <MessageCircle size={36} />
+                    Написать
+                  </button>
+                  <button
+                    type="button"
+                    className="mega-btn media"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <ImagePlus size={36} />
+                    Отправить фото / видео
+                  </button>
+                </div>
+                <button type="button" className="text-link danger" onClick={disconnect}>
+                  <Unplug size={16} /> Разорвать связь
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              className="text-link muted advanced-toggle"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <Settings2 size={16} /> {showAdvanced ? 'Скрыть' : 'Для продвинутых'}
+            </button>
+
+            {showAdvanced && (
+              <div className="advanced">
+                <p className="adv-label">Ваш ключ (оставьте как есть, если пользуетесь ссылкой)</p>
+                <div className="mono-box">{keyString || '…'}</div>
+                <div className="adv-row">
+                  <input
+                    value={importKeyInput}
+                    onChange={(e) => setImportKeyInput(e.target.value)}
+                    placeholder="Вставить чужой ключ"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const key = await importKey(importKeyInput.trim());
+                        setSecretKey(key);
+                        setKeyString(importKeyInput.trim());
+                        setImportKeyInput('');
+                      } catch {
+                        setError('Ключ не подходит');
+                      }
+                    }}
+                  >
+                    Импорт
+                  </button>
+                </div>
+                <p className="adv-label">Ручной ответ (если QR не сработал)</p>
+                <textarea
+                  value={remoteSignal}
+                  onChange={(e) => setRemoteSignal(e.target.value)}
+                  placeholder="Вставьте ответный код"
+                  rows={3}
+                />
+                <div className="adv-row">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await ensureP2P().acceptAnswer(remoteSignal.trim());
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : 'Ошибка');
+                      }
+                    }}
+                  >
+                    Принять ответ
+                  </button>
+                  {localSignal && (
+                    <button type="button" onClick={() => navigator.clipboard.writeText(localSignal)}>
+                      Копировать мой сигнал
+                    </button>
+                  )}
+                </div>
+                <p className="hint">ID: {myId}</p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {screen === 'invite' && (
+          <section className="invite">
+            <button type="button" className="text-link" onClick={() => setScreen('home')}>
+              <ArrowLeft size={16} /> Назад
+            </button>
+            <h2>Почти готово</h2>
+            <p className="lead">{inviteHint}</p>
+            {qrUrl && <img src={qrUrl} alt="QR-код приглашения" className="qr" />}
+            <button type="button" className="mega-btn primary compact" onClick={copyInvite}>
+              {copied ? <Check size={28} /> : <Copy size={28} />}
+              {copied ? 'Скопировано' : 'Скопировать ссылку'}
+            </button>
+            <p className="mono-box small">{inviteUrl}</p>
+
+            {p2pStatus === 'waiting-answer' && (
+              <div className="answer-paste">
+                <p className="hint">Когда близкий пришлёт ответную ссылку — вставьте её сюда:</p>
+                <div className="adv-row">
+                  <input
+                    value={remoteSignal}
+                    onChange={(e) => setRemoteSignal(e.target.value)}
+                    placeholder="Вставьте ответную ссылку"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const raw = remoteSignal.trim();
+                        const hash = raw.includes('#') ? raw.slice(raw.indexOf('#')) : raw;
+                        const invite = await parseInviteFromLocation(
+                          hash.startsWith('#') ? hash : `#paranoic=${hash}`
+                        );
+                        if (!invite || invite.role !== 'answer') {
+                          setError('Это не ответная ссылка');
+                          return;
+                        }
+                        await ensureP2P().acceptAnswer(invite.sdp);
+                        setRemoteSignal('');
+                        setScreen('home');
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : 'Не удалось принять ответ');
+                      }
+                    }}
+                  >
+                    Подключить
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {screen === 'chat' && (
+          <section className="chat">
+            <div className="chat-top">
+              <button type="button" className="text-link" onClick={() => setScreen('home')}>
+                <ArrowLeft size={16} /> Назад
+              </button>
+              <span>Переписка с {peerLabel}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Отправить фото"
+              >
+                <ImagePlus size={22} />
+              </button>
+            </div>
+
+            <div className="chat-log">
+              {messages.length === 0 ? (
+                <p className="empty">Пока тихо. Напишите первое сообщение.</p>
+              ) : (
+                messages.map((m) => (
+                  <div key={m.id} className={`bubble-wrap ${m.mine ? 'mine' : 'theirs'}`}>
+                    <div className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>
+                      {m.kind === 'text' && <p>{m.text}</p>}
+                      {m.kind === 'media' && m.mediaUrl && (
+                        m.mediaMime?.startsWith('video/') ? (
+                          <video src={m.mediaUrl} controls className="media-preview" />
+                        ) : (
+                          <img src={m.mediaUrl} alt={m.mediaName || 'фото'} className="media-preview" />
+                        )
+                      )}
+                      <time>{m.time}</time>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
 
-            {localSignal && (
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] uppercase tracking-wider text-[#9ca3af]">Ваш сигнал (скопируйте)</span>
-                  <button
-                    type="button"
-                    onClick={copySignal}
-                    className="text-[10px] flex items-center gap-1 text-[#c084fc] hover:underline"
-                  >
-                    <Copy className="w-3 h-3" /> Копировать
-                  </button>
-                </div>
-                <textarea
-                  readOnly
-                  value={localSignal}
-                  className="w-full h-20 bg-[#16171d] border border-[#2e303a] rounded-md p-2 text-[10px] font-mono text-[#c084fc] resize-none"
-                />
-              </div>
-            )}
-
-            <div>
-              <span className="text-[10px] uppercase tracking-wider text-[#9ca3af] block mb-1">
-                Сигнал пира (вставьте offer или answer)
-              </span>
-              <textarea
-                value={remoteSignal}
-                onChange={(e) => setRemoteSignal(e.target.value)}
-                placeholder='{"type":"offer"|"answer",...}'
-                className="w-full h-20 bg-[#16171d] border border-[#2e303a] rounded-md p-2 text-[10px] font-mono text-[#f3f4f6] resize-none focus:outline-none focus:border-[#c084fc]"
+            <form className="chat-compose" onSubmit={sendText}>
+              <input
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Ваше сообщение…"
+                disabled={!connected}
               />
-            </div>
-          </div>
+              <button type="submit" disabled={!connected || !inputText.trim()} aria-label="Отправить">
+                <Send size={22} />
+              </button>
+            </form>
+          </section>
+        )}
 
-          {error && (
-            <div className="text-xs text-red-300 bg-red-950/40 border border-red-900/50 rounded-md p-2">
-              {error}
-            </div>
-          )}
-        </div>
-
-        <div className="flex-1 flex flex-col bg-[#16171d]">
-          <div className="p-4 border-b border-[#2e303a] bg-[rgba(23,24,31,0.3)] flex items-center gap-2 text-xs text-[#f3f4f6]">
-            <Lock className="w-4 h-4 text-[#c084fc]" />
-            <span>
-              AES-GCM на клиенте + WebRTC DataChannel. Шифротекст уходит напрямую пиру, минуя сторонние серверы
-              сообщений.
-            </span>
-          </div>
-
-          <div className="flex-1 p-4 overflow-y-auto space-y-4">
-            {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-[#9ca3af] text-sm">
-                <Shield className="w-12 h-12 mb-2 opacity-20 text-[#c084fc]" />
-                <p>Установите P2P и обменяйтесь ключом — история только в RAM сессии.</p>
+        {screen === 'call' && (
+          <section className="call">
+            <div className="call-stage">
+              <div className="video-circle remote">
+                <video ref={remoteVideoRef} autoPlay playsInline />
+                <span className="video-label">{peerLabel}</span>
               </div>
-            ) : (
-              messages.map((m, idx) => (
-                <div key={idx} className={`flex flex-col ${m.mine ? 'items-end' : 'items-start'}`}>
-                  <span className="text-[10px] text-[#9ca3af] mb-1 font-mono">{m.sender}</span>
-                  <div
-                    className={`max-w-md border rounded-md p-3 text-sm ${
-                      m.mine
-                        ? 'bg-[#1f2028] border-[#2e303a]'
-                        : 'bg-[rgba(192,132,252,0.08)] border-[rgba(192,132,252,0.35)]'
-                    }`}
-                  >
-                    <p className="text-[#f3f4f6]">{m.text}</p>
-                    <span className="text-[10px] text-[#9ca3af] mt-1 block text-right">{m.time}</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          <form onSubmit={sendMessage} className="p-4 border-t border-[#2e303a] bg-[rgba(23,24,31,0.3)] flex gap-2">
-            <input
-              type="text"
-              placeholder={connected ? 'Введите защищенное сообщение...' : 'Сначала подключите P2P…'}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              disabled={!connected}
-              className="flex-1 bg-[#1f2028] border border-[#2e303a] rounded-md px-4 py-2.5 text-sm text-[#f3f4f6] focus:outline-none focus:border-[#c084fc] disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={!connected || !inputText.trim()}
-              className="bg-[rgba(192,132,252,0.15)] hover:bg-[rgba(192,132,252,0.25)] border border-[rgba(192,132,252,0.5)] text-[#f3f4f6] font-medium px-5 py-2.5 rounded-md flex items-center gap-2 transition-colors text-sm disabled:opacity-40"
-            >
-              <Send className="w-4 h-4" /> Отправить
+              <div className="video-circle local">
+                <video ref={localVideoRef} autoPlay playsInline muted />
+                <span className="video-label">Вы</span>
+              </div>
+            </div>
+            <p className="call-status">
+              {callState === 'calling' ? 'Соединяем…' : callState === 'in-call' ? 'Разговор идёт' : 'Звонок'}
+            </p>
+            <button type="button" className="mega-btn hangup" onClick={hangUp}>
+              <PhoneOff size={32} />
+              Завершить
             </button>
-          </form>
-        </div>
-      </div>
+          </section>
+        )}
+      </main>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,video/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void sendMedia(file);
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 }
