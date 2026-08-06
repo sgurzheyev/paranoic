@@ -29,6 +29,8 @@ import {
   buildInviteUrl,
   clearInviteHash,
   extractSdpFromPaste,
+  InviteTruncatedError,
+  INVITE_TRUNCATED_MESSAGE,
   makeQrDataUrl,
   parseInviteFromLocation,
   parseInviteFromPastedText,
@@ -86,6 +88,7 @@ export default function App() {
   const [localSignal, setLocalSignal] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [peerLabel, setPeerLabel] = useState('Близкий');
+  const [routeBusy, setRouteBusy] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -193,7 +196,7 @@ export default function App() {
   const publishAnswer = useCallback(
     async (answerSdp: string, key: string, to: string) => {
       const payload: InvitePayload = {
-        v: 1,
+        v: 2,
         role: 'answer',
         sdp: answerSdp,
         key,
@@ -222,6 +225,7 @@ export default function App() {
   const handleIncomingInvite = useCallback(
     async (invite: InvitePayload) => {
       setError('');
+      setRouteBusy(true);
       try {
         const key = await importKey(invite.key);
         setSecretKey(key);
@@ -242,7 +246,13 @@ export default function App() {
 
         clearInviteHash();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Не удалось принять приглашение');
+        if (e instanceof InviteTruncatedError) {
+          setError(INVITE_TRUNCATED_MESSAGE);
+        } else {
+          setError(e instanceof Error ? e.message : 'Не удалось принять приглашение');
+        }
+      } finally {
+        setRouteBusy(false);
       }
     },
     [ensureP2P, publishAnswer]
@@ -267,9 +277,18 @@ export default function App() {
       setKeyString(exported);
       keyStringRef.current = exported;
 
-      const invite = await parseInviteFromLocation();
-      if (!cancelled && invite) {
-        await handleIncomingInvite(invite);
+      try {
+        const invite = await parseInviteFromLocation();
+        if (!cancelled && invite) {
+          await handleIncomingInvite(invite);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof InviteTruncatedError) {
+          setError(INVITE_TRUNCATED_MESSAGE);
+        } else {
+          setError(e instanceof Error ? e.message : 'Не удалось прочитать ссылку');
+        }
       }
     }
 
@@ -311,12 +330,13 @@ export default function App() {
   const createInvite = async () => {
     setError('');
     setCopied(false);
+    setRouteBusy(true);
     try {
       const p2p = ensureP2P();
       const offer = await p2p.createOffer();
       setLocalSignal(offer);
       const payload: InvitePayload = {
-        v: 1,
+        v: 2,
         role: 'offer',
         sdp: offer,
         key: keyStringRef.current,
@@ -334,6 +354,8 @@ export default function App() {
       setScreen('invite');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось создать приглашение');
+    } finally {
+      setRouteBusy(false);
     }
   };
 
@@ -470,11 +492,29 @@ export default function App() {
                 <p className="lead">
                   Один клик — и вы на прямой защищённой связи с близким. Без регистрации и без облака.
                 </p>
-                <button type="button" className="mega-btn primary" onClick={createInvite}>
-                  <Link2 size={32} />
-                  Пригласить близкого
+                <button
+                  type="button"
+                  className="mega-btn primary"
+                  onClick={createInvite}
+                  disabled={routeBusy}
+                >
+                  {routeBusy ? (
+                    <>
+                      <span className="btn-spinner" aria-hidden />
+                      Шифруем маршрут...
+                    </>
+                  ) : (
+                    <>
+                      <Link2 size={32} />
+                      Пригласить близкого
+                    </>
+                  )}
                 </button>
-                <p className="hint">Появится ссылка и QR-код — отправьте их маме или папе</p>
+                <p className="hint">
+                  {routeBusy
+                    ? 'Собираем защищённый маршрут через сеть…'
+                    : 'Появится ссылка и QR-код — отправьте их маме или папе'}
+                </p>
               </>
             ) : (
               <>
@@ -532,8 +572,12 @@ export default function App() {
                         setSecretKey(key);
                         setKeyString(material);
                         setImportKeyInput('');
-                      } catch {
-                        setError('Ключ не подходит');
+                      } catch (e) {
+                        setError(
+                          e instanceof InviteTruncatedError
+                            ? INVITE_TRUNCATED_MESSAGE
+                            : 'Ключ не подходит'
+                        );
                       }
                     }}
                   >
@@ -556,7 +600,13 @@ export default function App() {
                         await ensureP2P().acceptAnswer(sdp);
                         setRemoteSignal('');
                       } catch (e) {
-                        setError(e instanceof Error ? e.message : 'Ошибка');
+                        setError(
+                          e instanceof InviteTruncatedError
+                            ? INVITE_TRUNCATED_MESSAGE
+                            : e instanceof Error
+                              ? e.message
+                              : 'Ошибка'
+                        );
                       }
                     }}
                   >
@@ -611,7 +661,13 @@ export default function App() {
                         setRemoteSignal('');
                         setScreen('home');
                       } catch (e) {
-                        setError(e instanceof Error ? e.message : 'Не удалось принять ответ');
+                        setError(
+                          e instanceof InviteTruncatedError
+                            ? INVITE_TRUNCATED_MESSAGE
+                            : e instanceof Error
+                              ? e.message
+                              : 'Не удалось принять ответ'
+                        );
                       }
                     }}
                   >

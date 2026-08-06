@@ -247,6 +247,27 @@ textarea {
   transform: scale(0.98);
 }
 
+.mega-btn:disabled {
+  opacity: 0.85;
+  cursor: wait;
+}
+
+.btn-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(236, 254, 255, 0.25);
+  border-top-color: #ecfeff;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .mega-btn.primary {
   background: linear-gradient(160deg, rgba(94, 234, 212, 0.28), rgba(94, 234, 212, 0.08));
   border-color: var(--accent-border);

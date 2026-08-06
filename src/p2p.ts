@@ -64,7 +64,8 @@ const ICE_SERVERS: RTCIceServer[] = [
 
 const CHUNK_SIZE = 12_000;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
-const ICE_GATHER_TIMEOUT_MS = 6_000;
+/** Для инвайт-ссылки ждём complete или 2с — иначе в SDP нет STUN/TURN кандидатов. */
+const ICE_GATHER_TIMEOUT_MS = 2_000;
 const MEDIA_WATCH_MS = 3_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
 
@@ -92,15 +93,23 @@ function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEO
     const finish = () => {
       if (settled) return;
       settled = true;
-      pc.removeEventListener('icegatheringstatechange', check);
+      pc.removeEventListener('icegatheringstatechange', onState);
+      pc.removeEventListener('icecandidate', onCandidate);
       clearTimeout(timer);
       resolve();
     };
-    const check = () => {
+    const onState = () => {
       if (pc.iceGatheringState === 'complete') finish();
     };
+    // null candidate = конец сбора (надёжнее на части мобильных браузеров)
+    const onCandidate = (event: RTCPeerConnectionIceEvent) => {
+      if (event.candidate === null) finish();
+    };
     const timer = setTimeout(finish, timeoutMs);
-    pc.addEventListener('icegatheringstatechange', check);
+    pc.addEventListener('icegatheringstatechange', onState);
+    pc.addEventListener('icecandidate', onCandidate);
+    // Гонка: complete мог наступить между проверкой и подпиской
+    if (pc.iceGatheringState === 'complete') finish();
   });
 }
 
@@ -167,9 +176,7 @@ export class P2PConnection {
     const channel = pc.createDataChannel('paranoic', { ordered: true });
     this.bindChannel(channel);
 
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-    pc.addTransceiver('video', { direction: 'recvonly' });
-
+    // Только DataChannel в инвайт-SDP — A/V добавляется при звонке (иначе URL не влезает в мессенджеры)
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
