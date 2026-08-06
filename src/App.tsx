@@ -22,13 +22,16 @@ import {
   decryptMessage,
   encryptBytes,
   decryptBytes,
+  resolveKeyMaterial,
 } from './crypto';
 import { P2PConnection, type CallState, type P2PStatus } from './p2p';
 import {
   buildInviteUrl,
   clearInviteHash,
+  extractSdpFromPaste,
   makeQrDataUrl,
   parseInviteFromLocation,
+  parseInviteFromPastedText,
   SIGNAL_CHANNEL,
   type InvitePayload,
   type SignalMessage,
@@ -524,9 +527,10 @@ export default function App() {
                     type="button"
                     onClick={async () => {
                       try {
-                        const key = await importKey(importKeyInput.trim());
+                        const material = await resolveKeyMaterial(importKeyInput);
+                        const key = await importKey(material);
                         setSecretKey(key);
-                        setKeyString(importKeyInput.trim());
+                        setKeyString(material);
                         setImportKeyInput('');
                       } catch {
                         setError('Ключ не подходит');
@@ -548,7 +552,9 @@ export default function App() {
                     type="button"
                     onClick={async () => {
                       try {
-                        await ensureP2P().acceptAnswer(remoteSignal.trim());
+                        const sdp = await extractSdpFromPaste(remoteSignal);
+                        await ensureP2P().acceptAnswer(sdp);
+                        setRemoteSignal('');
                       } catch (e) {
                         setError(e instanceof Error ? e.message : 'Ошибка');
                       }
@@ -595,16 +601,13 @@ export default function App() {
                     type="button"
                     onClick={async () => {
                       try {
-                        const raw = remoteSignal.trim();
-                        const hash = raw.includes('#') ? raw.slice(raw.indexOf('#')) : raw;
-                        const invite = await parseInviteFromLocation(
-                          hash.startsWith('#') ? hash : `#paranoic=${hash}`
-                        );
-                        if (!invite || invite.role !== 'answer') {
-                          setError('Это не ответная ссылка');
-                          return;
+                        const invite = await parseInviteFromPastedText(remoteSignal);
+                        if (invite?.role === 'answer') {
+                          await ensureP2P().acceptAnswer(invite.sdp);
+                        } else {
+                          const sdp = await extractSdpFromPaste(remoteSignal);
+                          await ensureP2P().acceptAnswer(sdp);
                         }
-                        await ensureP2P().acceptAnswer(invite.sdp);
                         setRemoteSignal('');
                         setScreen('home');
                       } catch (e) {

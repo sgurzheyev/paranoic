@@ -48,6 +48,57 @@ export async function parseInviteFromLocation(
   }
 }
 
+/** Достаёт инвайт из полной ссылки, hash или «голого» payload — мама может вставить что угодно. */
+export async function parseInviteFromPastedText(raw: string): Promise<InvitePayload | null> {
+  const text = raw.trim();
+  if (!text) return null;
+
+  const hashIdx = text.indexOf(HASH_PREFIX);
+  if (hashIdx >= 0) {
+    return parseInviteFromLocation(text.slice(hashIdx));
+  }
+
+  if (text.startsWith('http://') || text.startsWith('https://')) {
+    try {
+      const url = new URL(text);
+      if (url.hash.startsWith(HASH_PREFIX)) {
+        return parseInviteFromLocation(url.hash);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // Голый gzip/base64url payload без префикса
+  if (/^[A-Za-z0-9_-]{40,}$/.test(text)) {
+    try {
+      return await decompressPayload(text);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/** SDP из ответа: инвайт-ссылка, JSON SDP или «сырой» сигнал. */
+export async function extractSdpFromPaste(raw: string): Promise<string> {
+  const text = raw.trim();
+  const invite = await parseInviteFromPastedText(text);
+  if (invite?.sdp) return invite.sdp;
+
+  if (text.startsWith('{')) return text;
+
+  const jsonStart = text.indexOf('{');
+  if (jsonStart >= 0) {
+    const maybe = text.slice(jsonStart);
+    JSON.parse(maybe);
+    return maybe;
+  }
+
+  return text;
+}
+
 export function clearInviteHash(): void {
   if (window.location.hash.startsWith(HASH_PREFIX)) {
     history.replaceState(null, '', window.location.pathname + window.location.search);

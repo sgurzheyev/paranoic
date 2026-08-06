@@ -30,18 +30,49 @@ export type P2PHandlers = {
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
 };
 
+/**
+ * STUN для прямого ICE + публичные TURN для обхода симметричного NAT (4G ↔ Wi‑Fi).
+ * Open Relay / ExpressTURN — резервный релей, когда hole-punching не проходит.
+ */
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+      'stun:stun3.l.google.com:19302',
+      'stun:stun4.l.google.com:19302',
+    ],
+  },
+  // Open Relay TURN: UDP — основной релей для мобильного NAT
+  {
+    urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  // Резерв: TCP / TLS — когда UDP режется оператором 4G
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80?transport=tcp',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
 
 const CHUNK_SIZE = 12_000;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const ICE_GATHER_TIMEOUT_MS = 6_000;
+const MEDIA_WATCH_MS = 3_500;
+const MEDIA_STALL_BYTES_THRESHOLD = 500;
 
 type ControlPacket =
   | { t: 'call-offer'; sdp: RTCSessionDescriptionInit }
   | { t: 'call-answer'; sdp: RTCSessionDescriptionInit }
   | { t: 'call-hangup' }
+  | { t: 'media-refresh' }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number }
   | { t: 'file-chunk'; id: string; i: number; data: string }
   | { t: 'file-done'; id: string };
@@ -53,18 +84,38 @@ type IncomingFile = {
   expected: number;
 };
 
-function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
+function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEOUT_MS): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
+
   return new Promise((resolve) => {
-    const check = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', check);
-        resolve();
-      }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      pc.removeEventListener('icegatheringstatechange', check);
+      clearTimeout(timer);
+      resolve();
     };
+    const check = () => {
+      if (pc.iceGatheringState === 'complete') finish();
+    };
+    const timer = setTimeout(finish, timeoutMs);
     pc.addEventListener('icegatheringstatechange', check);
   });
 }
+
+const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+  },
+  video: {
+    facingMode: 'user',
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 24, max: 30 },
+  },
+};
 
 export class P2PConnection {
   private pc: RTCPeerConnection | null = null;
@@ -78,6 +129,11 @@ export class P2PConnection {
   private makingOffer = false;
   private ignoreOffer = false;
   private polite = false;
+  private mediaWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private refreshingMedia = false;
+  private lastRemoteVideoBytes = 0;
+  private stalledChecks = 0;
+  private iceRestarting = false;
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
@@ -111,7 +167,6 @@ export class P2PConnection {
     const channel = pc.createDataChannel('paranoic', { ordered: true });
     this.bindChannel(channel);
 
-    // Заранее готовим приём A/V
     pc.addTransceiver('audio', { direction: 'recvonly' });
     pc.addTransceiver('video', { direction: 'recvonly' });
 
@@ -165,32 +220,17 @@ export class P2PConnection {
     }
 
     this.setCallState('calling');
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-    });
-    this.localStream = stream;
-
-    for (const track of stream.getTracks()) {
-      const sender = this.pc.getSenders().find((s) => s.track?.kind === track.kind);
-      if (sender) await sender.replaceTrack(track);
-      else this.pc.addTrack(track, stream);
-    }
-
-    // Направление sendrecv
-    for (const t of this.pc.getTransceivers()) {
-      if (t.receiver.track.kind === 'audio' || t.receiver.track.kind === 'video') {
-        t.direction = 'sendrecv';
-      }
-    }
-
+    const stream = await this.acquireLocalMedia();
+    await this.attachLocalTracks(stream);
     await this.renegotiateAsOfferer();
     this.setCallState('in-call');
+    this.startMediaWatchdog();
     return stream;
   }
 
   async hangUp(): Promise<void> {
     this.setCallState('ending');
+    this.stopMediaWatchdog();
     try {
       if (this.isReady) this.sendControl({ t: 'call-hangup' });
     } catch {
@@ -199,6 +239,25 @@ export class P2PConnection {
     this.stopLocalMedia();
     this.clearRemoteStream();
     this.setCallState('idle');
+  }
+
+  /** Перезахват камеры/микрофона и replaceTrack без разрыва DataChannel. */
+  async refreshLocalTracks(): Promise<MediaStream | null> {
+    if (!this.pc || this.callState !== 'in-call') return this.localStream;
+    if (this.refreshingMedia) return this.localStream;
+
+    this.refreshingMedia = true;
+    try {
+      const stream = await this.acquireLocalMedia();
+      await this.attachLocalTracks(stream);
+      this.handlers.onRemoteStream?.(this.remoteStream);
+      return stream;
+    } catch (e) {
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось обновить камеру'));
+      return this.localStream;
+    } finally {
+      this.refreshingMedia = false;
+    }
   }
 
   async sendFile(file: File, encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>): Promise<void> {
@@ -228,7 +287,6 @@ export class P2PConnection {
     for (let i = 0; i < chunks.length; i++) {
       this.sendControl({ t: 'file-chunk', id, i, data: chunks[i] });
       this.handlers.onFileProgress?.(id, (i + 1) / chunks.length);
-      // Даём event loop дышать на больших файлах
       if (i % 8 === 0) await new Promise((r) => setTimeout(r, 0));
     }
 
@@ -236,11 +294,48 @@ export class P2PConnection {
   }
 
   close(): void {
+    this.stopMediaWatchdog();
     this.stopLocalMedia();
     this.clearRemoteStream();
     this.reset();
     this.setCallState('idle');
     this.setStatus('disconnected');
+  }
+
+  private async acquireLocalMedia(): Promise<MediaStream> {
+    const prev = this.localStream;
+    const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
+    this.localStream = stream;
+    prev?.getTracks().forEach((t) => t.stop());
+
+    for (const track of stream.getTracks()) {
+      track.addEventListener('ended', () => {
+        if (this.callState === 'in-call') {
+          void this.refreshLocalTracks();
+        }
+      });
+    }
+
+    return stream;
+  }
+
+  private async attachLocalTracks(stream: MediaStream): Promise<void> {
+    if (!this.pc) return;
+
+    for (const track of stream.getTracks()) {
+      const sender =
+        this.pc.getSenders().find((s) => s.track?.kind === track.kind) ??
+        this.pc.getTransceivers().find((tr) => tr.receiver.track.kind === track.kind)?.sender;
+
+      if (sender) await sender.replaceTrack(track);
+      else this.pc.addTrack(track, stream);
+    }
+
+    for (const t of this.pc.getTransceivers()) {
+      if (t.receiver.track.kind === 'audio' || t.receiver.track.kind === 'video') {
+        t.direction = 'sendrecv';
+      }
+    }
   }
 
   private sendControl(packet: ControlPacket): void {
@@ -263,6 +358,11 @@ export class P2PConnection {
   private async handleControl(packet: ControlPacket): Promise<void> {
     if (!this.pc) return;
 
+    if (packet.t === 'media-refresh') {
+      await this.refreshLocalTracks();
+      return;
+    }
+
     if (packet.t === 'call-offer') {
       const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
       this.ignoreOffer = !this.polite && offerCollision;
@@ -272,21 +372,8 @@ export class P2PConnection {
       this.setCallState('calling');
 
       if (!this.localStream) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        });
-        this.localStream = stream;
-        for (const track of stream.getTracks()) {
-          const sender = this.pc.getSenders().find((s) => s.track?.kind === track.kind);
-          if (sender) await sender.replaceTrack(track);
-          else this.pc.addTrack(track, stream);
-        }
-        for (const t of this.pc.getTransceivers()) {
-          if (t.receiver.track.kind === 'audio' || t.receiver.track.kind === 'video') {
-            t.direction = 'sendrecv';
-          }
-        }
+        const stream = await this.acquireLocalMedia();
+        await this.attachLocalTracks(stream);
       }
 
       await this.pc.setRemoteDescription(packet.sdp);
@@ -295,16 +382,19 @@ export class P2PConnection {
       await waitForIceGathering(this.pc);
       this.sendControl({ t: 'call-answer', sdp: this.pc.localDescription! });
       this.setCallState('in-call');
+      this.startMediaWatchdog();
       return;
     }
 
     if (packet.t === 'call-answer') {
       await this.pc.setRemoteDescription(packet.sdp);
       this.setCallState('in-call');
+      this.startMediaWatchdog();
       return;
     }
 
     if (packet.t === 'call-hangup') {
+      this.stopMediaWatchdog();
       this.stopLocalMedia();
       this.clearRemoteStream();
       this.setCallState('idle');
@@ -345,24 +435,56 @@ export class P2PConnection {
   }
 
   private createPeerConnection(): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({
+      iceServers: ICE_SERVERS,
+      iceCandidatePoolSize: 8,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    });
 
     pc.ontrack = (event) => {
       if (!this.remoteStream) {
         this.remoteStream = new MediaStream();
       }
-      this.remoteStream.addTrack(event.track);
+
+      const existing = this.remoteStream.getTracks().find((t) => t.id === event.track.id);
+      if (!existing) {
+        this.remoteStream.addTrack(event.track);
+      }
+
+      event.track.addEventListener('mute', () => {
+        if (this.callState === 'in-call') this.stalledChecks += 1;
+      });
+
+      event.track.addEventListener('unmute', () => {
+        this.stalledChecks = 0;
+        this.handlers.onRemoteStream?.(this.remoteStream);
+      });
+
+      event.track.addEventListener('ended', () => {
+        if (this.callState === 'in-call') {
+          void this.requestPeerMediaRefresh();
+        }
+      });
+
       this.handlers.onRemoteStream?.(this.remoteStream);
     };
 
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
+        case 'connected':
+          this.iceRestarting = false;
+          break;
         case 'disconnected':
-          this.setStatus('disconnected');
+          void this.tryIceRestart();
           break;
         case 'failed':
-          this.setStatus('failed');
-          this.handlers.onError?.(new Error('Не удалось связаться'));
+          void this.tryIceRestart().then((ok) => {
+            if (!ok) {
+              this.setStatus('failed');
+              this.handlers.onError?.(new Error('Не удалось связаться'));
+            }
+          });
           break;
         case 'closed':
           this.setStatus('disconnected');
@@ -370,7 +492,108 @@ export class P2PConnection {
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        void this.tryIceRestart();
+      }
+    };
+
     return pc;
+  }
+
+  private async tryIceRestart(): Promise<boolean> {
+    if (!this.pc || this.iceRestarting || !this.isReady) return false;
+    if (this.pc.signalingState === 'closed') return false;
+
+    this.iceRestarting = true;
+    try {
+      if (typeof this.pc.restartIce === 'function') {
+        this.pc.restartIce();
+      }
+      if (this.callState === 'in-call' || this.status === 'connected') {
+        this.makingOffer = true;
+        try {
+          const offer = await this.pc.createOffer({ iceRestart: true });
+          await this.pc.setLocalDescription(offer);
+          await waitForIceGathering(this.pc);
+          this.sendControl({ t: 'call-offer', sdp: this.pc.localDescription! });
+        } finally {
+          this.makingOffer = false;
+        }
+      }
+      return true;
+    } catch {
+      this.iceRestarting = false;
+      return false;
+    }
+  }
+
+  private startMediaWatchdog(): void {
+    this.stopMediaWatchdog();
+    this.lastRemoteVideoBytes = 0;
+    this.stalledChecks = 0;
+    this.mediaWatchTimer = setInterval(() => {
+      void this.checkMediaHealth();
+    }, MEDIA_WATCH_MS);
+  }
+
+  private stopMediaWatchdog(): void {
+    if (this.mediaWatchTimer) {
+      clearInterval(this.mediaWatchTimer);
+      this.mediaWatchTimer = null;
+    }
+  }
+
+  private async checkMediaHealth(): Promise<void> {
+    if (!this.pc || this.callState !== 'in-call' || this.refreshingMedia) return;
+
+    const localVideo = this.localStream?.getVideoTracks()[0];
+    if (!localVideo || localVideo.readyState === 'ended' || localVideo.muted) {
+      await this.refreshLocalTracks();
+      return;
+    }
+
+    try {
+      const stats = await this.pc.getStats();
+      let videoBytes = 0;
+      let sawInboundVideo = false;
+
+      stats.forEach((report) => {
+        if (report.type === 'inbound-rtp' && (report as RTCInboundRtpStreamStats).kind === 'video') {
+          sawInboundVideo = true;
+          videoBytes = (report as RTCInboundRtpStreamStats).bytesReceived ?? 0;
+        }
+      });
+
+      if (!sawInboundVideo) {
+        this.stalledChecks += 1;
+      } else if (videoBytes <= this.lastRemoteVideoBytes + MEDIA_STALL_BYTES_THRESHOLD) {
+        this.stalledChecks += 1;
+      } else {
+        this.stalledChecks = 0;
+        this.lastRemoteVideoBytes = videoBytes;
+      }
+
+      if (this.stalledChecks >= 2) {
+        this.stalledChecks = 0;
+        await this.refreshLocalTracks();
+        await this.requestPeerMediaRefresh();
+        // Мягко переподтянуть remote stream в UI
+        if (this.remoteStream) {
+          this.handlers.onRemoteStream?.(new MediaStream(this.remoteStream.getTracks()));
+        }
+      }
+    } catch {
+      /* stats may fail mid-restart */
+    }
+  }
+
+  private async requestPeerMediaRefresh(): Promise<void> {
+    try {
+      if (this.isReady) this.sendControl({ t: 'media-refresh' });
+    } catch {
+      /* */
+    }
   }
 
   private bindChannel(channel: RTCDataChannel): void {
@@ -429,15 +652,26 @@ export class P2PConnection {
   }
 
   private clearRemoteStream(): void {
-    this.remoteStream?.getTracks().forEach((t) => t.stop());
+    this.remoteStream?.getTracks().forEach((t) => {
+      try {
+        this.remoteStream?.removeTrack(t);
+      } catch {
+        /* */
+      }
+    });
     this.remoteStream = null;
     this.handlers.onRemoteStream?.(null);
   }
 
   private reset(): void {
+    this.stopMediaWatchdog();
     this.incomingFiles.clear();
     this.makingOffer = false;
     this.ignoreOffer = false;
+    this.iceRestarting = false;
+    this.refreshingMedia = false;
+    this.lastRemoteVideoBytes = 0;
+    this.stalledChecks = 0;
 
     if (this.channel) {
       this.channel.onopen = null;
@@ -454,6 +688,7 @@ export class P2PConnection {
 
     if (this.pc) {
       this.pc.onconnectionstatechange = null;
+      this.pc.oniceconnectionstatechange = null;
       this.pc.ondatachannel = null;
       this.pc.ontrack = null;
       try {
@@ -466,4 +701,4 @@ export class P2PConnection {
   }
 }
 
-export { MAX_FILE_BYTES };
+export { MAX_FILE_BYTES, ICE_SERVERS };
