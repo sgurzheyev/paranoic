@@ -62,8 +62,10 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
-const CHUNK_SIZE = 12_000;
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const FILE_CHUNK_BYTES = 128 * 1024;
+const MAX_BUFFERED_AMOUNT = 256 * 1024;
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const FILE_CHUNK_MARKER = 0x01;
 /** Для инвайт-ссылки ждём complete или 2с — иначе в SDP нет STUN/TURN кандидатов. */
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const MEDIA_WATCH_MS = 3_500;
@@ -75,15 +77,63 @@ type ControlPacket =
   | { t: 'call-hangup' }
   | { t: 'media-refresh' }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number }
-  | { t: 'file-chunk'; id: string; i: number; data: string }
   | { t: 'file-done'; id: string };
 
 type IncomingFile = {
   meta: MediaFileMeta;
   iv: string;
-  chunks: string[];
+  chunks: (Uint8Array | null)[];
   expected: number;
 };
+
+function encodeFileChunk(id: string, index: number, payload: Uint8Array): ArrayBuffer {
+  const idBytes = new TextEncoder().encode(id);
+  const headerLen = 1 + 2 + idBytes.length + 4;
+  const out = new Uint8Array(headerLen + payload.length);
+  out[0] = FILE_CHUNK_MARKER;
+  out[1] = (idBytes.length >> 8) & 0xff;
+  out[2] = idBytes.length & 0xff;
+  out.set(idBytes, 3);
+  new DataView(out.buffer).setUint32(3 + idBytes.length, index, false);
+  out.set(payload, headerLen);
+  return out.buffer;
+}
+
+function decodeFileChunk(data: ArrayBuffer): { id: string; index: number; payload: Uint8Array } | null {
+  const bytes = new Uint8Array(data);
+  if (bytes.length < 7 || bytes[0] !== FILE_CHUNK_MARKER) return null;
+  const idLen = (bytes[1] << 8) | bytes[2];
+  const headerLen = 1 + 2 + idLen + 4;
+  if (bytes.length < headerLen) return null;
+  const id = new TextDecoder().decode(bytes.subarray(3, 3 + idLen));
+  const index = new DataView(bytes.buffer).getUint32(3 + idLen, false);
+  const payload = bytes.subarray(headerLen);
+  return { id, index, payload };
+}
+
+function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+async function waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+  if (channel.bufferedAmount <= MAX_BUFFERED_AMOUNT) return;
+  channel.bufferedAmountLowThreshold = MAX_BUFFERED_AMOUNT / 2;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      channel.removeEventListener('bufferedamountlow', done);
+      resolve();
+    };
+    channel.addEventListener('bufferedamountlow', done);
+    setTimeout(done, 100);
+  });
+}
 
 function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEOUT_MS): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
@@ -336,18 +386,16 @@ export class P2PConnection {
   }
 
   async sendFile(file: File, encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>): Promise<void> {
-    if (!this.isReady) throw new Error('Соединение ещё не готово');
+    if (!this.isReady || !this.channel) throw new Error('Соединение ещё не готово');
     if (file.size > MAX_FILE_BYTES) {
-      throw new Error('Файл слишком большой (макс. 8 МБ)');
+      throw new Error('Файл слишком большой (макс. 16 МБ)');
     }
 
     const buffer = await file.arrayBuffer();
     const { cipher, iv } = await encrypt(buffer);
+    const cipherBytes = Uint8Array.from(atob(cipher), (c) => c.charCodeAt(0));
     const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const chunks: string[] = [];
-    for (let i = 0; i < cipher.length; i += CHUNK_SIZE) {
-      chunks.push(cipher.slice(i, i + CHUNK_SIZE));
-    }
+    const chunkCount = Math.ceil(cipherBytes.length / FILE_CHUNK_BYTES) || 1;
 
     this.sendControl({
       t: 'file-meta',
@@ -356,15 +404,18 @@ export class P2PConnection {
       mime: file.type || 'application/octet-stream',
       size: String(file.size),
       iv,
-      chunks: chunks.length,
+      chunks: chunkCount,
     });
 
-    for (let i = 0; i < chunks.length; i++) {
-      this.sendControl({ t: 'file-chunk', id, i, data: chunks[i] });
-      this.handlers.onFileProgress?.(id, (i + 1) / chunks.length);
-      if (i % 8 === 0) await new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < chunkCount; i++) {
+      const start = i * FILE_CHUNK_BYTES;
+      const slice = cipherBytes.subarray(start, start + FILE_CHUNK_BYTES);
+      await waitForBufferDrain(this.channel);
+      this.channel.send(encodeFileChunk(id, i, slice));
+      this.handlers.onFileProgress?.(id, (i + 1) / chunkCount);
     }
 
+    await waitForBufferDrain(this.channel);
     this.sendControl({ t: 'file-done', id });
   }
 
@@ -485,27 +536,30 @@ export class P2PConnection {
           size: Number(packet.size),
         },
         iv: packet.iv,
-        chunks: new Array(packet.chunks).fill(''),
+        chunks: new Array(packet.chunks).fill(null),
         expected: packet.chunks,
       });
-      return;
-    }
-
-    if (packet.t === 'file-chunk') {
-      const file = this.incomingFiles.get(packet.id);
-      if (!file) return;
-      file.chunks[packet.i] = packet.data;
-      const got = file.chunks.filter(Boolean).length;
-      this.handlers.onFileProgress?.(packet.id, got / file.expected);
       return;
     }
 
     if (packet.t === 'file-done') {
       const file = this.incomingFiles.get(packet.id);
       if (!file) return;
-      const cipher = file.chunks.join('');
+      const parts = file.chunks.filter((c): c is Uint8Array => c !== null);
+      if (parts.length !== file.expected) {
+        this.incomingFiles.delete(packet.id);
+        this.handlers.onError?.(new Error('Файл получен не полностью'));
+        return;
+      }
+      const assembled = concatUint8Arrays(parts);
       this.incomingFiles.delete(packet.id);
-      this.handlers.onEncryptedFile?.(file.meta, cipher, file.iv);
+      let binary = '';
+      const step = 0x8000;
+      for (let i = 0; i < assembled.length; i += step) {
+        binary += String.fromCharCode(...assembled.subarray(i, i + step));
+      }
+      const cipherBase64 = btoa(binary);
+      this.handlers.onEncryptedFile?.(file.meta, cipherBase64, file.iv);
     }
   }
 
@@ -687,6 +741,19 @@ export class P2PConnection {
     };
 
     channel.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        const chunk = decodeFileChunk(event.data);
+        if (chunk) {
+          const file = this.incomingFiles.get(chunk.id);
+          if (file && chunk.index < file.expected) {
+            file.chunks[chunk.index] = chunk.payload;
+            const got = file.chunks.filter(Boolean).length;
+            this.handlers.onFileProgress?.(chunk.id, got / file.expected);
+          }
+          return;
+        }
+      }
+
       const data =
         typeof event.data === 'string'
           ? event.data

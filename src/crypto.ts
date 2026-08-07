@@ -177,3 +177,5 @@ export async function decryptBytes(
     cipher.buffer as ArrayBuffer
   );
 }
+
+export { bytesToBase64, base64ToBytes };

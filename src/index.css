@@ -490,6 +490,45 @@ textarea {
   border-radius: 12px;
 }
 
+.file-pending-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-pending-name {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-strong);
+  word-break: break-word;
+}
+
+.file-pending-size {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.accept-file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.accept-file-btn:hover {
+  filter: brightness(1.08);
+}
+
 .chat-compose {
   display: flex;
   gap: 10px;

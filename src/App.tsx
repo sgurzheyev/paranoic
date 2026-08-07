@@ -14,6 +14,7 @@ import {
   Send,
   ArrowLeft,
   Camera,
+  FileDown,
 } from 'lucide-react';
 import QrScannerModal from './QrScannerModal';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
@@ -42,21 +43,27 @@ import {
   type InvitePayload,
   type SignalMessage,
 } from './invite';
+import {
+  appendStoredMessage,
+  formatFileSize,
+  loadChatHistory,
+  loadMediaBlob,
+  mediaStorageKey,
+  saveMediaBlob,
+  type StoredMessage,
+} from './storage';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'invite' | 'chat' | 'call';
 
-type ChatMessage = {
-  id: string;
-  sender: string;
-  time: string;
-  mine: boolean;
-  kind: 'text' | 'media';
-  text?: string;
+type ChatMessage = StoredMessage & {
   mediaUrl?: string;
-  mediaMime?: string;
-  mediaName?: string;
 };
+
+function toStored(message: ChatMessage): StoredMessage {
+  const { mediaUrl: _url, ...stored } = message;
+  return stored;
+}
 
 const FRIENDLY_STATUS: Record<P2PStatus, string> = {
   idle: 'Пока никого нет',
@@ -107,6 +114,88 @@ export default function App() {
   const answerInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bcRef = useRef<BroadcastChannel | null>(null);
+  const pendingFilesRef = useRef<Map<string, Blob>>(new Map());
+  const mediaUrlsRef = useRef<Set<string>>(new Set());
+
+  const addMessage = useCallback(async (message: ChatMessage, persist = true) => {
+    setMessages((prev) => [...prev, message]);
+    if (persist && message.kind !== 'file-pending') {
+      await appendStoredMessage(toStored(message));
+    }
+  }, []);
+
+  const acceptFile = useCallback(async (messageId: string) => {
+    const blob = pendingFilesRef.current.get(messageId);
+    if (!blob) {
+      setError('Файл больше недоступен в памяти');
+      return;
+    }
+
+    setMessages((prev) => {
+      const target = prev.find((m) => m.id === messageId);
+      if (!target) return prev;
+
+      const mediaKey = mediaStorageKey(messageId);
+      const mediaUrl = URL.createObjectURL(blob);
+      mediaUrlsRef.current.add(mediaUrl);
+      pendingFilesRef.current.delete(messageId);
+
+      const updated: ChatMessage = {
+        ...target,
+        kind: 'media',
+        mediaKey,
+        mediaUrl,
+        mediaMime: blob.type || target.mediaMime,
+      };
+
+      void saveMediaBlob(mediaKey, blob).then(() => appendStoredMessage(toStored(updated)));
+      return prev.map((m) => (m.id === messageId ? updated : m));
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const stored = await loadChatHistory();
+      const hydrated: ChatMessage[] = [];
+
+      for (const row of stored) {
+        if (row.kind === 'media' && row.mediaKey) {
+          const blob = await loadMediaBlob(row.mediaKey);
+          if (blob) {
+            const mediaUrl = URL.createObjectURL(blob);
+            mediaUrlsRef.current.add(mediaUrl);
+            hydrated.push({ ...row, mediaUrl });
+          } else {
+            hydrated.push({
+              ...row,
+              kind: 'text',
+              text: `[${row.mediaName ?? 'файл'} — не найден локально]`,
+            });
+          }
+        } else {
+          hydrated.push(row);
+        }
+      }
+
+      if (!cancelled) setMessages(hydrated);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const url of mediaUrlsRef.current) {
+        URL.revokeObjectURL(url);
+      }
+      mediaUrlsRef.current.clear();
+      pendingFilesRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     secretKeyRef.current = secretKey;
@@ -154,17 +243,15 @@ export default function App() {
           try {
             const packet = JSON.parse(payload) as { cipher: string; iv: string; sender: string };
             const text = await decryptMessage(packet.cipher, packet.iv, key);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `m-${Date.now()}`,
-                sender: packet.sender || 'Близкий',
-                text,
-                time: nowTime(),
-                mine: false,
-                kind: 'text',
-              },
-            ]);
+            const message: ChatMessage = {
+              id: `m-${Date.now()}`,
+              sender: packet.sender || 'Близкий',
+              text,
+              time: nowTime(),
+              mine: false,
+              kind: 'text',
+            };
+            await addMessage(message);
             setPeerLabel(packet.sender || 'Близкий');
           } catch {
             setError('Сообщение не удалось прочитать. Проверьте общий ключ.');
@@ -176,23 +263,21 @@ export default function App() {
           try {
             const plain = await decryptBytes(cipher, iv, key);
             const blob = new Blob([plain], { type: meta.mime });
-            const url = URL.createObjectURL(blob);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: meta.id,
-                sender: 'Близкий',
-                time: nowTime(),
-                mine: false,
-                kind: 'media',
-                mediaUrl: url,
-                mediaMime: meta.mime,
-                mediaName: meta.name,
-              },
-            ]);
+            pendingFilesRef.current.set(meta.id, blob);
+            const message: ChatMessage = {
+              id: meta.id,
+              sender: 'Близкий',
+              time: nowTime(),
+              mine: false,
+              kind: 'file-pending',
+              mediaMime: meta.mime,
+              mediaName: meta.name,
+              mediaSize: meta.size,
+            };
+            setMessages((prev) => [...prev, message]);
             setScreen('chat');
           } catch {
-            setError('Не удалось открыть файл');
+            setError('Не удалось расшифровать файл');
           }
         },
         onFileProgress: (_id, progress) => setUploadProgress(progress),
@@ -200,7 +285,7 @@ export default function App() {
       });
     }
     return p2pRef.current;
-  }, [attachLocalVideo]);
+  }, [addMessage, attachLocalVideo]);
 
   const publishAnswer = useCallback(
     async (answerSdp: string, key: string, to: string) => {
@@ -461,17 +546,15 @@ export default function App() {
 
     try {
       p2pRef.current.send(packet);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `m-${Date.now()}`,
-          sender: 'Я',
-          text: inputText,
-          time: nowTime(),
-          mine: true,
-          kind: 'text',
-        },
-      ]);
+      const message: ChatMessage = {
+        id: `m-${Date.now()}`,
+        sender: 'Я',
+        text: inputText,
+        time: nowTime(),
+        mine: true,
+        kind: 'text',
+      };
+      await addMessage(message);
       setInputText('');
       setError('');
     } catch (err) {
@@ -483,22 +566,26 @@ export default function App() {
     if (!secretKey || !p2pRef.current?.isReady) return;
     setError('');
     setUploadProgress(0);
+    const messageId = `local-${Date.now()}`;
+    const mediaKey = mediaStorageKey(messageId);
     try {
       await p2pRef.current.sendFile(file, (data) => encryptBytes(data, secretKey));
-      const url = URL.createObjectURL(file);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `local-${Date.now()}`,
-          sender: 'Я',
-          time: nowTime(),
-          mine: true,
-          kind: 'media',
-          mediaUrl: url,
-          mediaMime: file.type,
-          mediaName: file.name,
-        },
-      ]);
+      const mediaUrl = URL.createObjectURL(file);
+      mediaUrlsRef.current.add(mediaUrl);
+      await saveMediaBlob(mediaKey, file);
+      const message: ChatMessage = {
+        id: messageId,
+        sender: 'Я',
+        time: nowTime(),
+        mine: true,
+        kind: 'media',
+        mediaUrl,
+        mediaMime: file.type,
+        mediaName: file.name,
+        mediaSize: file.size,
+        mediaKey,
+      };
+      await addMessage(message);
       setScreen('chat');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Файл не отправился');
@@ -800,6 +887,22 @@ export default function App() {
                   <div key={m.id} className={`bubble-wrap ${m.mine ? 'mine' : 'theirs'}`}>
                     <div className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>
                       {m.kind === 'text' && <p>{m.text}</p>}
+                      {m.kind === 'file-pending' && (
+                        <div className="file-pending-card">
+                          <p className="file-pending-name">{m.mediaName ?? 'Файл'}</p>
+                          <p className="file-pending-size">{formatFileSize(m.mediaSize ?? 0)}</p>
+                          {!m.mine && (
+                            <button
+                              type="button"
+                              className="accept-file-btn"
+                              onClick={() => void acceptFile(m.id)}
+                            >
+                              <FileDown size={16} />
+                              Принять файл
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {m.kind === 'media' && m.mediaUrl && (
                         m.mediaMime?.startsWith('video/') ? (
                           <video src={m.mediaUrl} controls className="media-preview" />
