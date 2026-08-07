@@ -32,14 +32,15 @@ function json(body: unknown, status = 200): Response {
 }
 
 async function createTurnToken(): Promise<Response> {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-  if (!accountSid || !authToken) {
-    return json({ error: 'Twilio credentials not configured' }, 503);
-  }
-
   try {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+
+    if (!accountSid || !authToken) {
+      console.error('Twilio Error: missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN');
+      return json({ error: 'Twilio credentials not configured' }, 503);
+    }
+
     const client = twilio(accountSid, authToken);
     const token = await client.tokens.create();
 
@@ -54,10 +55,23 @@ async function createTurnToken(): Promise<Response> {
       })
       .filter((s): s is IceServer => s !== null);
 
+    if (iceServers.length === 0) {
+      console.error('Twilio Error: tokens.create returned empty iceServers', token);
+      return new Response(JSON.stringify({ error: 'Twilio returned empty iceServers' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...CORS },
+      });
+    }
+
     return json({ iceServers });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : 'Failed to create TURN token';
-    return json({ error: message }, 500);
+  } catch (error) {
+    console.error('Twilio Error:', error);
+    const message =
+      error instanceof Error ? error.message || 'Unknown error' : 'Unknown error';
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    });
   }
 }
 
