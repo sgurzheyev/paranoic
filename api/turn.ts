@@ -35,12 +35,12 @@ async function createTurnToken(): Promise<Response> {
       return json({ error: 'Metered credentials not configured' }, 503);
     }
 
-    const url = `https://${domain}/api/v1/turn/credentials?secretKey=${encodeURIComponent(apiKey)}`;
-    const safeUrl = `https://${domain}/api/v1/turn/credentials?secretKey=<len:${apiKey.length}>`;
+    const url = `https://${domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`;
+    const safeUrl = `https://${domain}/api/v1/turn/credentials?apiKey=<len:${apiKey.length}>`;
     console.log('Metered request URL:', safeUrl);
-    console.log('Metered auth: secretKey query (key length', apiKey.length, ')');
+    console.log('Metered auth: apiKey query (key length', apiKey.length, ')');
 
-    // GET без Authorization/Content-Type — Metered ждёт secretKey только в query.
+    // GET без лишних заголовков — Metered ждёт apiKey только в query.
     const res = await fetch(url, { method: 'GET' });
 
     if (!res.ok) {
