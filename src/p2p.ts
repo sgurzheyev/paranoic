@@ -91,8 +91,8 @@ const FILE_CHUNK_BYTES = 128 * 1024;
 const MAX_BUFFERED_AMOUNT = 256 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
-/** Для инвайт-ссылки ждём complete или 2с — иначе в SDP нет STUN/TURN кандидатов. */
-const ICE_GATHER_TIMEOUT_MS = 2_000;
+/** Ждём complete или минимум 5с — иначе TURN-кандидаты не попадают в QR/ссылку (особенно mobile VPN). */
+const ICE_GATHER_TIMEOUT_MS = 5_000;
 /** Если ICE застрял в checking — VPN/провайдер часто режет UDP/TURN. */
 const ICE_CONNECT_TIMEOUT_MS = 15_000;
 const ICE_CONNECT_TIMEOUT_ERROR =
@@ -164,31 +164,40 @@ async function waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
   });
 }
 
+/**
+ * Ждём полный набор ICE (STUN + TURN) перед сериализацией offer/answer в QR.
+ * Завершаем по iceGatheringState === 'complete' / end-of-candidates,
+ * либо по таймауту ≥5с — не обрезаем сбор раньше на медленных mobile VPN.
+ */
 function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEOUT_MS): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
 
   return new Promise((resolve) => {
     let settled = false;
-    const finish = () => {
+    const finish = (reason: string) => {
       if (settled) return;
       settled = true;
       pc.removeEventListener('icegatheringstatechange', onState);
       pc.removeEventListener('icecandidate', onCandidate);
       clearTimeout(timer);
+      console.log('[paranoic ICE] gathering finished:', reason, {
+        iceGatheringState: pc.iceGatheringState,
+        timeoutMs,
+      });
       resolve();
     };
     const onState = () => {
-      if (pc.iceGatheringState === 'complete') finish();
+      if (pc.iceGatheringState === 'complete') finish('icegatheringstatechange:complete');
     };
     // null candidate = конец сбора (надёжнее на части мобильных браузеров)
     const onCandidate = (event: RTCPeerConnectionIceEvent) => {
-      if (event.candidate === null) finish();
+      if (event.candidate === null) finish('icecandidate:end-of-candidates');
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer = setTimeout(() => finish('timeout'), timeoutMs);
     pc.addEventListener('icegatheringstatechange', onState);
     pc.addEventListener('icecandidate', onCandidate);
     // Гонка: complete мог наступить между проверкой и подпиской
-    if (pc.iceGatheringState === 'complete') finish();
+    if (pc.iceGatheringState === 'complete') finish('already-complete');
   });
 }
 
@@ -596,6 +605,7 @@ export class P2PConnection {
   private async createPeerConnection(): Promise<RTCPeerConnection> {
     const iceServers = await fetchIceServers();
     // iceTransportPolicy по умолчанию 'all' — не форсируем relay, чтобы STUN и TURN были доступны.
+    // max-bundle + rtcp-mux — один транспорт через NAT/VPN на мобильных сетях.
     const pc = new RTCPeerConnection({
       iceServers,
       iceCandidatePoolSize: 8,
