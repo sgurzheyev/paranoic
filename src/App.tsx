@@ -510,7 +510,39 @@ export default function App() {
 
   const onQrScanned = useCallback(
     async (text: string) => {
-      await applyAnswerFromText(text);
+      setError('');
+      setConnectingAnswer(true);
+      setInviteHint('Код прочитан, устанавливаем связь...');
+      setScannerOpen(false);
+
+      try {
+        let payload = text.trim();
+        try {
+          const hashIdx = payload.indexOf('#paranoic=');
+          if (hashIdx >= 0) {
+            payload = payload.slice(hashIdx);
+          } else if (payload.startsWith('http://') || payload.startsWith('https://')) {
+            try {
+              const url = new URL(payload);
+              if (url.hash.includes('paranoic=')) {
+                payload = url.hash.startsWith('#') ? url.hash : `#${url.hash}`;
+              }
+            } catch {
+              /* оставляем исходную строку */
+            }
+          }
+        } catch {
+          /* безопасный fallback: передаём сырую строку в applyAnswerFromText */
+        }
+
+        await applyAnswerFromText(payload);
+      } catch {
+        /* ошибка уже в setError из applyAnswerFromText */
+      } finally {
+        setInviteHint((prev) =>
+          prev === 'Код прочитан, устанавливаем связь...' ? '' : prev
+        );
+      }
     },
     [applyAnswerFromText]
   );
@@ -818,7 +850,9 @@ export default function App() {
                   {connectingAnswer ? (
                     <>
                       <span className="btn-spinner" aria-hidden />
-                      Подключаем…
+                      {inviteHint === 'Код прочитан, устанавливаем связь...'
+                        ? 'Код прочитан, устанавливаем связь...'
+                        : 'Подключаем…'}
                     </>
                   ) : (
                     <>

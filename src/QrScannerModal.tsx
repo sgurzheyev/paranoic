@@ -22,6 +22,20 @@ const HIGH_RES_USER_CAMERA: MediaTrackConstraints = {
   height: { ideal: 1080 },
 };
 
+function stopCameraTracks(regionId: string): void {
+  try {
+    const video = document.querySelector(`#${CSS.escape(regionId)} video`);
+    if (!(video instanceof HTMLVideoElement)) return;
+    const stream = video.srcObject;
+    if (stream instanceof MediaStream) {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+    video.srcObject = null;
+  } catch {
+    /* */
+  }
+}
+
 export default function QrScannerModal({
   open,
   onClose,
@@ -32,7 +46,7 @@ export default function QrScannerModal({
   const regionId = `qr-reader-${reactId}`;
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const handlingRef = useRef(false);
-  const [status, setStatus] = useState<'starting' | 'scanning' | 'error'>('starting');
+  const [status, setStatus] = useState<'starting' | 'scanning' | 'success' | 'error'>('starting');
   const [errorText, setErrorText] = useState('');
 
   useEffect(() => {
@@ -57,20 +71,39 @@ export default function QrScannerModal({
       videoConstraints: HIGH_RES_CAMERA,
     };
 
-    const onSuccess = async (decoded: string) => {
+    const onSuccess = (decoded: string) => {
       if (handlingRef.current || cancelled) return;
       handlingRef.current = true;
-      try {
-        await onScan(decoded);
-      } catch {
-        handlingRef.current = false;
-      }
+      setStatus('success');
+
+      // Сразу глушим камеру — иначе плотный QR продолжает дергать callback и UI зависает.
+      stopCameraTracks(regionId);
+
+      const current = scannerRef.current;
+      scannerRef.current = null;
+      const stopPromise = current
+        ? current
+            .stop()
+            .catch(() => undefined)
+            .finally(() => {
+              try {
+                current.clear();
+              } catch {
+                /* */
+              }
+            })
+        : Promise.resolve();
+
+      void stopPromise.finally(() => {
+        onClose();
+        void Promise.resolve(onScan(decoded)).catch(() => undefined);
+      });
     };
 
     async function start() {
       try {
         await scanner.start(HIGH_RES_CAMERA, config, onSuccess, () => undefined);
-        if (!cancelled) setStatus('scanning');
+        if (!cancelled && !handlingRef.current) setStatus('scanning');
       } catch {
         try {
           await scanner.start(
@@ -79,7 +112,7 @@ export default function QrScannerModal({
             onSuccess,
             () => undefined
           );
-          if (!cancelled) setStatus('scanning');
+          if (!cancelled && !handlingRef.current) setStatus('scanning');
         } catch {
           if (!cancelled) {
             setStatus('error');
@@ -93,6 +126,7 @@ export default function QrScannerModal({
 
     return () => {
       cancelled = true;
+      stopCameraTracks(regionId);
       const current = scannerRef.current;
       scannerRef.current = null;
       if (current) {
@@ -108,7 +142,7 @@ export default function QrScannerModal({
           });
       }
     };
-  }, [open, onScan, regionId]);
+  }, [open, onScan, onClose, regionId]);
 
   if (!open) return null;
 
@@ -137,6 +171,12 @@ export default function QrScannerModal({
             <div className="qr-overlay">
               <span className="btn-spinner" />
               <p>Включаем камеру…</p>
+            </div>
+          )}
+          {status === 'success' && (
+            <div className="qr-overlay">
+              <span className="btn-spinner" />
+              <p>Код прочитан, устанавливаем связь…</p>
             </div>
           )}
           {status === 'error' && (
