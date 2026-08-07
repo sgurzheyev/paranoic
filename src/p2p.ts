@@ -33,7 +33,7 @@ export type P2PHandlers = {
 /**
  * STUN для прямого ICE + публичные TURN (Metered Open Relay) для симметричного NAT
  * и межсетевых соединений (RU ↔ US и т.п.), когда hole-punching не проходит.
- * iceTransportPolicy: 'relay' — весь трафик через TURN (обход VPN, блокирующих UDP).
+ * iceTransportPolicy не задаём (по умолчанию 'all') — браузер сам выбирает STUN или TURN.
  */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -61,6 +61,10 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
 /** Для инвайт-ссылки ждём complete или 2с — иначе в SDP нет STUN/TURN кандидатов. */
 const ICE_GATHER_TIMEOUT_MS = 2_000;
+/** Если ICE застрял в checking — VPN/провайдер часто режет UDP/TURN. */
+const ICE_CONNECT_TIMEOUT_MS = 15_000;
+const ICE_CONNECT_TIMEOUT_ERROR =
+  'Таймаут соединения. VPN или провайдер блокирует трафик.';
 const MEDIA_WATCH_MS = 3_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
 
@@ -232,6 +236,7 @@ export class P2PConnection {
   private lastRemoteVideoBytes = 0;
   private stalledChecks = 0;
   private iceRestarting = false;
+  private iceCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
@@ -559,8 +564,6 @@ export class P2PConnection {
   private createPeerConnection(): RTCPeerConnection {
     const pc = new RTCPeerConnection({
       iceServers: ICE_SERVERS,
-      // VPN часто режет UDP/STUN — только TURN (TCP 443), как обычный веб-трафик.
-      iceTransportPolicy: 'relay',
       iceCandidatePoolSize: 8,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
@@ -598,6 +601,7 @@ export class P2PConnection {
       switch (pc.connectionState) {
         case 'connected':
           this.iceRestarting = false;
+          this.clearIceCheckTimeout();
           break;
         case 'disconnected':
           void this.tryIceRestart();
@@ -605,24 +609,54 @@ export class P2PConnection {
         case 'failed':
           void this.tryIceRestart().then((ok) => {
             if (!ok) {
+              this.clearIceCheckTimeout();
               this.setStatus('failed');
               this.handlers.onError?.(new Error('Не удалось связаться'));
             }
           });
           break;
         case 'closed':
+          this.clearIceCheckTimeout();
           this.setStatus('disconnected');
           break;
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+      const state = pc.iceConnectionState;
+      if (state === 'checking') {
+        this.armIceCheckTimeout(pc);
+      } else if (state === 'connected' || state === 'completed') {
+        this.clearIceCheckTimeout();
+      } else if (state === 'failed' || state === 'disconnected') {
+        if (state === 'failed') this.clearIceCheckTimeout();
         void this.tryIceRestart();
+      } else if (state === 'closed') {
+        this.clearIceCheckTimeout();
       }
     };
 
     return pc;
+  }
+
+  private clearIceCheckTimeout(): void {
+    if (this.iceCheckTimer) {
+      clearTimeout(this.iceCheckTimer);
+      this.iceCheckTimer = null;
+    }
+  }
+
+  private armIceCheckTimeout(pc: RTCPeerConnection): void {
+    this.clearIceCheckTimeout();
+    this.iceCheckTimer = setTimeout(() => {
+      this.iceCheckTimer = null;
+      if (this.pc !== pc) return;
+      if (pc.iceConnectionState !== 'checking') return;
+
+      this.setStatus('failed');
+      this.handlers.onError?.(new Error(ICE_CONNECT_TIMEOUT_ERROR));
+      this.reset();
+    }, ICE_CONNECT_TIMEOUT_MS);
   }
 
   private async tryIceRestart(): Promise<boolean> {
@@ -724,7 +758,10 @@ export class P2PConnection {
     this.channel = channel;
     channel.binaryType = 'arraybuffer';
 
-    channel.onopen = () => this.setStatus('connected');
+    channel.onopen = () => {
+      this.clearIceCheckTimeout();
+      this.setStatus('connected');
+    };
 
     channel.onclose = () => {
       if (this.status === 'connected') this.setStatus('disconnected');
@@ -801,6 +838,7 @@ export class P2PConnection {
   }
 
   private reset(): void {
+    this.clearIceCheckTimeout();
     this.stopMediaWatchdog();
     this.incomingFiles.clear();
     this.makingOffer = false;
