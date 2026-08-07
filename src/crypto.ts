@@ -18,15 +18,10 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Очищает вставленный текст: полная https-ссылка, hash, кавычки, пробелы.
- * Возвращает «голый» ключ (base64), если удалось вытащить без асинхронного парсинга инвайта.
- */
 export function sanitizePastedKey(input: string): string {
   let text = input.trim().replace(/^['"]+|['"]+$/g, '');
   if (!text) return '';
 
-  // query ?key= / &key=
   const keyParam = text.match(/[?&#](?:key|k|secret)=([^&#\s]+)/i);
   if (keyParam?.[1]) {
     try {
@@ -36,53 +31,37 @@ export function sanitizePastedKey(input: string): string {
     }
   }
 
-  // Полный URL — берём hash, если это не инвайт Paranoic (его разберёт resolveKeyMaterial)
-  if (/^https?:\/\//i.test(text) || text.includes('://')) {
-    try {
-      const url = new URL(text);
-      if (url.hash && !url.hash.includes('paranoic=')) {
-        return decodeURIComponent(url.hash.replace(/^#/, '')).replace(/\s+/g, '');
-      }
-      const pathTail = url.pathname.split('/').filter(Boolean).pop();
-      if (pathTail && /^[A-Za-z0-9+/=_-]{32,}$/.test(pathTail)) {
-        return pathTail;
-      }
-    } catch {
-      /* keep going */
-    }
-  }
-
-  // Убрать переносы/пробелы из base64-ключа
-  if (!text.includes('paranoic=')) {
-    text = text.replace(/\s+/g, '');
-  }
-
-  return text;
+  return text.replace(/\s+/g, '');
 }
 
-/** Достаёт ключ из чистой строки или из полной invite-ссылки. */
 export async function resolveKeyMaterial(input: string): Promise<string> {
-  const trimmed = input.trim();
-  if (!trimmed) throw new Error('Пустой ключ');
-
-  if (
-    trimmed.includes('paranoic=') ||
-    /^https?:\/\//i.test(trimmed) ||
-    trimmed.includes('#paranoic')
-  ) {
-    const { parseInviteFromPastedText } = await import('./invite');
-    const invite = await parseInviteFromPastedText(trimmed);
-    if (invite?.key) return invite.key;
-  }
-
-  const cleaned = sanitizePastedKey(trimmed);
-  if (!cleaned || cleaned.includes('paranoic=') || /^https?:\/\//i.test(cleaned)) {
-    const { parseInviteFromPastedText } = await import('./invite');
-    const invite = await parseInviteFromPastedText(trimmed);
-    if (invite?.key) return invite.key;
-  }
-
+  const cleaned = sanitizePastedKey(input);
+  if (!cleaned) throw new Error('Пустой ключ');
   return cleaned;
+}
+
+/** Общий AES-ключ комнаты: оба пира с одним roomId получают один ключ. */
+export async function deriveKeyFromRoom(roomId: string): Promise<CryptoKey> {
+  const enc = new TextEncoder();
+  const material = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(`paranoic-room:${roomId}`),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: enc.encode('paranoic-e2ee-v1'),
+      iterations: 120_000,
+      hash: 'SHA-256',
+    },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt']
+  );
 }
 
 export async function generateSecretKey(): Promise<CryptoKey> {

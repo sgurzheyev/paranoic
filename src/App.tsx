@@ -8,41 +8,25 @@ import {
   Check,
   X,
   PhoneOff,
-  Settings2,
-  Link2,
   Unplug,
   Send,
   ArrowLeft,
-  Camera,
   FileDown,
+  Users,
 } from 'lucide-react';
-import QrScannerModal from './QrScannerModal';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby from './GlobeLobby';
 import {
-  generateSecretKey,
+  deriveKeyFromRoom,
   exportKey,
-  importKey,
   encryptMessage,
   decryptMessage,
   encryptBytes,
   decryptBytes,
-  resolveKeyMaterial,
 } from './crypto';
 import { P2PConnection, type CallState, type P2PStatus } from './p2p';
-import {
-  buildInviteUrl,
-  clearInviteHash,
-  extractSdpFromPaste,
-  InviteTruncatedError,
-  INVITE_TRUNCATED_MESSAGE,
-  makeQrDataUrl,
-  parseInviteFromLocation,
-  parseInviteFromPastedText,
-  SIGNAL_CHANNEL,
-  type InvitePayload,
-  type SignalMessage,
-} from './invite';
+import { buildRoomShareUrl, getOrCreateRoomId, getRoomIdFromUrl } from './room';
+import { hasSupabaseConfig } from './lib/supabase';
 import {
   appendStoredMessage,
   formatFileSize,
@@ -54,7 +38,7 @@ import {
 } from './storage';
 
 type AppMode = 'select' | AppModeChoice;
-type Screen = 'home' | 'invite' | 'chat' | 'call';
+type Screen = 'home' | 'chat' | 'call';
 
 type ChatMessage = StoredMessage & {
   mediaUrl?: string;
@@ -67,8 +51,8 @@ function toStored(message: ChatMessage): StoredMessage {
 
 const FRIENDLY_STATUS: Record<P2PStatus, string> = {
   idle: 'Пока никого нет',
-  'creating-offer': 'Готовим приглашение…',
-  'waiting-answer': 'Ждём, пока близкий откроет ссылку',
+  'creating-offer': 'Создаём соединение…',
+  'waiting-answer': 'Ждём второго участника в комнате…',
   connecting: 'Соединяемся…',
   connected: 'Вы на связи',
   disconnected: 'Связь прервалась',
@@ -80,9 +64,10 @@ function nowTime() {
 }
 
 export default function App() {
-  const [appMode, setAppMode] = useState<AppMode>('select');
+  const [appMode, setAppMode] = useState<AppMode>(() =>
+    getRoomIdFromUrl() ? 'paranoic' : 'select'
+  );
   const [myId, setMyId] = useState('');
-  const [myName] = useState('Я');
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
   const [keyString, setKeyString] = useState('');
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('idle');
@@ -91,29 +76,19 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState('');
-  const [inviteUrl, setInviteUrl] = useState('');
-  const [qrUrl, setQrUrl] = useState('');
-  const [inviteHint, setInviteHint] = useState('');
+  const [roomId, setRoomId] = useState('');
+  const [roomUrl, setRoomUrl] = useState('');
   const [copied, setCopied] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [remoteSignal, setRemoteSignal] = useState('');
-  const [importKeyInput, setImportKeyInput] = useState('');
-  const [localSignal, setLocalSignal] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [peerLabel, setPeerLabel] = useState('Близкий');
-  const [routeBusy, setRouteBusy] = useState(false);
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [connectingAnswer, setConnectingAnswer] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
   const myIdRef = useRef('');
-  const keyStringRef = useRef('');
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const answerInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bcRef = useRef<BroadcastChannel | null>(null);
   const pendingFilesRef = useRef<Map<string, Blob>>(new Map());
   const mediaUrlsRef = useRef<Set<string>>(new Set());
 
@@ -155,11 +130,9 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-
     void (async () => {
       const stored = await loadChatHistory();
       const hydrated: ChatMessage[] = [];
-
       for (const row of stored) {
         if (row.kind === 'media' && row.mediaKey) {
           const blob = await loadMediaBlob(row.mediaKey);
@@ -178,10 +151,8 @@ export default function App() {
           hydrated.push(row);
         }
       }
-
       if (!cancelled) setMessages(hydrated);
     })();
-
     return () => {
       cancelled = true;
     };
@@ -189,9 +160,7 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      for (const url of mediaUrlsRef.current) {
-        URL.revokeObjectURL(url);
-      }
+      for (const url of mediaUrlsRef.current) URL.revokeObjectURL(url);
       mediaUrlsRef.current.clear();
       pendingFilesRef.current.clear();
     };
@@ -205,14 +174,8 @@ export default function App() {
     myIdRef.current = myId;
   }, [myId]);
 
-  useEffect(() => {
-    keyStringRef.current = keyString;
-  }, [keyString]);
-
   const attachLocalVideo = useCallback((stream: MediaStream | null) => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-    }
+    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
   }, []);
 
   const ensureP2P = useCallback(() => {
@@ -220,10 +183,7 @@ export default function App() {
       p2pRef.current = new P2PConnection({
         onStatus: (status) => {
           setP2pStatus(status);
-          if (status === 'connected') {
-            setError('');
-            setScreen((s) => (s === 'invite' ? 'home' : s));
-          }
+          if (status === 'connected') setError('');
         },
         onCallState: (state) => {
           setCallState(state);
@@ -243,18 +203,17 @@ export default function App() {
           try {
             const packet = JSON.parse(payload) as { cipher: string; iv: string; sender: string };
             const text = await decryptMessage(packet.cipher, packet.iv, key);
-            const message: ChatMessage = {
+            await addMessage({
               id: `m-${Date.now()}`,
               sender: packet.sender || 'Близкий',
               text,
               time: nowTime(),
               mine: false,
               kind: 'text',
-            };
-            await addMessage(message);
+            });
             setPeerLabel(packet.sender || 'Близкий');
           } catch {
-            setError('Сообщение не удалось прочитать. Проверьте общий ключ.');
+            setError('Сообщение не удалось прочитать.');
           }
         },
         onEncryptedFile: async (meta, cipher, iv) => {
@@ -264,17 +223,19 @@ export default function App() {
             const plain = await decryptBytes(cipher, iv, key);
             const blob = new Blob([plain], { type: meta.mime });
             pendingFilesRef.current.set(meta.id, blob);
-            const message: ChatMessage = {
-              id: meta.id,
-              sender: 'Близкий',
-              time: nowTime(),
-              mine: false,
-              kind: 'file-pending',
-              mediaMime: meta.mime,
-              mediaName: meta.name,
-              mediaSize: meta.size,
-            };
-            setMessages((prev) => [...prev, message]);
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: meta.id,
+                sender: 'Близкий',
+                time: nowTime(),
+                mine: false,
+                kind: 'file-pending',
+                mediaMime: meta.mime,
+                mediaName: meta.name,
+                mediaSize: meta.size,
+              },
+            ]);
             setScreen('chat');
           } catch {
             setError('Не удалось расшифровать файл');
@@ -287,135 +248,57 @@ export default function App() {
     return p2pRef.current;
   }, [addMessage, attachLocalVideo]);
 
-  const publishAnswer = useCallback(
-    async (answerSdp: string, key: string, to: string) => {
-      const payload: InvitePayload = {
-        v: 2,
-        role: 'answer',
-        sdp: answerSdp,
-        key,
-        from: myIdRef.current,
-        name: myName,
-      };
-      const url = await buildInviteUrl(payload);
-      setInviteUrl(url);
-      try {
-        setQrUrl(await makeQrDataUrl(url));
-      } catch {
-        setQrUrl('');
-      }
-      setInviteHint('Покажите этот код тому, кто вас пригласил — или отправьте ссылку обратно');
-      setScreen('invite');
+  /** Вход в комнату: URL ?room= → Supabase signaling → WebRTC. */
+  useEffect(() => {
+    if (appMode !== 'paranoic') return;
 
-      try {
-        bcRef.current?.postMessage({ kind: 'answer', payload, to } satisfies SignalMessage);
-      } catch {
-        /* */
-      }
-    },
-    [myName]
-  );
+    let cancelled = false;
 
-  const handleIncomingInvite = useCallback(
-    async (invite: InvitePayload) => {
+    void (async () => {
+      setJoining(true);
       setError('');
-      setRouteBusy(true);
       try {
-        const key = await importKey(invite.key);
+        if (!hasSupabaseConfig()) {
+          throw new Error(
+            'Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY в переменные окружения.'
+          );
+        }
+
+        const id = 'PRN-' + Math.random().toString(36).substring(2, 9).toUpperCase();
+        if (cancelled) return;
+        setMyId(id);
+        myIdRef.current = id;
+
+        const room = getOrCreateRoomId();
+        if (cancelled) return;
+        setRoomId(room);
+        setRoomUrl(buildRoomShareUrl(room));
+
+        const key = await deriveKeyFromRoom(room);
+        if (cancelled) return;
         setSecretKey(key);
         secretKeyRef.current = key;
-        setKeyString(invite.key);
-        keyStringRef.current = invite.key;
-        if (invite.name) setPeerLabel(invite.name);
+        const exported = await exportKey(key);
+        setKeyString(exported);
 
         const p2p = ensureP2P();
-
-        if (invite.role === 'offer') {
-          const answer = await p2p.acceptOffer(invite.sdp);
-          setLocalSignal(answer);
-          await publishAnswer(answer, invite.key, invite.from);
-        } else if (invite.role === 'answer') {
-          await p2p.acceptAnswer(invite.sdp);
-        }
-
-        clearInviteHash();
+        await p2p.joinRoom(room);
       } catch (e) {
-        if (e instanceof InviteTruncatedError) {
-          setError(INVITE_TRUNCATED_MESSAGE);
-        } else {
-          setError(e instanceof Error ? e.message : 'Не удалось принять приглашение');
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Не удалось войти в комнату');
+          setP2pStatus('failed');
         }
       } finally {
-        setRouteBusy(false);
+        if (!cancelled) setJoining(false);
       }
-    },
-    [ensureP2P, publishAnswer]
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const bc = new BroadcastChannel(SIGNAL_CHANNEL);
-    bcRef.current = bc;
-
-    async function init() {
-      const id = 'PRN-' + Math.random().toString(36).substring(2, 9).toUpperCase();
-      if (cancelled) return;
-      setMyId(id);
-      myIdRef.current = id;
-
-      const key = await generateSecretKey();
-      if (cancelled) return;
-      setSecretKey(key);
-      secretKeyRef.current = key;
-      const exported = await exportKey(key);
-      setKeyString(exported);
-      keyStringRef.current = exported;
-
-      try {
-        const invite = await parseInviteFromLocation();
-        if (!cancelled && invite) {
-          setAppMode('paranoic');
-          await handleIncomingInvite(invite);
-        }
-      } catch (e) {
-        if (cancelled) return;
-        setAppMode('paranoic');
-        if (e instanceof InviteTruncatedError) {
-          setError(INVITE_TRUNCATED_MESSAGE);
-        } else {
-          setError(e instanceof Error ? e.message : 'Не удалось прочитать ссылку');
-        }
-      }
-    }
-
-    bc.onmessage = (event: MessageEvent<SignalMessage>) => {
-      const msg = event.data;
-      if (msg.kind === 'answer' && msg.to === myIdRef.current) {
-        void (async () => {
-          try {
-            const p2p = ensureP2P();
-            await p2p.acceptAnswer(msg.payload.sdp);
-            setInviteHint('');
-            setScreen('home');
-          } catch (e) {
-            setError(e instanceof Error ? e.message : 'Ответ не принят');
-          }
-        })();
-      }
-    };
-
-    void init();
+    })();
 
     return () => {
       cancelled = true;
-      bc.close();
-      bcRef.current = null;
       p2pRef.current?.close();
       p2pRef.current = null;
     };
-    // Инициализация сессии один раз при монтировании
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [appMode, ensureP2P]);
 
   useEffect(() => {
     if (screen === 'call' && p2pRef.current) {
@@ -423,41 +306,9 @@ export default function App() {
     }
   }, [screen, callState, attachLocalVideo]);
 
-  const createInvite = async () => {
-    setError('');
-    setCopied(false);
-    setRouteBusy(true);
-    try {
-      const p2p = ensureP2P();
-      const offer = await p2p.createOffer();
-      setLocalSignal(offer);
-      const payload: InvitePayload = {
-        v: 2,
-        role: 'offer',
-        sdp: offer,
-        key: keyStringRef.current,
-        from: myIdRef.current,
-        name: myName,
-      };
-      const url = await buildInviteUrl(payload);
-      setInviteUrl(url);
-      try {
-        setQrUrl(await makeQrDataUrl(url));
-      } catch {
-        setQrUrl('');
-      }
-      setInviteHint('Отправьте ссылку близкому или покажите QR-код');
-      setScreen('invite');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось создать приглашение');
-    } finally {
-      setRouteBusy(false);
-    }
-  };
-
-  const copyInvite = async () => {
-    if (!inviteUrl) return;
-    await navigator.clipboard.writeText(inviteUrl);
+  const copyRoomLink = async () => {
+    if (!roomUrl) return;
+    await navigator.clipboard.writeText(roomUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -467,91 +318,13 @@ export default function App() {
     p2pRef.current = null;
     setP2pStatus('disconnected');
     setCallState('idle');
-    setInviteUrl('');
-    setQrUrl('');
-    setScannerOpen(false);
-    setConnectingAnswer(false);
     setScreen('home');
   };
-
-  const applyAnswerFromText = useCallback(
-    async (raw: string) => {
-      setError('');
-      setConnectingAnswer(true);
-      try {
-        const invite = await parseInviteFromPastedText(raw);
-        if (invite?.role === 'answer') {
-          await ensureP2P().acceptAnswer(invite.sdp);
-        } else if (invite?.role === 'offer') {
-          throw new Error('Это ссылка-приглашение, нужен QR ответа от близкого');
-        } else {
-          const sdp = await extractSdpFromPaste(raw);
-          await ensureP2P().acceptAnswer(sdp);
-        }
-        setRemoteSignal('');
-        setScannerOpen(false);
-        setInviteHint('');
-        setScreen('home');
-      } catch (e) {
-        const msg =
-          e instanceof InviteTruncatedError
-            ? INVITE_TRUNCATED_MESSAGE
-            : e instanceof Error
-              ? e.message
-              : 'Не удалось принять ответ';
-        setError(msg);
-        throw e;
-      } finally {
-        setConnectingAnswer(false);
-      }
-    },
-    [ensureP2P]
-  );
-
-  const onQrScanned = useCallback(
-    async (text: string) => {
-      setError('');
-      setConnectingAnswer(true);
-      setInviteHint('Код прочитан, устанавливаем связь...');
-      setScannerOpen(false);
-
-      try {
-        let payload = text.trim();
-        try {
-          const hashIdx = payload.indexOf('#paranoic=');
-          if (hashIdx >= 0) {
-            payload = payload.slice(hashIdx);
-          } else if (payload.startsWith('http://') || payload.startsWith('https://')) {
-            try {
-              const url = new URL(payload);
-              if (url.hash.includes('paranoic=')) {
-                payload = url.hash.startsWith('#') ? url.hash : `#${url.hash}`;
-              }
-            } catch {
-              /* оставляем исходную строку */
-            }
-          }
-        } catch {
-          /* безопасный fallback: передаём сырую строку в applyAnswerFromText */
-        }
-
-        await applyAnswerFromText(payload);
-      } catch {
-        /* ошибка уже в setError из applyAnswerFromText */
-      } finally {
-        setInviteHint((prev) =>
-          prev === 'Код прочитан, устанавливаем связь...' ? '' : prev
-        );
-      }
-    },
-    [applyAnswerFromText]
-  );
 
   const startCall = async () => {
     setError('');
     try {
-      const p2p = ensureP2P();
-      const stream = await p2p.startCall();
+      const stream = await ensureP2P().startCall();
       attachLocalVideo(stream);
       setScreen('call');
     } catch (e) {
@@ -578,15 +351,14 @@ export default function App() {
 
     try {
       p2pRef.current.send(packet);
-      const message: ChatMessage = {
+      await addMessage({
         id: `m-${Date.now()}`,
         sender: 'Я',
         text: inputText,
         time: nowTime(),
         mine: true,
         kind: 'text',
-      };
-      await addMessage(message);
+      });
       setInputText('');
       setError('');
     } catch (err) {
@@ -605,7 +377,7 @@ export default function App() {
       const mediaUrl = URL.createObjectURL(file);
       mediaUrlsRef.current.add(mediaUrl);
       await saveMediaBlob(mediaKey, file);
-      const message: ChatMessage = {
+      await addMessage({
         id: messageId,
         sender: 'Я',
         time: nowTime(),
@@ -616,8 +388,7 @@ export default function App() {
         mediaName: file.name,
         mediaSize: file.size,
         mediaKey,
-      };
-      await addMessage(message);
+      });
       setScreen('chat');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Файл не отправился');
@@ -687,31 +458,27 @@ export default function App() {
             {!connected ? (
               <>
                 <p className="lead">
-                  Один клик — и вы на прямой защищённой связи с близким. Без регистрации и без облака.
+                  {joining
+                    ? 'Входим в комнату и ждём близкого…'
+                    : 'Отправьте ссылку на комнату близкому — соединение установится само.'}
                 </p>
-                <button
-                  type="button"
-                  className="mega-btn primary"
-                  onClick={createInvite}
-                  disabled={routeBusy}
-                >
-                  {routeBusy ? (
-                    <>
-                      <span className="btn-spinner" aria-hidden />
-                      Шифруем маршрут...
-                    </>
-                  ) : (
-                    <>
-                      <Link2 size={32} />
-                      Пригласить близкого
-                    </>
-                  )}
-                </button>
-                <p className="hint">
-                  {routeBusy
-                    ? 'Собираем защищённый маршрут через сеть…'
-                    : 'Появится ссылка и QR-код — отправьте их маме или папе'}
-                </p>
+                <div className="room-card">
+                  <Users size={28} className="room-card-icon" />
+                  <p className="room-id-label">Комната</p>
+                  <p className="mono-box">{roomId || '…'}</p>
+                  <button
+                    type="button"
+                    className="mega-btn primary compact"
+                    onClick={copyRoomLink}
+                    disabled={!roomUrl}
+                  >
+                    {copied ? <Check size={28} /> : <Copy size={28} />}
+                    {copied ? 'Скопировано' : 'Скопировать ссылку на комнату'}
+                  </button>
+                  <p className="hint">
+                    Когда второй участник откроет ту же ссылку, WebRTC соединит вас напрямую.
+                  </p>
+                </div>
               </>
             ) : (
               <>
@@ -741,161 +508,12 @@ export default function App() {
                 </button>
               </>
             )}
-
-            <button
-              type="button"
-              className="text-link muted advanced-toggle"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              <Settings2 size={16} /> {showAdvanced ? 'Скрыть' : 'Для продвинутых'}
-            </button>
-
-            {showAdvanced && (
-              <div className="advanced">
-                <p className="adv-label">Ваш ключ (оставьте как есть, если пользуетесь ссылкой)</p>
-                <div className="mono-box">{keyString || '…'}</div>
-                <div className="adv-row">
-                  <input
-                    value={importKeyInput}
-                    onChange={(e) => setImportKeyInput(e.target.value)}
-                    placeholder="Вставить чужой ключ"
-                  />
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const material = await resolveKeyMaterial(importKeyInput);
-                        const key = await importKey(material);
-                        setSecretKey(key);
-                        setKeyString(material);
-                        setImportKeyInput('');
-                      } catch (e) {
-                        setError(
-                          e instanceof InviteTruncatedError
-                            ? INVITE_TRUNCATED_MESSAGE
-                            : 'Ключ не подходит'
-                        );
-                      }
-                    }}
-                  >
-                    Импорт
-                  </button>
-                </div>
-                <p className="adv-label">Ручной ответ (если QR не сработал)</p>
-                <textarea
-                  value={remoteSignal}
-                  onChange={(e) => setRemoteSignal(e.target.value)}
-                  placeholder="Вставьте ответный код"
-                  rows={3}
-                />
-                <div className="adv-row">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const sdp = await extractSdpFromPaste(remoteSignal);
-                        await ensureP2P().acceptAnswer(sdp);
-                        setRemoteSignal('');
-                      } catch (e) {
-                        setError(
-                          e instanceof InviteTruncatedError
-                            ? INVITE_TRUNCATED_MESSAGE
-                            : e instanceof Error
-                              ? e.message
-                              : 'Ошибка'
-                        );
-                      }
-                    }}
-                  >
-                    Принять ответ
-                  </button>
-                  {localSignal && (
-                    <button type="button" onClick={() => navigator.clipboard.writeText(localSignal)}>
-                      Копировать мой сигнал
-                    </button>
-                  )}
-                </div>
-                <p className="hint">ID: {myId}</p>
-              </div>
+            {keyString && (
+              <p className="hint muted-sep">E2EE ключ комнаты активен · ID: {myId}</p>
             )}
           </section>
         )}
 
-        {screen === 'invite' && (
-          <section className="invite">
-            <button type="button" className="text-link" onClick={() => setScreen('home')}>
-              <ArrowLeft size={16} /> Назад
-            </button>
-            <h2>Почти готово</h2>
-            <p className="lead">{inviteHint}</p>
-            {qrUrl && <img src={qrUrl} alt="QR-код приглашения" className="qr" />}
-            <button type="button" className="mega-btn primary compact" onClick={copyInvite}>
-              {copied ? <Check size={28} /> : <Copy size={28} />}
-              {copied ? 'Скопировано' : 'Скопировать ссылку'}
-            </button>
-            <p className="mono-box small">{inviteUrl}</p>
-
-            {p2pStatus === 'waiting-answer' && (
-              <div className="answer-paste">
-                <p className="hint">Когда близкий покажет QR ответа — отсканируйте его камерой:</p>
-                <button
-                  type="button"
-                  className="mega-btn primary compact scan-btn"
-                  onClick={() => {
-                    setError('');
-                    setScannerOpen(true);
-                  }}
-                  disabled={connectingAnswer}
-                >
-                  {connectingAnswer ? (
-                    <>
-                      <span className="btn-spinner" aria-hidden />
-                      {inviteHint === 'Код прочитан, устанавливаем связь...'
-                        ? 'Код прочитан, устанавливаем связь...'
-                        : 'Подключаем…'}
-                    </>
-                  ) : (
-                    <>
-                      <Camera size={28} />
-                      Сканировать QR-код ответа
-                    </>
-                  )}
-                </button>
-                <p className="hint muted-sep">или вставьте ответную ссылку вручную</p>
-                <div className="adv-row">
-                  <input
-                    ref={answerInputRef}
-                    value={remoteSignal}
-                    onChange={(e) => setRemoteSignal(e.target.value)}
-                    placeholder="Вставьте ответную ссылку"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void applyAnswerFromText(remoteSignal).catch(() => undefined);
-                    }}
-                    disabled={connectingAnswer || !remoteSignal.trim()}
-                  >
-                    Подключить
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
-
-        <QrScannerModal
-          open={scannerOpen}
-          onClose={() => setScannerOpen(false)}
-          onScan={onQrScanned}
-          onManualEntry={() => {
-            setScannerOpen(false);
-            requestAnimationFrame(() => {
-              answerInputRef.current?.focus();
-              answerInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            });
-          }}
-        />
         {screen === 'chat' && (
           <section className="chat">
             <div className="chat-top">

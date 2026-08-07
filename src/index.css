@@ -168,6 +168,25 @@ textarea {
   flex-direction: column;
 }
 
+.room-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  text-align: center;
+}
+
+.room-card-icon {
+  color: var(--accent);
+}
+
+.room-id-label {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .home,
 .invite,
 .chat,

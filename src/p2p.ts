@@ -1,4 +1,7 @@
-/** Прямое P2P через WebRTC: DataChannel + MediaStream. */
+/** Прямое P2P через WebRTC: DataChannel + MediaStream + Supabase signaling. */
+
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import { getSupabase, hasSupabaseConfig } from './lib/supabase';
 
 export type P2PStatus =
   | 'idle'
@@ -26,14 +29,17 @@ export type P2PHandlers = {
   onCallState?: (state: CallState) => void;
   onIncomingCall?: () => void;
   onFileProgress?: (id: string, progress: number) => void;
-  /** Зашифрованный файл целиком — расшифровка на стороне UI. */
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
 };
 
+type SignalHello = { peerId: string };
+type SignalOffer = { peerId: string; sdp: RTCSessionDescriptionInit };
+type SignalAnswer = { peerId: string; sdp: RTCSessionDescriptionInit };
+type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
+
 /**
- * Запасной ICE (только STUN) — локально или если /api/turn недоступен.
- * В проде предпочитаем Twilio NTS из fetchIceServers().
- * iceTransportPolicy не задаём (по умолчанию 'all') — браузер сам выбирает STUN или TURN.
+ * Запасной ICE (только STUN). В проде — Twilio NTS из fetch('/api/turn').
+ * iceTransportPolicy по умолчанию 'all'.
  */
 const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -91,9 +97,6 @@ const FILE_CHUNK_BYTES = 128 * 1024;
 const MAX_BUFFERED_AMOUNT = 256 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
-/** Ждём complete или минимум 5с — иначе TURN-кандидаты не попадают в QR/ссылку (особенно mobile VPN). */
-const ICE_GATHER_TIMEOUT_MS = 5_000;
-/** Если ICE застрял в checking — VPN/провайдер часто режет UDP/TURN. */
 const ICE_CONNECT_TIMEOUT_MS = 15_000;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
@@ -164,48 +167,12 @@ async function waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
   });
 }
 
-/**
- * Ждём полный набор ICE (STUN + TURN) перед сериализацией offer/answer в QR.
- * Завершаем по iceGatheringState === 'complete' / end-of-candidates,
- * либо по таймауту ≥5с — не обрезаем сбор раньше на медленных mobile VPN.
- */
-function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = ICE_GATHER_TIMEOUT_MS): Promise<void> {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (reason: string) => {
-      if (settled) return;
-      settled = true;
-      pc.removeEventListener('icegatheringstatechange', onState);
-      pc.removeEventListener('icecandidate', onCandidate);
-      clearTimeout(timer);
-      console.log('[paranoic ICE] gathering finished:', reason, {
-        iceGatheringState: pc.iceGatheringState,
-        timeoutMs,
-      });
-      resolve();
-    };
-    const onState = () => {
-      if (pc.iceGatheringState === 'complete') finish('icegatheringstatechange:complete');
-    };
-    // null candidate = конец сбора (надёжнее на части мобильных браузеров)
-    const onCandidate = (event: RTCPeerConnectionIceEvent) => {
-      if (event.candidate === null) finish('icecandidate:end-of-candidates');
-    };
-    const timer = setTimeout(() => finish('timeout'), timeoutMs);
-    pc.addEventListener('icegatheringstatechange', onState);
-    pc.addEventListener('icecandidate', onCandidate);
-    // Гонка: complete мог наступить между проверкой и подпиской
-    if (pc.iceGatheringState === 'complete') finish('already-complete');
-  });
-}
-
-const SDP_FORMAT_ERROR = 'Неверный формат ответа (ошибка декомпрессии)';
+const SDP_FORMAT_ERROR = 'Неверный формат SDP от собеседника';
 
 /**
- * После fflate SDP может прийти как JSON-объект, JSON-строка объекта,
- * дважды сериализованная строка или «голый» SDP (v=0…). Нормализуем в RTCSessionDescriptionInit.
+ * SDP из Realtime broadcast обычно уже приходит как RTCSessionDescriptionInit,
+ * но на случай не-JS клиента или прокси-сериализации нормализуем сюда же
+ * (объект, JSON-строка объекта или «голый» SDP, начинающийся с v=).
  */
 export function parseSessionDescription(
   input: unknown,
@@ -236,7 +203,6 @@ export function parseSessionDescription(
 
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    // Двойная сериализация: JSON.parse вернул строку
     if (typeof parsed === 'string') {
       return parseSessionDescription(parsed, fallbackType);
     }
@@ -262,7 +228,10 @@ const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
 
 export class P2PConnection {
   private pc: RTCPeerConnection | null = null;
+  /** DataChannel для чата/файлов/звонков. */
   private channel: RTCDataChannel | null = null;
+  /** Supabase Realtime — signaling. */
+  private signal: RealtimeChannel | null = null;
   private handlers: P2PHandlers;
   private status: P2PStatus = 'idle';
   private callState: CallState = 'idle';
@@ -278,6 +247,12 @@ export class P2PConnection {
   private stalledChecks = 0;
   private iceRestarting = false;
   private iceCheckTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private peerId = '';
+  private remotePeerId: string | null = null;
+  private roomId: string | null = null;
+  private handshakeStarted = false;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
@@ -295,79 +270,63 @@ export class P2PConnection {
     return this.callState;
   }
 
+  get currentRoomId(): string | null {
+    return this.roomId;
+  }
+
   getLocalStream(): MediaStream | null {
     return this.localStream;
   }
 
-  /** Инициатор приглашения (не polite). */
-  async createOffer(): Promise<string> {
+  /**
+   * Вход в комнату: канал Supabase + hello → offer/answer + Trickle ICE.
+   * Twilio ICE подтягивается в createPeerConnection через /api/turn.
+   */
+  async joinRoom(roomId: string): Promise<void> {
+    if (!hasSupabaseConfig()) {
+      throw new Error(
+        'Supabase не настроен. Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY.'
+      );
+    }
+
     this.reset();
-    this.polite = false;
-    this.setStatus('creating-offer');
-
-    const pc = await this.createPeerConnection();
-    this.pc = pc;
-
-    const channel = pc.createDataChannel('paranoic', { ordered: true });
-    this.bindChannel(channel);
-
-    // Только DataChannel в инвайт-SDP — A/V добавляется при звонке (иначе URL не влезает в мессенджеры)
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIceGathering(pc);
-
+    this.roomId = roomId;
+    this.peerId = crypto.randomUUID();
+    this.remotePeerId = null;
+    this.handshakeStarted = false;
+    this.pendingCandidates = [];
     this.setStatus('waiting-answer');
-    // Полный оригинальный SDP (без minify) → дальше fflate в invite.ts
-    return JSON.stringify(pc.localDescription);
-  }
 
-  /** Принимающая сторона (polite). */
-  async acceptOffer(offerJson: string): Promise<string> {
-    this.reset();
-    this.polite = true;
-    this.setStatus('connecting');
+    const sb = getSupabase();
+    const signal = sb.channel(`room:${roomId}`, {
+      config: { broadcast: { self: false } },
+    });
 
-    const pc = await this.createPeerConnection();
-    this.pc = pc;
+    signal.on('broadcast', { event: 'hello' }, ({ payload }) => {
+      void this.onSignalHello(payload as SignalHello);
+    });
+    signal.on('broadcast', { event: 'offer' }, ({ payload }) => {
+      void this.onSignalOffer(payload as SignalOffer);
+    });
+    signal.on('broadcast', { event: 'answer' }, ({ payload }) => {
+      void this.onSignalAnswer(payload as SignalAnswer);
+    });
+    signal.on('broadcast', { event: 'ice-candidate' }, ({ payload }) => {
+      void this.onSignalIce(payload as SignalIce);
+    });
 
-    pc.ondatachannel = (event) => this.bindChannel(event.channel);
+    await new Promise<void>((resolve, reject) => {
+      signal.subscribe((status) => {
+        if (status === 'SUBSCRIBED') resolve();
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          reject(new Error('Не удалось подключиться к комнате (signaling)'));
+        }
+      });
+    });
 
-    try {
-      const offer = parseSessionDescription(offerJson, 'offer');
-      await pc.setRemoteDescription(offer);
-    } catch (e) {
-      this.setStatus('failed');
-      const err =
-        e instanceof Error && e.message === SDP_FORMAT_ERROR
-          ? e
-          : new Error(SDP_FORMAT_ERROR);
-      this.handlers.onError?.(err);
-      throw err;
-    }
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await waitForIceGathering(pc);
-
-    return JSON.stringify(pc.localDescription);
-  }
-
-  async acceptAnswer(answerJson: string): Promise<void> {
-    if (!this.pc) throw new Error('Сначала создайте приглашение');
-    this.setStatus('connecting');
-
-    try {
-      const answer = parseSessionDescription(answerJson, 'answer');
-      await this.pc.setRemoteDescription(answer);
-    } catch (e) {
-      this.setStatus('failed');
-      const err =
-        e instanceof Error && e.message === SDP_FORMAT_ERROR
-          ? e
-          : new Error(SDP_FORMAT_ERROR);
-      this.handlers.onError?.(err);
-      throw err;
-    }
+    this.signal = signal;
+    console.log('[paranoic signal] joined room', roomId, 'as', this.peerId);
+    await this.broadcast('hello', { peerId: this.peerId });
   }
 
   send(payload: string): void {
@@ -405,7 +364,6 @@ export class P2PConnection {
     this.setCallState('idle');
   }
 
-  /** Перезахват камеры/микрофона и replaceTrack без разрыва DataChannel. */
   async refreshLocalTracks(): Promise<MediaStream | null> {
     if (!this.pc || this.callState !== 'in-call') return this.localStream;
     if (this.refreshingMedia) return this.localStream;
@@ -424,7 +382,10 @@ export class P2PConnection {
     }
   }
 
-  async sendFile(file: File, encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>): Promise<void> {
+  async sendFile(
+    file: File,
+    encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>
+  ): Promise<void> {
     if (!this.isReady || !this.channel) throw new Error('Соединение ещё не готово');
     if (file.size > MAX_FILE_BYTES) {
       throw new Error('Файл слишком большой (макс. 16 МБ)');
@@ -459,12 +420,154 @@ export class P2PConnection {
   }
 
   close(): void {
+    this.detachSignal();
     this.stopMediaWatchdog();
     this.stopLocalMedia();
     this.clearRemoteStream();
     this.reset();
     this.setCallState('idle');
     this.setStatus('disconnected');
+  }
+
+  private async broadcast(event: string, payload: object): Promise<void> {
+    if (!this.signal) return;
+    try {
+      const result = await this.signal.send({
+        type: 'broadcast',
+        event,
+        payload,
+      });
+      if (result === 'timed out' || result === 'error') {
+        console.warn('[paranoic signal] broadcast failed', event, result);
+      }
+    } catch (e) {
+      console.warn('[paranoic signal] broadcast failed', event, e);
+    }
+  }
+
+  private detachSignal(): void {
+    const ch = this.signal;
+    this.signal = null;
+    if (ch) {
+      void ch.unsubscribe();
+      try {
+        getSupabase().removeChannel(ch);
+      } catch {
+        /* */
+      }
+    }
+  }
+
+  private async onSignalHello(payload: SignalHello): Promise<void> {
+    if (!payload?.peerId || payload.peerId === this.peerId) return;
+    // Ретранслируем hello только для нового пира — иначе A↔B зациклятся в вечном обмене hello.
+    const isNewPeer = this.remotePeerId !== payload.peerId;
+    this.remotePeerId = payload.peerId;
+    console.log('[paranoic signal] peer hello', this.remotePeerId);
+    if (isNewPeer) {
+      // Ответный hello — чтобы поздний пир увидел нас
+      await this.broadcast('hello', { peerId: this.peerId });
+    }
+
+    // Инициатор: больший peerId создаёт offer (избегаем glare)
+    if (this.peerId > payload.peerId) {
+      await this.startAsOfferer();
+    }
+  }
+
+  private async startAsOfferer(): Promise<void> {
+    if (this.handshakeStarted || this.pc) return;
+    this.handshakeStarted = true;
+    this.polite = false;
+    this.setStatus('creating-offer');
+
+    try {
+      const pc = await this.createPeerConnection();
+      this.pc = pc;
+      const dc = pc.createDataChannel('paranoic', { ordered: true });
+      this.bindChannel(dc);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      this.setStatus('connecting');
+      await this.broadcast('offer', {
+        peerId: this.peerId,
+        sdp: pc.localDescription!,
+      });
+    } catch (e) {
+      this.handshakeStarted = false;
+      this.setStatus('failed');
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось создать offer'));
+    }
+  }
+
+  private async onSignalOffer(payload: SignalOffer): Promise<void> {
+    if (!payload?.peerId || payload.peerId === this.peerId || !payload.sdp) return;
+    this.remotePeerId = payload.peerId;
+    this.polite = true;
+    this.handshakeStarted = true;
+    this.setStatus('connecting');
+
+    try {
+      if (!this.pc) {
+        const pc = await this.createPeerConnection();
+        this.pc = pc;
+        pc.ondatachannel = (event) => this.bindChannel(event.channel);
+      }
+
+      const offer = parseSessionDescription(payload.sdp, 'offer');
+      await this.pc.setRemoteDescription(offer);
+      await this.flushPendingCandidates();
+
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      await this.broadcast('answer', {
+        peerId: this.peerId,
+        sdp: this.pc.localDescription!,
+      });
+    } catch (e) {
+      this.setStatus('failed');
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось ответить на offer'));
+    }
+  }
+
+  private async onSignalAnswer(payload: SignalAnswer): Promise<void> {
+    if (!payload?.sdp || !this.pc) return;
+    if (payload.peerId === this.peerId) return;
+    try {
+      if (!this.pc.currentRemoteDescription) {
+        const answer = parseSessionDescription(payload.sdp, 'answer');
+        await this.pc.setRemoteDescription(answer);
+        await this.flushPendingCandidates();
+      }
+    } catch (e) {
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось принять answer'));
+    }
+  }
+
+  private async onSignalIce(payload: SignalIce): Promise<void> {
+    if (!payload?.candidate || payload.peerId === this.peerId) return;
+    if (!this.pc || !this.pc.remoteDescription) {
+      this.pendingCandidates.push(payload.candidate);
+      return;
+    }
+    try {
+      await this.pc.addIceCandidate(payload.candidate);
+    } catch (e) {
+      console.warn('[paranoic ICE] addIceCandidate failed', e);
+    }
+  }
+
+  private async flushPendingCandidates(): Promise<void> {
+    if (!this.pc) return;
+    const queued = this.pendingCandidates.splice(0);
+    for (const candidate of queued) {
+      try {
+        await this.pc.addIceCandidate(candidate);
+      } catch (e) {
+        console.warn('[paranoic ICE] flush candidate failed', e);
+      }
+    }
   }
 
   private async acquireLocalMedia(): Promise<MediaStream> {
@@ -513,7 +616,6 @@ export class P2PConnection {
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      await waitForIceGathering(this.pc);
       this.sendControl({ t: 'call-offer', sdp: this.pc.localDescription! });
     } finally {
       this.makingOffer = false;
@@ -544,7 +646,6 @@ export class P2PConnection {
       await this.pc.setRemoteDescription(packet.sdp);
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
-      await waitForIceGathering(this.pc);
       this.sendControl({ t: 'call-answer', sdp: this.pc.localDescription! });
       this.setCallState('in-call');
       this.startMediaWatchdog();
@@ -604,14 +705,21 @@ export class P2PConnection {
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
     const iceServers = await fetchIceServers();
-    // iceTransportPolicy по умолчанию 'all' — не форсируем relay, чтобы STUN и TURN были доступны.
-    // max-bundle + rtcp-mux — один транспорт через NAT/VPN на мобильных сетях.
     const pc = new RTCPeerConnection({
       iceServers,
       iceCandidatePoolSize: 8,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
     });
+
+    // Trickle ICE — кандидаты сразу в Supabase, без ожидания complete
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      void this.broadcast('ice-candidate', {
+        peerId: this.peerId,
+        candidate: event.candidate.toJSON(),
+      });
+    };
 
     pc.ontrack = (event) => {
       if (!this.remoteStream) {
@@ -717,7 +825,6 @@ export class P2PConnection {
         try {
           const offer = await this.pc.createOffer({ iceRestart: true });
           await this.pc.setLocalDescription(offer);
-          await waitForIceGathering(this.pc);
           this.sendControl({ t: 'call-offer', sdp: this.pc.localDescription! });
         } finally {
           this.makingOffer = false;
@@ -780,13 +887,12 @@ export class P2PConnection {
         this.stalledChecks = 0;
         await this.refreshLocalTracks();
         await this.requestPeerMediaRefresh();
-        // Мягко переподтянуть remote stream в UI
         if (this.remoteStream) {
           this.handlers.onRemoteStream?.(new MediaStream(this.remoteStream.getTracks()));
         }
       }
     } catch {
-      /* stats may fail mid-restart */
+      /* */
     }
   }
 
@@ -882,6 +988,7 @@ export class P2PConnection {
   }
 
   private reset(): void {
+    this.detachSignal();
     this.clearIceCheckTimeout();
     this.stopMediaWatchdog();
     this.incomingFiles.clear();
@@ -891,6 +998,9 @@ export class P2PConnection {
     this.refreshingMedia = false;
     this.lastRemoteVideoBytes = 0;
     this.stalledChecks = 0;
+    this.handshakeStarted = false;
+    this.pendingCandidates = [];
+    this.remotePeerId = null;
 
     if (this.channel) {
       this.channel.onopen = null;
@@ -906,6 +1016,7 @@ export class P2PConnection {
     }
 
     if (this.pc) {
+      this.pc.onicecandidate = null;
       this.pc.onconnectionstatechange = null;
       this.pc.oniceconnectionstatechange = null;
       this.pc.ondatachannel = null;
