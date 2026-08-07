@@ -31,32 +31,25 @@ export type P2PHandlers = {
 };
 
 /**
- * STUN для прямого ICE + публичные TURN для обхода симметричного NAT (4G ↔ Wi‑Fi).
- * Open Relay / ExpressTURN — резервный релей, когда hole-punching не проходит.
+ * STUN для прямого ICE + публичные TURN (Metered Open Relay) для симметричного NAT
+ * и межсетевых соединений (RU ↔ US и т.п.), когда hole-punching не проходит.
+ * iceTransportPolicy не задаём — браузер сам выбирает STUN или TURN.
  */
 const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
   {
-    urls: [
-      'stun:stun.l.google.com:19302',
-      'stun:stun1.l.google.com:19302',
-      'stun:stun2.l.google.com:19302',
-      'stun:stun3.l.google.com:19302',
-      'stun:stun4.l.google.com:19302',
-    ],
-  },
-  // Open Relay TURN: UDP — основной релей для мобильного NAT
-  {
-    urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'],
+    urls: 'turn:openrelay.metered.ca:80',
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
-  // Резерв: TCP / TLS — когда UDP режется оператором 4G
   {
-    urls: [
-      'turn:openrelay.metered.ca:80?transport=tcp',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-      'turns:openrelay.metered.ca:443',
-    ],
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
