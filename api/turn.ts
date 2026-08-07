@@ -35,25 +35,21 @@ async function createTurnToken(): Promise<Response> {
       return json({ error: 'Metered credentials not configured' }, 503);
     }
 
-    const url = `https://${domain}/api/v1/turn/credentials`;
-    console.log('Metered request URL:', url);
-    console.log('Metered auth: Bearer only (key length', apiKey.length, ')');
+    const url = `https://${domain}/api/v1/turn/credentials?secretKey=${encodeURIComponent(apiKey)}`;
+    const safeUrl = `https://${domain}/api/v1/turn/credentials?secretKey=<len:${apiKey.length}>`;
+    console.log('Metered request URL:', safeUrl);
+    console.log('Metered auth: secretKey query (key length', apiKey.length, ')');
 
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    // GET без Authorization/Content-Type — Metered ждёт secretKey только в query.
+    const res = await fetch(url, { method: 'GET' });
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      console.error('Metered Error: HTTP', res.status, text, 'request:', url);
+      console.error('Metered Error: HTTP', res.status, text, 'request:', safeUrl);
       return new Response(
         JSON.stringify({
           error: text || `Metered API error (${res.status})`,
-          requestUrl: url,
+          requestUrl: safeUrl,
           status: res.status,
         }),
         {
@@ -75,11 +71,11 @@ async function createTurnToken(): Promise<Response> {
         : null;
 
     if (!iceServers || iceServers.length === 0) {
-      console.error('Metered Error: empty iceServers', data, 'request:', url);
+      console.error('Metered Error: empty iceServers', data, 'request:', safeUrl);
       return new Response(
         JSON.stringify({
           error: 'Metered returned empty iceServers',
-          requestUrl: url,
+          requestUrl: safeUrl,
           body: data,
         }),
         {
