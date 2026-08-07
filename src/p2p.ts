@@ -47,12 +47,23 @@ type SignalAnswer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
 
 /**
- * Запасной ICE (только STUN). В проде — Metered TURN из fetch('/api/turn').
+ * Публичные STUN/TURN (Open Relay) — без платных API.
  * iceTransportPolicy по умолчанию 'all'.
  */
-const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
+const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
 
 function iceUrlList(server: RTCIceServer): string[] {
@@ -83,27 +94,6 @@ function logIceServers(source: string, servers: RTCIceServer[]): void {
     stun,
     turn,
   });
-}
-
-/** Metered TURN через /api/turn — без fallback. Join/offer запрещены до успеха. */
-async function fetchMeteredIceServers(): Promise<RTCIceServer[]> {
-  const res = await fetch('/api/turn');
-  if (!res.ok) {
-    let detail = `TURN API недоступен (${res.status})`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) detail = body.error;
-    } catch {
-      /* */
-    }
-    throw new Error(`${detail}. Проверьте Metered на сервере.`);
-  }
-  const data = (await res.json()) as { iceServers?: RTCIceServer[]; error?: string };
-  if (!Array.isArray(data.iceServers) || data.iceServers.length === 0) {
-    throw new Error(data.error || 'Metered не вернул ICE-серверы');
-  }
-  logIceServers('Metered /api/turn', data.iceServers);
-  return data.iceServers;
 }
 
 const FILE_CHUNK_BYTES = 128 * 1024;
@@ -307,7 +297,7 @@ export class P2PConnection {
   /**
    * Вход в комнату.
    * isHost (создал URL) ждёт `join` и шлёт offer.
-   * Гость (открыл ссылку) шлёт `join` после готовности Metered TURN.
+   * Гость (открыл ссылку) шлёт `join` после подписки на канал.
    */
   async joinRoom(roomId: string, options: { isHost: boolean }): Promise<void> {
     if (!hasSupabaseConfig()) {
@@ -323,12 +313,10 @@ export class P2PConnection {
     this.remotePeerId = null;
     this.handshakeStarted = false;
     this.pendingCandidates = [];
-    this.cachedIceServers = null;
+    this.cachedIceServers = PUBLIC_ICE_SERVERS;
+    logIceServers('public Open Relay', this.cachedIceServers);
     this.setStatus(options.isHost ? 'waiting-answer' : 'connecting');
     this.setSignalingStatus('Подключаемся к сокетам...');
-
-    // TURN обязателен до join/offer
-    this.cachedIceServers = await fetchMeteredIceServers();
 
     const sb = getSupabase();
     const signal = sb.channel(`room:${roomId}`, {
@@ -367,7 +355,7 @@ export class P2PConnection {
       this.setSignalingStatus('Ожидаем собеседника...');
       this.setStatus('waiting-answer');
     } else {
-      // Гость: join только после Metered + SUBSCRIBED
+      // Гость: join после SUBSCRIBED
       await this.sendJoin();
       this.startJoinRetry();
       this.setSignalingStatus('Ожидаем собеседника...');
@@ -376,7 +364,7 @@ export class P2PConnection {
 
   private async sendJoin(): Promise<void> {
     if (!this.cachedIceServers) {
-      console.warn('[paranoic signal] join blocked: no Metered ICE yet');
+      console.warn('[paranoic signal] join blocked: no ICE servers');
       return;
     }
     await this.broadcast('join', { type: 'join', peerId: this.peerId });
@@ -543,7 +531,7 @@ export class P2PConnection {
   private async startAsOfferer(): Promise<void> {
     if (this.handshakeStarted || this.pc) return;
     if (!this.cachedIceServers) {
-      this.handlers.onError?.(new Error('Offer заблокирован: нет Metered ICE'));
+      this.handlers.onError?.(new Error('Offer заблокирован: нет ICE-серверов'));
       return;
     }
     this.handshakeStarted = true;
@@ -586,7 +574,7 @@ export class P2PConnection {
 
     try {
       if (!this.cachedIceServers) {
-        this.cachedIceServers = await fetchMeteredIceServers();
+        this.cachedIceServers = PUBLIC_ICE_SERVERS;
       }
       if (!this.pc) {
         const pc = await this.createPeerConnection();
@@ -788,7 +776,7 @@ export class P2PConnection {
   }
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
-    const iceServers = this.cachedIceServers ?? (await fetchMeteredIceServers());
+    const iceServers = this.cachedIceServers ?? PUBLIC_ICE_SERVERS;
     this.cachedIceServers = iceServers;
     const pc = new RTCPeerConnection({
       iceServers,
@@ -1122,4 +1110,4 @@ export class P2PConnection {
   }
 }
 
-export { MAX_FILE_BYTES, FALLBACK_ICE_SERVERS as ICE_SERVERS };
+export { MAX_FILE_BYTES, PUBLIC_ICE_SERVERS as ICE_SERVERS };
