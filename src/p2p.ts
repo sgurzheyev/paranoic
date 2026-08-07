@@ -33,11 +33,42 @@ export type P2PHandlers = {
 /**
  * Запасной ICE (только STUN) — локально или если /api/turn недоступен.
  * В проде предпочитаем Twilio NTS из fetchIceServers().
+ * iceTransportPolicy не задаём (по умолчанию 'all') — браузер сам выбирает STUN или TURN.
  */
 const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
+
+function iceUrlList(server: RTCIceServer): string[] {
+  if (!server.urls) return [];
+  return Array.isArray(server.urls) ? server.urls : [server.urls];
+}
+
+function classifyIceServers(servers: RTCIceServer[]): { stun: string[]; turn: string[] } {
+  const stun: string[] = [];
+  const turn: string[] = [];
+  for (const server of servers) {
+    for (const url of iceUrlList(server)) {
+      const lower = url.toLowerCase();
+      if (lower.startsWith('turn:') || lower.startsWith('turns:')) turn.push(url);
+      else stun.push(url);
+    }
+  }
+  return { stun, turn };
+}
+
+function logIceServers(source: string, servers: RTCIceServer[]): void {
+  const { stun, turn } = classifyIceServers(servers);
+  console.log(`[paranoic ICE] ${source}`, {
+    iceTransportPolicy: 'all',
+    total: servers.length,
+    stunCount: stun.length,
+    turnCount: turn.length,
+    stun,
+    turn,
+  });
+}
 
 async function fetchIceServers(): Promise<RTCIceServer[]> {
   try {
@@ -45,11 +76,14 @@ async function fetchIceServers(): Promise<RTCIceServer[]> {
     if (!res.ok) throw new Error(`turn api ${res.status}`);
     const data = (await res.json()) as { iceServers?: RTCIceServer[] };
     if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      logIceServers('Twilio /api/turn', data.iceServers);
       return data.iceServers;
     }
-  } catch {
-    /* без ключей Twilio / локальный Vite — STUN-only */
+    console.warn('[paranoic ICE] /api/turn вернул пустой iceServers — fallback STUN');
+  } catch (err) {
+    console.warn('[paranoic ICE] /api/turn недоступен — fallback STUN', err);
   }
+  logIceServers('fallback STUN', FALLBACK_ICE_SERVERS);
   return FALLBACK_ICE_SERVERS;
 }
 
@@ -561,6 +595,7 @@ export class P2PConnection {
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
     const iceServers = await fetchIceServers();
+    // iceTransportPolicy по умолчанию 'all' — не форсируем relay, чтобы STUN и TURN были доступны.
     const pc = new RTCPeerConnection({
       iceServers,
       iceCandidatePoolSize: 8,
