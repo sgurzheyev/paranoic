@@ -159,173 +159,6 @@ export function parseSessionDescription(
   }
 }
 
-const DROP_ATTR_PREFIXES = [
-  'a=extmap:',
-  'a=extmap-allow-mixed',
-  'a=rtcp-rsize',
-  'a=ts-refclk',
-  'a=mediaclk',
-  'a=frame-marking',
-  'a=rid:',
-  'a=imageattr:',
-  'a=rid',
-];
-
-/** Предпочтительные кодеки: Opus (audio), VP8 затем H264 (video). */
-function pickPayloadTypes(rtpmaps: Map<string, string>, kind: 'audio' | 'video'): Set<string> {
-  const keep = new Set<string>();
-  if (kind === 'audio') {
-    for (const [pt, name] of rtpmaps) {
-      if (name.startsWith('opus/') || name.startsWith('OPUS/')) keep.add(pt);
-    }
-    if (keep.size === 0) {
-      for (const [pt, name] of rtpmaps) {
-        if (name.startsWith('PCMU/') || name.startsWith('PCMA/')) keep.add(pt);
-      }
-    }
-  } else {
-    for (const [pt, name] of rtpmaps) {
-      if (name.startsWith('VP8/')) keep.add(pt);
-    }
-    if (keep.size === 0) {
-      for (const [pt, name] of rtpmaps) {
-        if (name.startsWith('H264/')) {
-          keep.add(pt);
-          break;
-        }
-      }
-    }
-  }
-  // Если ничего не нашли — не трогаем (безопасность)
-  if (keep.size === 0) {
-    for (const pt of rtpmaps.keys()) keep.add(pt);
-  }
-  return keep;
-}
-
-function filterIceCandidates(lines: string[]): string[] {
-  const hosts: string[] = [];
-  const publicOnes: string[] = [];
-  const rest: string[] = [];
-
-  for (const line of lines) {
-    if (!line.startsWith('a=candidate:')) {
-      rest.push(line);
-      continue;
-    }
-    // a=candidate:foundation component protocol priority address port typ …
-    const parts = line.split(/\s+/);
-    const addr = parts[4] ?? '';
-    const typIdx = parts.findIndex((p) => p === 'typ');
-    const typ = typIdx >= 0 ? parts[typIdx + 1] : '';
-
-    if (typ === 'host') {
-      // mDNS и IPv6 host раздувают QR без пользы для межконтинентального TURN
-      if (addr.endsWith('.local') || addr.includes(':')) continue;
-      hosts.push(line);
-      continue;
-    }
-    if (typ === 'srflx' || typ === 'relay' || typ === 'prflx') {
-      publicOnes.push(line);
-      continue;
-    }
-  }
-
-  // Публичные + релейные; host — максимум 1, только если публичных нет
-  if (publicOnes.length > 0) {
-    return [...rest, ...publicOnes];
-  }
-  return [...rest, ...hosts.slice(0, 1)];
-}
-
-/**
- * Агрессивная минификация SDP для QR/инвайт-ссылок.
- * Убирает лишние кодеки, extmap и host-кандидаты, оставляя srflx/relay.
- */
-export function minifySDP(sdp: string): string {
-  if (!sdp.trim()) return sdp;
-
-  const rawLines = sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  const sections: string[][] = [];
-  let current: string[] = [];
-
-  for (const line of rawLines) {
-    if (line.startsWith('m=') && current.length > 0) {
-      sections.push(current);
-      current = [line];
-    } else {
-      current.push(line);
-    }
-  }
-  if (current.length) sections.push(current);
-
-  const out: string[] = [];
-
-  for (const section of sections) {
-    const mLine = section.find((l) => l.startsWith('m='));
-    let working = section.filter((line) => {
-      if (!line || line === '') return false;
-      return !DROP_ATTR_PREFIXES.some((p) => line.startsWith(p));
-    });
-
-    working = filterIceCandidates(working);
-
-    if (mLine && (mLine.startsWith('m=audio') || mLine.startsWith('m=video'))) {
-      const kind = mLine.startsWith('m=audio') ? 'audio' : 'video';
-      const rtpmaps = new Map<string, string>();
-      for (const line of working) {
-        const m = /^a=rtpmap:(\d+)\s+(\S+)/i.exec(line);
-        if (m) rtpmaps.set(m[1], m[2]);
-      }
-      const keepPts = pickPayloadTypes(rtpmaps, kind);
-
-      // Обновить m= строку: сохранить только выбранные PT
-      const mParts = mLine.split(' ');
-      if (mParts.length >= 4) {
-        const header = mParts.slice(0, 3);
-        const finalPts = [...keepPts].filter((pt) => mParts.includes(pt));
-        if (finalPts.length > 0) {
-          const newM = [...header, ...finalPts].join(' ');
-          working = working.map((l) => (l.startsWith('m=') ? newM : l));
-        }
-      }
-
-      working = working.filter((line) => {
-        const ptMatch = /^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/i.exec(line);
-        if (ptMatch) return keepPts.has(ptMatch[1]);
-        return true;
-      });
-    }
-
-    out.push(...working);
-  }
-
-  // Нормализованный SDP с CRLF — WebRTC обычно принимает и LF, но CRLF безопаснее
-  let result = out.join('\r\n');
-  if (!result.endsWith('\r\n')) result += '\r\n';
-
-  // Быстрая самопроверка: минификация не должна уничтожить session-level
-  if (!result.includes('v=0') || !result.includes('a=ice-ufrag:') || !result.includes('a=ice-pwd:')) {
-    return sdp.includes('\r\n') ? sdp : sdp.replace(/\n/g, '\r\n');
-  }
-
-  return result;
-}
-
-/** Сериализация localDescription для инвайта: minify перед fflate/QR. */
-export function serializeInviteDescription(
-  desc: RTCSessionDescription | RTCSessionDescriptionInit | null
-): string {
-  if (!desc?.type || !desc.sdp) {
-    throw new Error('Локальное описание ещё не готово');
-  }
-  const minified = minifySDP(desc.sdp);
-  const payload: RTCSessionDescriptionInit = { type: desc.type, sdp: minified };
-  // Гарантируем, что после minify парсер всё ещё принимает описание
-  parseSessionDescription(payload, desc.type);
-  return JSON.stringify(payload);
-}
-
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     echoCancellation: true,
@@ -395,7 +228,8 @@ export class P2PConnection {
     await waitForIceGathering(pc);
 
     this.setStatus('waiting-answer');
-    return serializeInviteDescription(pc.localDescription);
+    // Полный оригинальный SDP (без minify) → дальше fflate в invite.ts
+    return JSON.stringify(pc.localDescription);
   }
 
   /** Принимающая сторона (polite). */
@@ -426,7 +260,7 @@ export class P2PConnection {
     await pc.setLocalDescription(answer);
     await waitForIceGathering(pc);
 
-    return serializeInviteDescription(pc.localDescription);
+    return JSON.stringify(pc.localDescription);
   }
 
   async acceptAnswer(answerJson: string): Promise<void> {
