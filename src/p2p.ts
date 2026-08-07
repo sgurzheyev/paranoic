@@ -31,29 +31,27 @@ export type P2PHandlers = {
 };
 
 /**
- * STUN для прямого ICE + публичные TURN (Metered Open Relay) для симметричного NAT
- * и межсетевых соединений (RU ↔ US и т.п.), когда hole-punching не проходит.
- * iceTransportPolicy не задаём (по умолчанию 'all') — браузер сам выбирает STUN или TURN.
+ * Запасной ICE (только STUN) — локально или если /api/turn недоступен.
+ * В проде предпочитаем Twilio NTS из fetchIceServers().
  */
-const ICE_SERVERS: RTCIceServer[] = [
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
 ];
+
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  try {
+    const res = await fetch('/api/turn');
+    if (!res.ok) throw new Error(`turn api ${res.status}`);
+    const data = (await res.json()) as { iceServers?: RTCIceServer[] };
+    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      return data.iceServers;
+    }
+  } catch {
+    /* без ключей Twilio / локальный Vite — STUN-only */
+  }
+  return FALLBACK_ICE_SERVERS;
+}
 
 const FILE_CHUNK_BYTES = 128 * 1024;
 const MAX_BUFFERED_AMOUNT = 256 * 1024;
@@ -264,7 +262,7 @@ export class P2PConnection {
     this.polite = false;
     this.setStatus('creating-offer');
 
-    const pc = this.createPeerConnection();
+    const pc = await this.createPeerConnection();
     this.pc = pc;
 
     const channel = pc.createDataChannel('paranoic', { ordered: true });
@@ -286,7 +284,7 @@ export class P2PConnection {
     this.polite = true;
     this.setStatus('connecting');
 
-    const pc = this.createPeerConnection();
+    const pc = await this.createPeerConnection();
     this.pc = pc;
 
     pc.ondatachannel = (event) => this.bindChannel(event.channel);
@@ -561,9 +559,10 @@ export class P2PConnection {
     }
   }
 
-  private createPeerConnection(): RTCPeerConnection {
+  private async createPeerConnection(): Promise<RTCPeerConnection> {
+    const iceServers = await fetchIceServers();
     const pc = new RTCPeerConnection({
-      iceServers: ICE_SERVERS,
+      iceServers,
       iceCandidatePoolSize: 8,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
@@ -876,4 +875,4 @@ export class P2PConnection {
   }
 }
 
-export { MAX_FILE_BYTES, ICE_SERVERS };
+export { MAX_FILE_BYTES, FALLBACK_ICE_SERVERS as ICE_SERVERS };
