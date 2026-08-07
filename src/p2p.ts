@@ -21,8 +21,17 @@ export type MediaFileMeta = {
   size: number;
 };
 
+export type SignalingDebugStatus =
+  | 'Подключаемся к сокетам...'
+  | 'Ожидаем собеседника...'
+  | 'Собеседник найден, генерируем ключи...'
+  | 'Обмен маршрутами (ICE)...'
+  | 'Связь установлена!'
+  | '';
+
 export type P2PHandlers = {
   onStatus?: (status: P2PStatus) => void;
+  onSignalingStatus?: (status: SignalingDebugStatus) => void;
   onMessage?: (data: string) => void;
   onError?: (error: Error) => void;
   onRemoteStream?: (stream: MediaStream | null) => void;
@@ -32,7 +41,7 @@ export type P2PHandlers = {
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
 };
 
-type SignalHello = { peerId: string };
+type SignalJoin = { type: 'join'; peerId: string };
 type SignalOffer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalAnswer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
@@ -76,21 +85,18 @@ function logIceServers(source: string, servers: RTCIceServer[]): void {
   });
 }
 
-async function fetchIceServers(): Promise<RTCIceServer[]> {
-  try {
-    const res = await fetch('/api/turn');
-    if (!res.ok) throw new Error(`turn api ${res.status}`);
-    const data = (await res.json()) as { iceServers?: RTCIceServer[] };
-    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-      logIceServers('Twilio /api/turn', data.iceServers);
-      return data.iceServers;
-    }
-    console.warn('[paranoic ICE] /api/turn вернул пустой iceServers — fallback STUN');
-  } catch (err) {
-    console.warn('[paranoic ICE] /api/turn недоступен — fallback STUN', err);
+/** Только Twilio NTS — без fallback. Join/offer запрещены до успеха. */
+async function fetchTwilioIceServers(): Promise<RTCIceServer[]> {
+  const res = await fetch('/api/turn');
+  if (!res.ok) {
+    throw new Error(`TURN API недоступен (${res.status}). Проверьте Twilio на сервере.`);
   }
-  logIceServers('fallback STUN', FALLBACK_ICE_SERVERS);
-  return FALLBACK_ICE_SERVERS;
+  const data = (await res.json()) as { iceServers?: RTCIceServer[]; error?: string };
+  if (!Array.isArray(data.iceServers) || data.iceServers.length === 0) {
+    throw new Error(data.error || 'Twilio не вернул ICE-серверы');
+  }
+  logIceServers('Twilio /api/turn', data.iceServers);
+  return data.iceServers;
 }
 
 const FILE_CHUNK_BYTES = 128 * 1024;
@@ -251,8 +257,12 @@ export class P2PConnection {
   private peerId = '';
   private remotePeerId: string | null = null;
   private roomId: string | null = null;
+  private isHost = false;
   private handshakeStarted = false;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private cachedIceServers: RTCIceServer[] | null = null;
+  private joinRetryTimer: ReturnType<typeof setInterval> | null = null;
+  private signalingStatus: SignalingDebugStatus = '';
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
@@ -260,6 +270,10 @@ export class P2PConnection {
 
   get currentStatus(): P2PStatus {
     return this.status;
+  }
+
+  get currentSignalingStatus(): SignalingDebugStatus {
+    return this.signalingStatus;
   }
 
   get isReady(): boolean {
@@ -278,11 +292,17 @@ export class P2PConnection {
     return this.localStream;
   }
 
+  private setSignalingStatus(status: SignalingDebugStatus): void {
+    this.signalingStatus = status;
+    this.handlers.onSignalingStatus?.(status);
+  }
+
   /**
-   * Вход в комнату: канал Supabase + hello → offer/answer + Trickle ICE.
-   * Twilio ICE подтягивается в createPeerConnection через /api/turn.
+   * Вход в комнату.
+   * isHost (создал URL) ждёт `join` и шлёт offer.
+   * Гость (открыл ссылку) шлёт `join` после готовности Twilio TURN.
    */
-  async joinRoom(roomId: string): Promise<void> {
+  async joinRoom(roomId: string, options: { isHost: boolean }): Promise<void> {
     if (!hasSupabaseConfig()) {
       throw new Error(
         'Supabase не настроен. Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY.'
@@ -291,19 +311,25 @@ export class P2PConnection {
 
     this.reset();
     this.roomId = roomId;
+    this.isHost = options.isHost;
     this.peerId = crypto.randomUUID();
     this.remotePeerId = null;
     this.handshakeStarted = false;
     this.pendingCandidates = [];
-    this.setStatus('waiting-answer');
+    this.cachedIceServers = null;
+    this.setStatus(options.isHost ? 'waiting-answer' : 'connecting');
+    this.setSignalingStatus('Подключаемся к сокетам...');
+
+    // TURN обязателен до join/offer
+    this.cachedIceServers = await fetchTwilioIceServers();
 
     const sb = getSupabase();
     const signal = sb.channel(`room:${roomId}`, {
       config: { broadcast: { self: false } },
     });
 
-    signal.on('broadcast', { event: 'hello' }, ({ payload }) => {
-      void this.onSignalHello(payload as SignalHello);
+    signal.on('broadcast', { event: 'join' }, ({ payload }) => {
+      void this.onSignalJoin(payload as SignalJoin);
     });
     signal.on('broadcast', { event: 'offer' }, ({ payload }) => {
       void this.onSignalOffer(payload as SignalOffer);
@@ -325,8 +351,46 @@ export class P2PConnection {
     });
 
     this.signal = signal;
-    console.log('[paranoic signal] joined room', roomId, 'as', this.peerId);
-    await this.broadcast('hello', { peerId: this.peerId });
+    console.log('[paranoic signal] joined room', roomId, {
+      peerId: this.peerId,
+      isHost: this.isHost,
+    });
+
+    if (this.isHost) {
+      this.setSignalingStatus('Ожидаем собеседника...');
+      this.setStatus('waiting-answer');
+    } else {
+      // Гость: join только после Twilio + SUBSCRIBED
+      await this.sendJoin();
+      this.startJoinRetry();
+      this.setSignalingStatus('Ожидаем собеседника...');
+    }
+  }
+
+  private async sendJoin(): Promise<void> {
+    if (!this.cachedIceServers) {
+      console.warn('[paranoic signal] join blocked: no Twilio ICE yet');
+      return;
+    }
+    await this.broadcast('join', { type: 'join', peerId: this.peerId });
+  }
+
+  private startJoinRetry(): void {
+    this.clearJoinRetry();
+    this.joinRetryTimer = setInterval(() => {
+      if (this.handshakeStarted || this.pc || this.status === 'connected') {
+        this.clearJoinRetry();
+        return;
+      }
+      void this.sendJoin();
+    }, 2500);
+  }
+
+  private clearJoinRetry(): void {
+    if (this.joinRetryTimer) {
+      clearInterval(this.joinRetryTimer);
+      this.joinRetryTimer = null;
+    }
   }
 
   send(payload: string): void {
@@ -458,28 +522,27 @@ export class P2PConnection {
     }
   }
 
-  private async onSignalHello(payload: SignalHello): Promise<void> {
+  private async onSignalJoin(payload: SignalJoin): Promise<void> {
     if (!payload?.peerId || payload.peerId === this.peerId) return;
-    // Ретранслируем hello только для нового пира — иначе A↔B зациклятся в вечном обмене hello.
-    const isNewPeer = this.remotePeerId !== payload.peerId;
-    this.remotePeerId = payload.peerId;
-    console.log('[paranoic signal] peer hello', this.remotePeerId);
-    if (isNewPeer) {
-      // Ответный hello — чтобы поздний пир увидел нас
-      await this.broadcast('hello', { peerId: this.peerId });
-    }
+    // Только хост отвечает на join оффером — исключаем glare.
+    if (!this.isHost) return;
 
-    // Инициатор: больший peerId создаёт offer (избегаем glare)
-    if (this.peerId > payload.peerId) {
-      await this.startAsOfferer();
-    }
+    this.remotePeerId = payload.peerId;
+    console.log('[paranoic signal] join from remote', this.remotePeerId);
+    this.setSignalingStatus('Собеседник найден, генерируем ключи...');
+    await this.startAsOfferer();
   }
 
   private async startAsOfferer(): Promise<void> {
     if (this.handshakeStarted || this.pc) return;
+    if (!this.cachedIceServers) {
+      this.handlers.onError?.(new Error('Offer заблокирован: нет Twilio ICE'));
+      return;
+    }
     this.handshakeStarted = true;
     this.polite = false;
     this.setStatus('creating-offer');
+    this.setSignalingStatus('Собеседник найден, генерируем ключи...');
 
     try {
       const pc = await this.createPeerConnection();
@@ -490,6 +553,7 @@ export class P2PConnection {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       this.setStatus('connecting');
+      this.setSignalingStatus('Обмен маршрутами (ICE)...');
       await this.broadcast('offer', {
         peerId: this.peerId,
         sdp: pc.localDescription!,
@@ -503,12 +567,20 @@ export class P2PConnection {
 
   private async onSignalOffer(payload: SignalOffer): Promise<void> {
     if (!payload?.peerId || payload.peerId === this.peerId || !payload.sdp) return;
+    // Хост не принимает чужой offer (он сам инициатор).
+    if (this.isHost) return;
+
+    this.clearJoinRetry();
     this.remotePeerId = payload.peerId;
     this.polite = true;
     this.handshakeStarted = true;
     this.setStatus('connecting');
+    this.setSignalingStatus('Собеседник найден, генерируем ключи...');
 
     try {
+      if (!this.cachedIceServers) {
+        this.cachedIceServers = await fetchTwilioIceServers();
+      }
       if (!this.pc) {
         const pc = await this.createPeerConnection();
         this.pc = pc;
@@ -521,6 +593,7 @@ export class P2PConnection {
 
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
+      this.setSignalingStatus('Обмен маршрутами (ICE)...');
       await this.broadcast('answer', {
         peerId: this.peerId,
         sdp: this.pc.localDescription!,
@@ -539,6 +612,7 @@ export class P2PConnection {
         const answer = parseSessionDescription(payload.sdp, 'answer');
         await this.pc.setRemoteDescription(answer);
         await this.flushPendingCandidates();
+        this.setSignalingStatus('Обмен маршрутами (ICE)...');
       }
     } catch (e) {
       this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось принять answer'));
@@ -547,6 +621,9 @@ export class P2PConnection {
 
   private async onSignalIce(payload: SignalIce): Promise<void> {
     if (!payload?.candidate || payload.peerId === this.peerId) return;
+    if (this.status === 'connecting' || this.status === 'creating-offer') {
+      this.setSignalingStatus('Обмен маршрутами (ICE)...');
+    }
     if (!this.pc || !this.pc.remoteDescription) {
       this.pendingCandidates.push(payload.candidate);
       return;
@@ -704,7 +781,8 @@ export class P2PConnection {
   }
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
-    const iceServers = await fetchIceServers();
+    const iceServers = this.cachedIceServers ?? (await fetchTwilioIceServers());
+    this.cachedIceServers = iceServers;
     const pc = new RTCPeerConnection({
       iceServers,
       iceCandidatePoolSize: 8,
@@ -910,7 +988,9 @@ export class P2PConnection {
 
     channel.onopen = () => {
       this.clearIceCheckTimeout();
+      this.clearJoinRetry();
       this.setStatus('connected');
+      this.setSignalingStatus('Связь установлена!');
     };
 
     channel.onclose = () => {
@@ -989,6 +1069,7 @@ export class P2PConnection {
 
   private reset(): void {
     this.detachSignal();
+    this.clearJoinRetry();
     this.clearIceCheckTimeout();
     this.stopMediaWatchdog();
     this.incomingFiles.clear();
@@ -1001,6 +1082,9 @@ export class P2PConnection {
     this.handshakeStarted = false;
     this.pendingCandidates = [];
     this.remotePeerId = null;
+    this.cachedIceServers = null;
+    this.isHost = false;
+    this.setSignalingStatus('');
 
     if (this.channel) {
       this.channel.onopen = null;

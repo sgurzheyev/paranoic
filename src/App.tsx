@@ -24,8 +24,8 @@ import {
   encryptBytes,
   decryptBytes,
 } from './crypto';
-import { P2PConnection, type CallState, type P2PStatus } from './p2p';
-import { buildRoomShareUrl, getOrCreateRoomId, getRoomIdFromUrl } from './room';
+import { P2PConnection, type CallState, type P2PStatus, type SignalingDebugStatus } from './p2p';
+import { buildRoomShareUrl, resolveRoom, getRoomIdFromUrl } from './room';
 import { hasSupabaseConfig } from './lib/supabase';
 import {
   appendStoredMessage,
@@ -82,6 +82,7 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [peerLabel, setPeerLabel] = useState('Близкий');
   const [joining, setJoining] = useState(false);
+  const [signalingStatus, setSignalingStatus] = useState<SignalingDebugStatus>('');
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -185,6 +186,7 @@ export default function App() {
           setP2pStatus(status);
           if (status === 'connected') setError('');
         },
+        onSignalingStatus: (status) => setSignalingStatus(status),
         onCallState: (state) => {
           setCallState(state);
           if (state === 'in-call' || state === 'calling') setScreen('call');
@@ -269,7 +271,7 @@ export default function App() {
         setMyId(id);
         myIdRef.current = id;
 
-        const room = getOrCreateRoomId();
+        const { roomId: room, isHost } = resolveRoom();
         if (cancelled) return;
         setRoomId(room);
         setRoomUrl(buildRoomShareUrl(room));
@@ -282,11 +284,12 @@ export default function App() {
         setKeyString(exported);
 
         const p2p = ensureP2P();
-        await p2p.joinRoom(room);
+        await p2p.joinRoom(room, { isHost });
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Не удалось войти в комнату');
           setP2pStatus('failed');
+          setSignalingStatus('');
         }
       } finally {
         if (!cancelled) setJoining(false);
@@ -297,6 +300,7 @@ export default function App() {
       cancelled = true;
       p2pRef.current?.close();
       p2pRef.current = null;
+      setSignalingStatus('');
     };
   }, [appMode, ensureP2P]);
 
@@ -435,7 +439,12 @@ export default function App() {
         </div>
         <div className={`status-pill ${connected ? 'ok' : ''}`}>
           <span className="status-dot" />
-          {FRIENDLY_STATUS[p2pStatus]}
+          <span className="status-pill-text">
+            <span>{FRIENDLY_STATUS[p2pStatus]}</span>
+            {signalingStatus && !connected && (
+              <span className="signaling-debug">{signalingStatus}</span>
+            )}
+          </span>
         </div>
       </header>
 
@@ -458,8 +467,8 @@ export default function App() {
             {!connected ? (
               <>
                 <p className="lead">
-                  {joining
-                    ? 'Входим в комнату и ждём близкого…'
+                  {joining || signalingStatus
+                    ? signalingStatus || 'Входим в комнату и ждём близкого…'
                     : 'Отправьте ссылку на комнату близкому — соединение установится само.'}
                 </p>
                 <div className="room-card">

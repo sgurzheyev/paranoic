@@ -107,7 +107,22 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 0.82rem;
   color: var(--muted);
-  white-space: nowrap;
+  max-width: min(280px, 55vw);
+}
+
+.status-pill-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.signaling-debug {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  font-weight: 500;
 }
 
 .status-pill.ok {
