@@ -33,7 +33,7 @@ export type P2PHandlers = {
 /**
  * STUN для прямого ICE + публичные TURN (Metered Open Relay) для симметричного NAT
  * и межсетевых соединений (RU ↔ US и т.п.), когда hole-punching не проходит.
- * iceTransportPolicy не задаём — браузер сам выбирает STUN или TURN.
+ * iceTransportPolicy: 'relay' — весь трафик через TURN (обход VPN, блокирующих UDP).
  */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -559,6 +559,8 @@ export class P2PConnection {
   private createPeerConnection(): RTCPeerConnection {
     const pc = new RTCPeerConnection({
       iceServers: ICE_SERVERS,
+      // VPN часто режет UDP/STUN — только TURN (TCP 443), как обычный веб-трафик.
+      iceTransportPolicy: 'relay',
       iceCandidatePoolSize: 8,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
