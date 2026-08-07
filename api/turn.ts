@@ -27,20 +27,29 @@ async function createTurnToken(): Promise<Response> {
     const domain = process.env.METERED_DOMAIN?.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const apiKey = process.env.METERED_API_KEY;
 
+    console.log('Using Metered Domain:', process.env.METERED_DOMAIN);
+    console.log('API Key length:', process.env.METERED_API_KEY ? process.env.METERED_API_KEY.length : 0);
+
     if (!domain || !apiKey) {
       console.error('Metered Error: missing METERED_DOMAIN or METERED_API_KEY');
       return json({ error: 'Metered credentials not configured' }, 503);
     }
 
     const url = `https://${domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`;
+    // Для логов/клиента — URL без секрета, но с длиной ключа
+    const safeUrl = `https://${domain}/api/v1/turn/credentials?apiKey=<len:${apiKey.length}>`;
+    console.log('Metered request URL:', safeUrl);
+
     const res = await fetch(url);
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      console.error('Metered Error: HTTP', res.status, text);
+      console.error('Metered Error: HTTP', res.status, text, 'request:', safeUrl);
       return new Response(
         JSON.stringify({
           error: text || `Metered API error (${res.status})`,
+          requestUrl: safeUrl,
+          status: res.status,
         }),
         {
           status: 500,
@@ -61,11 +70,18 @@ async function createTurnToken(): Promise<Response> {
         : null;
 
     if (!iceServers || iceServers.length === 0) {
-      console.error('Metered Error: empty iceServers', data);
-      return new Response(JSON.stringify({ error: 'Metered returned empty iceServers' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json', ...CORS },
-      });
+      console.error('Metered Error: empty iceServers', data, 'request:', safeUrl);
+      return new Response(
+        JSON.stringify({
+          error: 'Metered returned empty iceServers',
+          requestUrl: safeUrl,
+          body: data,
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...CORS },
+        }
+      );
     }
 
     return json({ iceServers });
