@@ -1,18 +1,9 @@
 /// <reference types="node" />
-import twilio from 'twilio';
 
 /**
- * Vercel Function: Twilio Network Traversal → ephemeral ICE credentials.
- * Env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
- *
- * Web Standard method exports (GET/POST) — корректный формат /api для Vite на Vercel.
+ * Vercel Function: Metered.ca TURN credentials → ICE servers.
+ * Env: METERED_DOMAIN (e.g. yourapp.metered.live), METERED_API_KEY
  */
-
-type IceServer = {
-  urls: string;
-  username?: string;
-  credential?: string;
-};
 
 const CORS: HeadersInit = {
   'Access-Control-Allow-Origin': '*',
@@ -33,31 +24,45 @@ function json(body: unknown, status = 200): Response {
 
 async function createTurnToken(): Promise<Response> {
   try {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const domain = process.env.METERED_DOMAIN?.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const apiKey = process.env.METERED_API_KEY;
 
-    if (!accountSid || !authToken) {
-      console.error('Twilio Error: missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN');
-      return json({ error: 'Twilio credentials not configured' }, 503);
+    if (!domain || !apiKey) {
+      console.error('Metered Error: missing METERED_DOMAIN or METERED_API_KEY');
+      return json({ error: 'Metered credentials not configured' }, 503);
     }
 
-    const client = twilio(accountSid, authToken);
-    const token = await client.tokens.create();
+    const url = `https://${domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
 
-    const iceServers: IceServer[] = (token.iceServers ?? [])
-      .map((server) => {
-        const urls = server.urls ?? server.url;
-        if (!urls) return null;
-        const entry: IceServer = { urls };
-        if (server.username) entry.username = server.username;
-        if (server.credential) entry.credential = server.credential;
-        return entry;
-      })
-      .filter((s): s is IceServer => s !== null);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error('Metered Error: HTTP', res.status, text);
+      return new Response(
+        JSON.stringify({
+          error: text || `Metered API error (${res.status})`,
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...CORS },
+        }
+      );
+    }
 
-    if (iceServers.length === 0) {
-      console.error('Twilio Error: tokens.create returned empty iceServers', token);
-      return new Response(JSON.stringify({ error: 'Twilio returned empty iceServers' }), {
+    const data: unknown = await res.json();
+
+    // Metered отдаёт массив ICE-серверов; оборачиваем для клиента, если нужно.
+    const iceServers = Array.isArray(data)
+      ? data
+      : data &&
+          typeof data === 'object' &&
+          Array.isArray((data as { iceServers?: unknown }).iceServers)
+        ? (data as { iceServers: unknown[] }).iceServers
+        : null;
+
+    if (!iceServers || iceServers.length === 0) {
+      console.error('Metered Error: empty iceServers', data);
+      return new Response(JSON.stringify({ error: 'Metered returned empty iceServers' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json', ...CORS },
       });
@@ -65,7 +70,7 @@ async function createTurnToken(): Promise<Response> {
 
     return json({ iceServers });
   } catch (error) {
-    console.error('Twilio Error:', error);
+    console.error('Metered Error:', error);
     const message =
       error instanceof Error ? error.message || 'Unknown error' : 'Unknown error';
     return new Response(JSON.stringify({ error: message }), {
