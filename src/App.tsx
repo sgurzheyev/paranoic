@@ -16,6 +16,8 @@ import {
   Camera,
 } from 'lucide-react';
 import QrScannerModal from './QrScannerModal';
+import ModeSelector, { type AppModeChoice } from './ModeSelector';
+import GlobeLobby from './GlobeLobby';
 import {
   generateSecretKey,
   exportKey,
@@ -41,6 +43,7 @@ import {
   type SignalMessage,
 } from './invite';
 
+type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'invite' | 'chat' | 'call';
 
 type ChatMessage = {
@@ -70,6 +73,7 @@ function nowTime() {
 }
 
 export default function App() {
+  const [appMode, setAppMode] = useState<AppMode>('select');
   const [myId, setMyId] = useState('');
   const [myName] = useState('Я');
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
@@ -285,10 +289,12 @@ export default function App() {
       try {
         const invite = await parseInviteFromLocation();
         if (!cancelled && invite) {
+          setAppMode('paranoic');
           await handleIncomingInvite(invite);
         }
       } catch (e) {
         if (cancelled) return;
+        setAppMode('paranoic');
         if (e instanceof InviteTruncatedError) {
           setError(INVITE_TRUNCATED_MESSAGE);
         } else {
@@ -503,10 +509,34 @@ export default function App() {
 
   const connected = p2pStatus === 'connected';
 
+  if (appMode === 'select') {
+    return <ModeSelector onSelect={(mode) => setAppMode(mode)} />;
+  }
+
+  if (appMode === 'family') {
+    return (
+      <GlobeLobby
+        onBack={() => setAppMode('select')}
+        onCreateConnection={() => {
+          setAppMode('paranoic');
+          setScreen('home');
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="К выбору режима"
+            onClick={() => setAppMode('select')}
+          >
+            <ArrowLeft size={20} />
+          </button>
           <Shield className="brand-icon" strokeWidth={2.2} />
           <div>
             <h1>Paranoic</h1>

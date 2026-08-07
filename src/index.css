@@ -1,3 +1,4 @@
+@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&display=swap');
 
 :root {
@@ -68,6 +69,12 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.brand .icon-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
 }
 
 .brand-icon {
