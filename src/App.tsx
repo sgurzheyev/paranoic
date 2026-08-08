@@ -68,6 +68,11 @@ import {
   removeOutboxMany,
 } from './outbox';
 import {
+  syncPendingDeliveries,
+  uploadPendingMedia,
+  uploadPendingText,
+} from './storeForward';
+import {
   buildMagicLink,
   clearMagicParamFromUrl,
   getMagicTargetFromUrl,
@@ -179,6 +184,8 @@ export default function App() {
   const screenRef = useRef<Screen>(screen);
   const pendingReadAckRef = useRef<Set<string>>(new Set());
   const flushOutboxRef = useRef<() => Promise<void>>(async () => undefined);
+  const syncPendingRef = useRef<() => Promise<void>>(async () => undefined);
+  const syncingPendingLockRef = useRef(false);
   const ensureP2PRef = useRef<() => P2PConnection>(() => {
     throw new Error('P2P not ready');
   });
@@ -409,13 +416,89 @@ export default function App() {
 
   flushOutboxRef.current = flushOutbox;
 
+  /** Store-and-Forward: забрать pending_delivery, расшифровать, удалить с сервера. */
+  const syncStoreForward = useCallback(async () => {
+    if (!hasSupabaseConfig() || syncingPendingLockRef.current) return;
+    const me = identityRef.current.id;
+    if (!me) return;
+    syncingPendingLockRef.current = true;
+    try {
+      await syncPendingDeliveries(me, {
+        onText: async (msg) => {
+          const existing = await loadChatHistory(msg.conversationId);
+          if (existing.some((m) => m.id === msg.id)) return;
+
+          const row = {
+            id: msg.id,
+            sender: msg.senderName,
+            text: msg.text,
+            time: new Date(msg.createdAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            mine: false,
+            kind: 'text' as const,
+            createdAt: msg.createdAt,
+          };
+          await appendStoredMessage(msg.conversationId, row);
+          if (conversationIdRef.current === msg.conversationId) {
+            await addMessage(row, false);
+          }
+        },
+        onMedia: async (msg) => {
+          const existing = await loadChatHistory(msg.conversationId);
+          if (existing.some((m) => m.id === msg.id)) return;
+
+          const mediaKey = mediaStorageKey(msg.id);
+          await saveMediaBlob(mediaKey, msg.blob);
+          const mediaUrl = URL.createObjectURL(msg.blob);
+          mediaUrlsRef.current.add(mediaUrl);
+          const row = {
+            id: msg.id,
+            sender: msg.senderName,
+            time: new Date(msg.createdAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            mine: false,
+            kind: 'media' as const,
+            mediaMime: msg.mime,
+            mediaName: msg.name,
+            mediaSize: msg.size,
+            mediaKey,
+            createdAt: msg.createdAt,
+          };
+          await appendStoredMessage(msg.conversationId, row);
+          if (conversationIdRef.current === msg.conversationId) {
+            await addMessage({ ...row, mediaUrl }, false);
+          }
+        },
+      });
+    } catch (e) {
+      console.warn('[paranoic SAF] sync', e);
+    } finally {
+      syncingPendingLockRef.current = false;
+    }
+  }, [addMessage]);
+
+  syncPendingRef.current = syncStoreForward;
+
   useEffect(() => {
     const onOnline = () => {
       void flushOutboxRef.current();
+      void syncPendingRef.current();
     };
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
   }, []);
+
+  /** При входе в Paranoic — сразу забираем отложенную почту. */
+  useEffect(() => {
+    if (appMode !== 'paranoic') return;
+    void syncPendingRef.current();
+    const timer = window.setInterval(() => void syncPendingRef.current(), 45_000);
+    return () => window.clearInterval(timer);
+  }, [appMode, identity.id, sessionEpoch]);
 
   /** Когда открыт чат — шлём read-ack по накопленным входящим. */
   useEffect(() => {
@@ -585,6 +668,7 @@ export default function App() {
               setScreen('chat');
             }
             void flushOutboxRef.current();
+            void syncPendingRef.current();
             if (pendingStartCallRef.current) {
               pendingStartCallRef.current = false;
               void (async () => {
@@ -1082,6 +1166,15 @@ export default function App() {
     try {
       if (p2pRef.current?.isReady) {
         p2pRef.current.send(packet);
+      } else if (hasSupabaseConfig()) {
+        await uploadPendingText({
+          id,
+          fromUserId: identityRef.current.id,
+          toUserId: peer,
+          senderName: identityRef.current.name,
+          plaintext: text,
+        });
+        await patchDeliveryStatus([id], 'delivered');
       } else {
         await enqueueOutbox({
           id,
@@ -1093,22 +1186,54 @@ export default function App() {
         });
       }
     } catch {
-      await enqueueOutbox({
-        id,
-        conversationId: conv,
-        peerUserId: peer,
-        createdAt: Date.now(),
-        text,
-        packet,
-      });
+      try {
+        if (hasSupabaseConfig()) {
+          await uploadPendingText({
+            id,
+            fromUserId: identityRef.current.id,
+            toUserId: peer,
+            senderName: identityRef.current.name,
+            plaintext: text,
+          });
+          await patchDeliveryStatus([id], 'delivered');
+        } else {
+          await enqueueOutbox({
+            id,
+            conversationId: conv,
+            peerUserId: peer,
+            createdAt: Date.now(),
+            text,
+            packet,
+          });
+        }
+      } catch (e) {
+        await enqueueOutbox({
+          id,
+          conversationId: conv,
+          peerUserId: peer,
+          createdAt: Date.now(),
+          text,
+          packet,
+        });
+        setError(e instanceof Error ? e.message : 'Не удалось отправить офлайн');
+      }
     }
   };
 
   const sendMedia = async (file: File, reuseId?: string) => {
-    if (!secretKey || !p2pRef.current?.isReady) {
+    if (!secretKey) return;
+    const peer = peerIdRef.current;
+    if (!peer) {
+      setError('Сначала выберите собеседника');
+      return;
+    }
+
+    const live = Boolean(p2pRef.current?.isReady);
+    if (!live && !hasSupabaseConfig()) {
       setError('Нет соединения — повторите, когда будете на связи');
       return;
     }
+
     setError('');
     const transferId =
       reuseId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1137,11 +1262,32 @@ export default function App() {
 
     const mediaKey = mediaStorageKey(transferId);
     try {
-      await p2pRef.current.sendFile(
-        file,
-        (data) => encryptBytes(data, secretKey),
-        { transferId }
-      );
+      if (live && p2pRef.current) {
+        await p2pRef.current.sendFile(
+          file,
+          (data) => encryptBytes(data, secretKey),
+          { transferId }
+        );
+      } else {
+        await uploadPendingMedia({
+          id: transferId,
+          fromUserId: identityRef.current.id,
+          toUserId: peer,
+          senderName: identityRef.current.name,
+          file,
+          onProgress: (ratio) => {
+            setUploadProgress(ratio < 1 ? ratio : null);
+            setTransferProgressMap((p) => ({ ...p, [transferId]: ratio }));
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === transferId
+                  ? { ...m, transferProgress: ratio, transferFailed: false }
+                  : m
+              )
+            );
+          },
+        });
+      }
 
       const mediaUrl = URL.createObjectURL(file);
       mediaUrlsRef.current.add(mediaUrl);
@@ -1177,8 +1323,55 @@ export default function App() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Файл не отправился';
-      const lost = msg === 'Связь потеряна' || !p2pRef.current?.isReady;
-      if (lost) {
+      const lost = msg === 'Связь потеряна' || (!p2pRef.current?.isReady && live);
+      if (lost && live) {
+        // P2P оборвался — пробуем store-and-forward
+        try {
+          if (hasSupabaseConfig()) {
+            await uploadPendingMedia({
+              id: transferId,
+              fromUserId: identityRef.current.id,
+              toUserId: peer,
+              senderName: identityRef.current.name,
+              file,
+            });
+            const mediaUrl = URL.createObjectURL(file);
+            mediaUrlsRef.current.add(mediaUrl);
+            await saveMediaBlob(mediaKey, file);
+            retrySendFilesRef.current.delete(transferId);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === transferId
+                  ? {
+                      ...m,
+                      kind: 'media' as const,
+                      mediaUrl,
+                      mediaKey,
+                      transferProgress: 1,
+                      transferFailed: false,
+                    }
+                  : m
+              )
+            );
+            const conv = conversationIdRef.current;
+            if (conv) {
+              await appendStoredMessage(conv, {
+                id: transferId,
+                sender: 'Я',
+                time: nowTime(),
+                mine: true,
+                kind: 'media',
+                mediaMime: file.type,
+                mediaName: file.name,
+                mediaSize: file.size,
+                mediaKey,
+              });
+            }
+            return;
+          }
+        } catch (safErr) {
+          setError(safErr instanceof Error ? safErr.message : msg);
+        }
         setMessages((prev) =>
           prev.map((m) =>
             m.id === transferId
