@@ -2044,6 +2044,7 @@ export default function App() {
         <ProfileModal
           identity={identity}
           settings={settings}
+          isAdmin={isAdmin}
           onClose={() => setProfileOpen(false)}
           onSaved={(next) => applyIdentity(next)}
           onSettingsChange={setSettings}

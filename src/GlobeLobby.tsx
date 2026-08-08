@@ -10,6 +10,7 @@ import {
   MapPin,
   MessageCircle,
   Phone,
+  Radar,
   ShieldCheck,
   X,
   ZoomIn,
@@ -30,10 +31,11 @@ import {
   setGemsLayerVisibility,
   startGemPulse,
 } from './mapGemLayers';
-import { fetchAllMapGems, type MapGem } from './mapGems';
+import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
 import MemoryGemPopup from './MemoryGemPopup';
 import MemoryGemComposer from './MemoryGemComposer';
 import ArFootprints from './ArFootprints';
+import AiBodyguardChat from './AiBodyguardChat';
 
 export type MapPerson = PresenceUser & {
   isContact: boolean;
@@ -221,6 +223,7 @@ export default function GlobeLobby({
   const [showGems, setShowGems] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
   openGemRef.current = (gem) => setOpenedGem(gem);
@@ -654,6 +657,17 @@ export default function GlobeLobby({
     });
   };
 
+  const collectSituationContext = () => {
+    const map = mapRef.current;
+    const bounds = map?.getBounds() ?? null;
+    return buildVisibleGemsContext(gems, {
+      showGems,
+      inBounds: bounds
+        ? (lat, lng) => bounds.contains([lng, lat])
+        : undefined,
+    });
+  };
+
   const geoHint =
     geoSource === 'gps'
       ? 'Ваша точка — по GPS'
@@ -849,19 +863,34 @@ export default function GlobeLobby({
           )}
 
           <div className="flex items-end justify-between gap-3">
-            <button
-              type="button"
-              className="memory-gem-fab pointer-events-auto"
-              disabled={banned}
-              onClick={() => {
-                setLayersOpen(false);
-                setIsTargetingMode(true);
-              }}
-              title="Выбрать место для капсулы"
-            >
-              <Gem size={16} />
-              Капсула
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                className="memory-gem-fab pointer-events-auto"
+                disabled={banned}
+                onClick={() => {
+                  setLayersOpen(false);
+                  setIsTargetingMode(true);
+                }}
+                title="Выбрать место для капсулы"
+              >
+                <Gem size={16} />
+                Капсула
+              </button>
+              <button
+                type="button"
+                className="ai-radar-fab pointer-events-auto"
+                onClick={() => {
+                  setLayersOpen(false);
+                  setAiOpen(true);
+                }}
+                aria-label="ИИ-телохранитель"
+                title="ИИ-телохранитель"
+              >
+                <Radar size={18} />
+                Секретарь
+              </button>
+            </div>
             <div className="flex flex-col items-end gap-2">
               <button
                 type="button"
@@ -911,6 +940,13 @@ export default function GlobeLobby({
 
       {arOpen && (
         <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
+      )}
+
+      {aiOpen && (
+        <AiBodyguardChat
+          collectSituationContext={collectSituationContext}
+          onClose={() => setAiOpen(false)}
+        />
       )}
 
       {openedGem && (

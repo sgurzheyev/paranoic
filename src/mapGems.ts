@@ -100,20 +100,48 @@ export async function fetchAllMapGems(): Promise<MapGem[]> {
 }
 
 /**
+ * Тексты капсул, видимых на карте (для тихого [Контекст обстановки] ИИ).
+ */
+export function buildVisibleGemsContext(
+  gems: MapGem[],
+  opts: {
+    showGems: boolean;
+    /** Если есть bounds карты — только маркеры во вьюпорте. */
+    inBounds?: (lat: number, lng: number) => boolean;
+  }
+): string {
+  if (!opts.showGems) {
+    return '(слой «Капсулы памяти» скрыт — на экране нет маркеров map_gems)';
+  }
+  const visible = gems.filter((g) => {
+    if (opts.inBounds && !opts.inBounds(g.lat, g.lng)) return false;
+    return Boolean(g.content?.trim());
+  });
+  if (visible.length === 0) {
+    return '(видимых текстовых капсул на экране нет)';
+  }
+  return visible
+    .slice(0, 40)
+    .map((g, i) => `${i + 1}. [${g.type}] ${g.content!.trim()}`)
+    .join('\n');
+}
+
+/**
  * INSERT в map_gems.
- * Всегда пишет `author_id` текущего пользователя и заранее upsert'ит profiles
- * (FK author_id → profiles.id), иначе RLS/FK блокирует запись.
+ * RLS требует валидный `author_id` текущего пользователя (= identity.id).
+ * Перед INSERT upsert'им profiles (FK author_id → profiles.id).
  */
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
 
-  const identity = getOrCreateIdentity();
-  const authorId = resolveGemAuthorId(input.authorId || identity.id);
+  // currentUser — локальная сессия приложения (profiles.id).
+  const currentUser = getOrCreateIdentity();
+  const authorId = resolveGemAuthorId(input.authorId || currentUser.id);
 
-  // Профиль обязан существовать до INSERT (foreign key + RLS).
-  await ensureProfileRow({ ...identity, id: authorId });
+  await ensureProfileRow({ ...currentUser, id: authorId });
 
   const sb = getSupabase();
+  // Жёстко: author_id = currentUser.id (не пустой / не чужой).
   const row = {
     author_id: authorId,
     lat: input.lat,
@@ -123,7 +151,7 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
     content: input.content ?? null,
   };
 
-  if (!row.author_id) {
+  if (!row.author_id || row.author_id !== authorId) {
     throw new Error('author_id пустой — капсула не сохранена');
   }
 

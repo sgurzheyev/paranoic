@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
+import { Bot, Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
   buildMagicLink,
@@ -10,10 +10,18 @@ import {
 } from './identity';
 import { isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
 import { saveSettings, type AppSettings } from './settings';
+import {
+  DEFAULT_AI_SETTINGS,
+  loadAiSettings,
+  saveAiSettings,
+  type AiSettings,
+} from './aiSettings';
 
 type ProfileModalProps = {
   identity: UserIdentity;
   settings: AppSettings;
+  /** Роль admin из Supabase — сразу показывает меню локального ИИ. */
+  isAdmin?: boolean;
   onClose: () => void;
   onSaved: (next: UserIdentity) => void;
   onSettingsChange: (next: AppSettings) => void;
@@ -58,6 +66,7 @@ function IosToggle({
 export default function ProfileModal({
   identity,
   settings,
+  isAdmin = false,
   onClose,
   onSaved,
   onSettingsChange,
@@ -74,6 +83,33 @@ export default function ProfileModal({
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  /** Секретный тап по заголовку «Профиль» ×7 или роль admin. */
+  const [aiLabOpen, setAiLabOpen] = useState(isAdmin);
+  const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
+  const secretTapsRef = useRef(0);
+  const secretTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isAdmin) setAiLabOpen(true);
+  }, [isAdmin]);
+
+  const onSecretTitleTap = () => {
+    if (aiLabOpen) return;
+    secretTapsRef.current += 1;
+    if (secretTimerRef.current) window.clearTimeout(secretTimerRef.current);
+    secretTimerRef.current = window.setTimeout(() => {
+      secretTapsRef.current = 0;
+    }, 2800);
+    if (secretTapsRef.current >= 7) {
+      secretTapsRef.current = 0;
+      setAiLabOpen(true);
+    }
+  };
+
+  const applyAiSettings = (patch: Partial<AiSettings>) => {
+    const next = saveAiSettings(patch);
+    setAiSettings(next);
+  };
 
   const previewIdentity = useMemo(
     () => ({ ...identity, username: username.trim().toLowerCase() }),
@@ -193,7 +229,9 @@ export default function ProfileModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="profile-modal-head">
-          <h2 id="profile-modal-title">Профиль</h2>
+          <h2 id="profile-modal-title" onClick={onSecretTitleTap}>
+            Профиль
+          </h2>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
             <X size={20} />
           </button>
@@ -306,6 +344,48 @@ export default function ProfileModal({
             icon={<Timer size={16} />}
           />
         </div>
+
+        {aiLabOpen && (
+          <div className="profile-ai-lab">
+            <p className="profile-privacy-title">
+              <Bot size={16} /> Локальный ИИ (Ollama)
+            </p>
+            <p className="profile-field-hint" style={{ marginTop: 0 }}>
+              Endpoint и модель для ИИ-телохранителя на карте Family Mode.
+            </p>
+            <label className="profile-field">
+              <span>API URL</span>
+              <input
+                value={aiSettings.apiUrl}
+                onChange={(e) => setAiSettings((s) => ({ ...s, apiUrl: e.target.value }))}
+                onBlur={() => applyAiSettings({ apiUrl: aiSettings.apiUrl })}
+                placeholder={DEFAULT_AI_SETTINGS.apiUrl}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </label>
+            <label className="profile-field">
+              <span>Модель</span>
+              <input
+                value={aiSettings.model}
+                onChange={(e) => setAiSettings((s) => ({ ...s, model: e.target.value }))}
+                onBlur={() => applyAiSettings({ model: aiSettings.model })}
+                placeholder={DEFAULT_AI_SETTINGS.model}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </label>
+            <button
+              type="button"
+              className="accept-file-btn"
+              onClick={() => applyAiSettings(aiSettings)}
+            >
+              Сохранить настройки ИИ
+            </button>
+          </div>
+        )}
 
         {error && (
           <p className="profile-error" role="alert">
