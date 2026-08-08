@@ -14,6 +14,8 @@ export type StoredMessage = {
   mediaMime?: string;
   mediaName?: string;
   mediaSize?: number;
+  /** file | video-circle | voice note. */
+  mediaKind?: 'file' | 'circle' | 'voice';
   /** Ключ blob в mediaStore после принятия файла. */
   mediaKey?: string;
   /** Только для своих текстовых сообщений. */

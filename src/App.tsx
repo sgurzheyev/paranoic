@@ -22,12 +22,24 @@ import {
   Timer,
   RefreshCw,
   PanelLeft,
+  Mic,
+  Video,
+  Camera,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
 import CallOverlay from './CallOverlay';
+import MediaNoteOverlay from './MediaNoteOverlay';
+import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
+import {
+  openNoteStream,
+  recordMediaNote,
+  stopStream,
+  inferMediaKind,
+  type NoteMode,
+} from './mediaNotes';
 import {
   deriveKeyFromRoom,
   exportKey,
@@ -167,6 +179,12 @@ export default function App() {
   const [callExpanded, setCallExpanded] = useState(false);
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
+  /** Режим заметки: голос или видео-кружочек. */
+  const [noteMode, setNoteMode] = useState<NoteMode>('video');
+  const [noteRecording, setNoteRecording] = useState<{
+    stream: MediaStream;
+    progress: number;
+  } | null>(null);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -180,6 +198,12 @@ export default function App() {
   const mediaUrlsRef = useRef<Set<string>>(new Set());
   /** Исходящие File для «Повторить попытку» после обрыва. */
   const retrySendFilesRef = useRef<Map<string, File>>(new Map());
+  const noteSessionRef = useRef<{
+    stop: () => void;
+    abort: AbortController;
+    stream: MediaStream;
+  } | null>(null);
+  const noteReleasePendingRef = useRef(false);
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
@@ -386,7 +410,9 @@ export default function App() {
     (id: string, target: EventTarget | null) => {
       if (
         target instanceof Element &&
-        target.closest('a, button, video, audio, input, textarea')
+        target.closest(
+          'a, button, video, audio, input, textarea, .video-circle-note, .voice-note, .video-circle-expand-backdrop'
+        )
       ) {
         return;
       }
@@ -468,6 +494,7 @@ export default function App() {
             mediaMime: msg.mime,
             mediaName: msg.name,
             mediaSize: msg.size,
+            mediaKind: inferMediaKind(msg.name, msg.mime),
             mediaKey,
             createdAt: msg.createdAt,
           };
@@ -814,6 +841,7 @@ export default function App() {
                 mediaMime: meta.mime,
                 mediaName: meta.name,
                 mediaSize: meta.size,
+                mediaKind: inferMediaKind(meta.name, meta.mime),
                 transferProgress: 0,
               },
             ];
@@ -830,6 +858,7 @@ export default function App() {
             const mediaUrl = URL.createObjectURL(blob);
             mediaUrlsRef.current.add(mediaUrl);
             await saveMediaBlob(mediaKey, blob);
+            const mediaKind = inferMediaKind(meta.name, meta.mime);
 
             setMessages((prev) => {
               const updated: ChatMessage = {
@@ -841,6 +870,7 @@ export default function App() {
                 mediaMime: meta.mime,
                 mediaName: meta.name,
                 mediaSize: meta.size,
+                mediaKind,
                 mediaKey,
                 mediaUrl,
                 transferProgress: 1,
@@ -861,6 +891,7 @@ export default function App() {
                 mediaMime: meta.mime,
                 mediaName: meta.name,
                 mediaSize: meta.size,
+                mediaKind,
                 mediaKey,
               });
             }
@@ -1240,7 +1271,11 @@ export default function App() {
     }
   };
 
-  const sendMedia = async (file: File, reuseId?: string) => {
+  const sendMedia = async (
+    file: File,
+    reuseId?: string,
+    opts?: { mediaKind?: 'file' | 'circle' | 'voice' }
+  ) => {
     if (!secretKey) return;
     const peer = peerIdRef.current;
     if (!peer) {
@@ -1254,6 +1289,7 @@ export default function App() {
       return;
     }
 
+    const mediaKind = opts?.mediaKind ?? 'file';
     setError('');
     const transferId =
       reuseId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1270,6 +1306,7 @@ export default function App() {
         mediaMime: file.type || 'application/octet-stream',
         mediaName: file.name,
         mediaSize: file.size,
+        mediaKind,
         transferProgress: 0,
         transferFailed: false,
       };
@@ -1321,6 +1358,7 @@ export default function App() {
                 kind: 'media' as const,
                 mediaUrl,
                 mediaKey,
+                mediaKind,
                 transferProgress: 1,
                 transferFailed: false,
               }
@@ -1338,6 +1376,7 @@ export default function App() {
           mediaMime: file.type,
           mediaName: file.name,
           mediaSize: file.size,
+          mediaKind,
           mediaKey,
         });
       }
@@ -1367,6 +1406,7 @@ export default function App() {
                       kind: 'media' as const,
                       mediaUrl,
                       mediaKey,
+                      mediaKind,
                       transferProgress: 1,
                       transferFailed: false,
                     }
@@ -1384,6 +1424,7 @@ export default function App() {
                 mediaMime: file.type,
                 mediaName: file.name,
                 mediaSize: file.size,
+                mediaKind,
                 mediaKey,
               });
             }
@@ -1412,6 +1453,80 @@ export default function App() {
       });
     }
   };
+
+  const cancelMediaNote = useCallback(() => {
+    const session = noteSessionRef.current;
+    if (session) {
+      session.abort.abort();
+      session.stop();
+      stopStream(session.stream);
+      noteSessionRef.current = null;
+    }
+    setNoteRecording(null);
+  }, []);
+
+  const finishMediaNote = useCallback(() => {
+    noteReleasePendingRef.current = true;
+    const session = noteSessionRef.current;
+    if (session) session.stop();
+  }, []);
+
+  const startMediaNote = useCallback(
+    async (mode: NoteMode) => {
+      if (!peerId || !secretKey || noteSessionRef.current) return;
+      noteReleasePendingRef.current = false;
+      setError('');
+      try {
+        const stream = await openNoteStream(mode);
+        if (noteReleasePendingRef.current) {
+          stopStream(stream);
+          setNoteRecording(null);
+          return;
+        }
+        const abort = new AbortController();
+        const session = recordMediaNote(stream, mode, {
+          signal: abort.signal,
+          onTick: (ratio) => {
+            setNoteRecording((prev) =>
+              prev ? { ...prev, progress: ratio } : { stream, progress: ratio }
+            );
+          },
+        });
+        noteSessionRef.current = { stop: session.stop, abort, stream };
+        setNoteRecording({ stream, progress: 0 });
+
+        if (noteReleasePendingRef.current) {
+          session.stop();
+        }
+
+        void session.result.then((note) => {
+          stopStream(stream);
+          noteSessionRef.current = null;
+          setNoteRecording(null);
+          if (!note) return;
+          void sendMedia(note.file, undefined, { mediaKind: note.mediaKind });
+        });
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : mode === 'video'
+              ? 'Нет доступа к камере'
+              : 'Нет доступа к микрофону'
+        );
+        setNoteRecording(null);
+        noteSessionRef.current = null;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [peerId, secretKey]
+  );
+
+  useEffect(() => {
+    return () => {
+      cancelMediaNote();
+    };
+  }, [cancelMediaNote]);
 
   const retryFileTransfer = (id: string) => {
     const file = retrySendFilesRef.current.get(id);
@@ -1936,18 +2051,34 @@ export default function App() {
                 messages.map((m) => {
                   const progress =
                     m.transferProgress ?? transferProgressMap[m.id] ?? null;
+                  const isVideoCircle =
+                    m.kind === 'media' &&
+                    Boolean(m.mediaUrl) &&
+                    (m.mediaKind === 'circle' ||
+                      (m.mediaName || '').startsWith('circle-'));
+                  const isVoiceNote =
+                    m.kind === 'media' &&
+                    Boolean(m.mediaUrl) &&
+                    (m.mediaKind === 'voice' ||
+                      (m.mediaName || '').startsWith('voice-') ||
+                      Boolean(m.mediaMime?.startsWith('audio/')));
                   const isMediaPreview =
                     m.kind === 'media' &&
                     m.mediaUrl &&
+                    !isVideoCircle &&
+                    !isVoiceNote &&
                     (m.mediaMime?.startsWith('image/') ||
                       m.mediaMime?.startsWith('video/') ||
                       !m.mediaMime);
                   const isGenericFile =
                     m.kind === 'media' &&
                     m.mediaUrl &&
+                    !isVideoCircle &&
+                    !isVoiceNote &&
                     m.mediaMime &&
                     !m.mediaMime.startsWith('image/') &&
-                    !m.mediaMime.startsWith('video/');
+                    !m.mediaMime.startsWith('video/') &&
+                    !m.mediaMime.startsWith('audio/');
 
                   return (
                   <div key={m.id} className={`bubble-wrap ${m.mine ? 'mine' : 'theirs'}`}>
@@ -1960,7 +2091,7 @@ export default function App() {
                       />
                     )}
                     <div
-                      className={`bubble ${m.mine ? 'mine' : 'theirs'}${m.hearted ? ' hearted' : ''}`}
+                      className={`bubble ${m.mine ? 'mine' : 'theirs'}${m.hearted ? ' hearted' : ''}${isVideoCircle ? ' circle-bubble' : ''}${isVoiceNote ? ' voice-bubble' : ''}`}
                       onClick={(e) => onBubbleTap(m.id, e.target)}
                       role="presentation"
                     >
@@ -1979,6 +2110,12 @@ export default function App() {
                         </span>
                       )}
                       {m.kind === 'text' && <p>{m.text}</p>}
+                      {isVideoCircle && m.mediaUrl && (
+                        <VideoCirclePlayer src={m.mediaUrl} mine={m.mine} />
+                      )}
+                      {isVoiceNote && m.mediaUrl && (
+                        <VoiceNotePlayer src={m.mediaUrl} mine={m.mine} />
+                      )}
                       {(m.kind === 'file-transfer' || m.kind === 'file-pending') && (
                         <div className="file-transfer-card">
                           <p className="file-pending-name">{m.mediaName ?? 'Файл'}</p>
@@ -2147,18 +2284,78 @@ export default function App() {
                 }
                 disabled={!peerId || !secretKey}
               />
-              <button
-                type="submit"
-                disabled={!peerId || !secretKey || !inputText.trim()}
-                aria-label="Отправить"
-              >
-                <Send size={22} />
-              </button>
+              {inputText.trim() ? (
+                <button
+                  type="submit"
+                  disabled={!peerId || !secretKey}
+                  aria-label="Отправить"
+                >
+                  <Send size={22} />
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="icon-btn note-mode-toggle"
+                    disabled={!peerId || !secretKey}
+                    onClick={() =>
+                      setNoteMode((m) => (m === 'video' ? 'voice' : 'video'))
+                    }
+                    aria-label={
+                      noteMode === 'video'
+                        ? 'Переключить на голосовое'
+                        : 'Переключить на видео-кружочек'
+                    }
+                    title={
+                      noteMode === 'video'
+                        ? 'Сейчас: видео · нажмите для микрофона'
+                        : 'Сейчас: голос · нажмите для камеры'
+                    }
+                  >
+                    {noteMode === 'video' ? <Video size={20} /> : <Mic size={20} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`chat-record-btn${noteRecording ? ' recording' : ''}`}
+                    disabled={!peerId || !secretKey}
+                    aria-label={
+                      noteMode === 'video'
+                        ? 'Удерживайте для видео-кружочка'
+                        : 'Удерживайте для голосового'
+                    }
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      (e.currentTarget as HTMLButtonElement).setPointerCapture(
+                        e.pointerId
+                      );
+                      void startMediaNote(noteMode);
+                    }}
+                    onPointerUp={() => {
+                      finishMediaNote();
+                    }}
+                    onPointerCancel={() => {
+                      cancelMediaNote();
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                  >
+                    {noteMode === 'video' ? <Camera size={22} /> : <Mic size={22} />}
+                  </button>
+                </>
+              )}
             </form>
             </div>
           </section>
         )}
       </main>
+
+      {noteRecording && (
+        <MediaNoteOverlay
+          mode={noteMode}
+          stream={noteRecording.stream}
+          progress={noteRecording.progress}
+          onCancel={cancelMediaNote}
+        />
+      )}
 
       <CallOverlay
         callState={callState}
