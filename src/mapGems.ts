@@ -1,4 +1,6 @@
 import { getSupabase, getSupabaseConfig, hasSupabaseConfig } from './lib/supabase';
+import { getOrCreateIdentity } from './identity';
+import { ensureProfileRow } from './profile';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
@@ -17,7 +19,8 @@ export type MapGem = {
 };
 
 export type CreateMapGemInput = {
-  authorId: string;
+  /** Опционально: если нет — берётся id из локальной identity. */
+  authorId?: string;
   lat: number;
   lng: number;
   type: MapGemType;
@@ -38,6 +41,16 @@ function mapRow(row: Record<string, unknown>): MapGem {
     content: (row.content as string | null) ?? null,
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
+}
+
+/** ID автора капсулы = локальная личность (profiles.id). */
+export function resolveGemAuthorId(fallbackId?: string): string {
+  const identity = getOrCreateIdentity();
+  const authorId = (fallbackId?.trim() || identity.id || '').trim();
+  if (!authorId) {
+    throw new Error('Нет ID пользователя. Откройте профиль и сохранитесь.');
+  }
+  return authorId;
 }
 
 /**
@@ -86,29 +99,60 @@ export async function fetchAllMapGems(): Promise<MapGem[]> {
   }
 }
 
+/**
+ * INSERT в map_gems.
+ * Всегда пишет `author_id` текущего пользователя и заранее upsert'ит profiles
+ * (FK author_id → profiles.id), иначе RLS/FK блокирует запись.
+ */
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+
+  const identity = getOrCreateIdentity();
+  const authorId = resolveGemAuthorId(input.authorId || identity.id);
+
+  // Профиль обязан существовать до INSERT (foreign key + RLS).
+  await ensureProfileRow({ ...identity, id: authorId });
+
   const sb = getSupabase();
   const row = {
-    author_id: input.authorId,
+    author_id: authorId,
     lat: input.lat,
     lng: input.lng,
     type: input.type,
     media_url: input.mediaUrl ?? null,
     content: input.content ?? null,
   };
+
+  if (!row.author_id) {
+    throw new Error('author_id пустой — капсула не сохранена');
+  }
+
   const { data, error } = await sb
     .from(MAP_GEMS_TABLE)
     .insert(row)
     .select(SELECT_COLS)
     .single();
-  if (error) throw new Error(error.message || 'Не удалось сохранить капсулу');
+
+  if (error) {
+    const msg = error.message || 'Не удалось сохранить капсулу';
+    if (/row-level security|RLS/i.test(msg)) {
+      throw new Error(
+        'RLS блокирует запись. Выполните supabase/map_gems.sql (и map_gems_rls_fix.sql) в SQL Editor.'
+      );
+    }
+    if (/foreign key|profiles/i.test(msg)) {
+      throw new Error(
+        'Профиль ещё не в Supabase. Сохраните профиль и попробуйте снова.'
+      );
+    }
+    throw new Error(msg);
+  }
   return mapRow(data as Record<string, unknown>);
 }
 
 /**
  * Загрузка фото/видео в Storage (`map-gems`) с прогрессом (XHR).
- * Публичный URL возвращается после успешного upload.
+ * Путь: `{author_id}/...` — author_id текущего пользователя.
  */
 export async function uploadGemMedia(
   authorId: string,
@@ -118,8 +162,12 @@ export async function uploadGemMedia(
   const cfg = getSupabaseConfig();
   if (!cfg) throw new Error('Supabase не настроен');
 
+  const uid = resolveGemAuthorId(authorId);
+  const identity = getOrCreateIdentity();
+  await ensureProfileRow({ ...identity, id: uid });
+
   const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
-  const path = `${authorId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const endpoint = `${cfg.url.replace(/\/$/, '')}/storage/v1/object/${MAP_GEMS_BUCKET}/${path}`;
 
   await new Promise<void>((resolve, reject) => {
@@ -146,6 +194,14 @@ export async function uploadGemMedia(
         message = parsed.message || parsed.error || message;
       } catch {
         /* */
+      }
+      if (/row-level security|policy|RLS|403|401/i.test(message) || xhr.status === 403) {
+        reject(
+          new Error(
+            'Storage RLS блокирует upload. Выполните supabase/map_gems_rls_fix.sql.'
+          )
+        );
+        return;
       }
       reject(new Error(message));
     };

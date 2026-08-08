@@ -169,6 +169,34 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
   }
 }
 
+/**
+ * Гарантирует строку в `profiles` перед INSERT в map_gems (FK author_id).
+ * Бросает ошибку, если upsert не удался.
+ */
+export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  if (!identity.id?.trim()) throw new Error('Пустой ID пользователя');
+
+  const sb = getSupabase();
+  const row = {
+    id: identity.id.trim(),
+    name: identity.name || 'Я',
+    color: identity.color || '#34d399',
+    avatar_url: identity.avatarUrl || null,
+    theme_fon: identity.themeFon || null,
+    username: identity.username || null,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
+  if (error) {
+    throw new Error(
+      error.message.includes('username')
+        ? 'Этот никнейм уже занят'
+        : `Не удалось сохранить профиль: ${error.message}`
+    );
+  }
+}
+
 export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile | null> {
   if (!hasSupabaseConfig()) return null;
   try {

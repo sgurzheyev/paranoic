@@ -45,7 +45,7 @@ drop policy if exists "map_gems_insert_anon" on public.map_gems;
 create policy "map_gems_insert_anon"
   on public.map_gems for insert
   to anon, authenticated
-  with check (true);
+  with check (author_id is not null and length(trim(author_id)) > 0);
 
 drop policy if exists "map_gems_update_anon" on public.map_gems;
 create policy "map_gems_update_anon"
@@ -94,9 +94,15 @@ create policy "map_gems_public_read"
   using (bucket_id = 'map-gems');
 
 drop policy if exists "map_gems_anon_upload" on storage.objects;
+drop policy if exists "map_gems_authenticated_upload" on storage.objects;
 create policy "map_gems_anon_upload"
   on storage.objects for insert
   to anon, authenticated
+  with check (bucket_id = 'map-gems');
+
+create policy "map_gems_authenticated_upload"
+  on storage.objects for insert
+  to authenticated
   with check (bucket_id = 'map-gems');
 
 drop policy if exists "map_gems_anon_update" on storage.objects;
