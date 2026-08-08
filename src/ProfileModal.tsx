@@ -1,9 +1,11 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { Check, Ghost, ImagePlus, Timer, X } from 'lucide-react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
+  buildMagicLink,
   THEME_FON_PRESETS,
   updateIdentity,
+  validateUsername,
   type UserIdentity,
 } from './identity';
 import { syncProfileToSupabase, uploadAvatar } from './profile';
@@ -61,6 +63,7 @@ export default function ProfileModal({
   onSettingsChange,
 }: ProfileModalProps) {
   const [name, setName] = useState(identity.name);
+  const [username, setUsername] = useState(identity.username || '');
   const [avatarUrl, setAvatarUrl] = useState(identity.avatarUrl);
   const [themeFon, setThemeFon] = useState(identity.themeFon);
   const [ghostMode, setGhostMode] = useState(settings.ghostMode);
@@ -68,7 +71,14 @@ export default function ProfileModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const previewIdentity = useMemo(
+    () => ({ ...identity, username: username.trim().toLowerCase() }),
+    [identity, username]
+  );
+  const shareLink = buildMagicLink(previewIdentity);
 
   const onPickAvatar = async (file: File | undefined) => {
     if (!file) return;
@@ -93,12 +103,28 @@ export default function ProfileModal({
     onSettingsChange(saved);
   };
 
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('Не удалось скопировать ссылку');
+    }
+  };
+
   const save = async () => {
     setBusy(true);
     setError('');
     try {
+      const userCheck = validateUsername(username);
+      if (!userCheck.ok) {
+        setError(userCheck.error);
+        return;
+      }
       const next = updateIdentity({
         name: name.trim() || 'Я',
+        username: userCheck.value,
         avatarUrl,
         themeFon,
       });
@@ -160,6 +186,40 @@ export default function ProfileModal({
             placeholder="Ваше имя"
           />
         </label>
+
+        <label className="profile-field">
+          <span>Username</span>
+          <div className="username-input-row">
+            <span className="username-at">@</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
+              maxLength={24}
+              placeholder="gurgini"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </div>
+          <p className="profile-field-hint">
+            Короткая ссылка без ID. Только латиница, цифры и _
+          </p>
+        </label>
+
+        <div className="profile-share-card">
+          <p className="profile-share-label">
+            <Link2 size={14} /> Ваша магическая ссылка
+          </p>
+          <p className="profile-share-url mono-box">{shareLink}</p>
+          <button
+            type="button"
+            className="accept-file-btn"
+            onClick={() => void copyShareLink()}
+          >
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+            {copied ? 'Скопировано' : 'Поделиться ссылкой'}
+          </button>
+        </div>
 
         <div className="profile-field">
           <span>Фон интерфейса</span>

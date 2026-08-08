@@ -1,5 +1,9 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import type { UserIdentity } from './identity';
+import {
+  normalizeUsername,
+  validateUsername,
+  type UserIdentity,
+} from './identity';
 
 export const AVATARS_BUCKET = 'avatars';
 export const PROFILES_TABLE = 'profiles';
@@ -10,6 +14,7 @@ export type RemoteProfile = {
   color: string;
   avatar_url: string | null;
   theme_fon: string | null;
+  username: string | null;
   updated_at?: string;
 };
 
@@ -61,8 +66,7 @@ export async function prepareAvatarBlob(file: File): Promise<{ blob: Blob; mime:
 
 /**
  * Загружает аватар в Supabase Storage (`avatars/{userId}/avatar.jpg`)
- * и возвращает публичный URL. При ошибке — локальный object URL как fallback нет:
- * возвращаем data URL через FileReader, если Storage недоступен.
+ * и возвращает публичный URL. При ошибке — data URL fallback.
  */
 export async function uploadAvatar(userId: string, file: File): Promise<string> {
   const { blob, mime } = await prepareAvatarBlob(file);
@@ -79,7 +83,6 @@ export async function uploadAvatar(userId: string, file: File): Promise<string> 
       if (error) throw error;
 
       const { data } = sb.storage.from(AVATARS_BUCKET).getPublicUrl(path);
-      // cache-bust чтобы сразу увидеть новое фото
       return `${data.publicUrl}?t=${Date.now()}`;
     } catch (e) {
       console.warn('[paranoic] avatar upload failed, using data URL', e);
@@ -98,10 +101,40 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** Upsert в таблицу `profiles` (если настроена). Ошибки не фатальны. */
+/** Проверка: username свободен или принадлежит этому id. */
+export async function isUsernameAvailable(
+  username: string,
+  forUserId: string
+): Promise<boolean> {
+  if (!hasSupabaseConfig() || !username) return true;
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(PROFILES_TABLE)
+      .select('id,username')
+      .ilike('username', username)
+      .maybeSingle();
+    if (error) {
+      console.warn('[paranoic] username check', error.message);
+      return true; // не блокируем офлайн
+    }
+    if (!data) return true;
+    return data.id === forUserId;
+  } catch {
+    return true;
+  }
+}
+
+/** Upsert в таблицу `profiles` (если настроена). */
 export async function syncProfileToSupabase(identity: UserIdentity): Promise<void> {
   if (!hasSupabaseConfig()) return;
   try {
+    const username = identity.username || null;
+    if (username) {
+      const free = await isUsernameAvailable(username, identity.id);
+      if (!free) throw new Error('Этот username уже занят');
+    }
+
     const sb = getSupabase();
     const row: RemoteProfile = {
       id: identity.id,
@@ -109,11 +142,18 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
       color: identity.color,
       avatar_url: identity.avatarUrl || null,
       theme_fon: identity.themeFon || null,
+      username,
       updated_at: new Date().toISOString(),
     };
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
-    if (error) console.warn('[paranoic] profiles upsert', error.message);
+    if (error) {
+      if (/username|unique|duplicate/i.test(error.message)) {
+        throw new Error('Этот username уже занят');
+      }
+      console.warn('[paranoic] profiles upsert', error.message);
+    }
   } catch (e) {
+    if (e instanceof Error && e.message.includes('username')) throw e;
     console.warn('[paranoic] profiles sync skipped', e);
   }
 }
@@ -124,7 +164,7 @@ export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile 
     const sb = getSupabase();
     const { data, error } = await sb
       .from(PROFILES_TABLE)
-      .select('id,name,color,avatar_url,theme_fon,updated_at')
+      .select('id,name,color,avatar_url,theme_fon,username,updated_at')
       .eq('id', userId)
       .maybeSingle();
     if (error) {
@@ -135,4 +175,46 @@ export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile 
   } catch {
     return null;
   }
+}
+
+/** Найти профиль по короткому username. */
+export async function fetchProfileByUsername(
+  username: string
+): Promise<RemoteProfile | null> {
+  if (!hasSupabaseConfig()) return null;
+  const handle = normalizeUsername(username);
+  if (!handle) return null;
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(PROFILES_TABLE)
+      .select('id,name,color,avatar_url,theme_fon,username,updated_at')
+      .ilike('username', handle)
+      .maybeSingle();
+    if (error) {
+      console.warn('[paranoic] username lookup', error.message);
+      return null;
+    }
+    return data as RemoteProfile | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ?u=handle → реальный user id.
+ * Сначала username в Supabase, иначе считаем handle уже id.
+ */
+export async function resolveHandleToUserId(handle: string): Promise<string> {
+  const raw = handle.trim();
+  if (!raw) return raw;
+  const check = validateUsername(raw);
+  if (check.ok && check.value) {
+    const profile = await fetchProfileByUsername(check.value);
+    if (profile?.id) return profile.id;
+  }
+  // Legacy / прямой id
+  const byId = await fetchRemoteProfile(raw);
+  if (byId?.id) return byId.id;
+  return raw;
 }

@@ -100,11 +100,12 @@ import {
   personalInboxRoom,
   resolveMagicRoute,
   updateIdentity,
+  looksLikeUsername,
   type UserIdentity,
 } from './identity';
 import { loadContacts, upsertContact, type Contact } from './contacts';
 import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
-import { syncProfileToSupabase } from './profile';
+import { syncProfileToSupabase, resolveHandleToUserId } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -156,7 +157,9 @@ export default function App() {
   const [heartBursts, setHeartBursts] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
   const [roomId, setRoomId] = useState('');
-  const [magicLink, setMagicLink] = useState(() => buildMagicLink(getOrCreateIdentity().id));
+  const [magicLink, setMagicLink] = useState(() =>
+    buildMagicLink(getOrCreateIdentity())
+  );
   const [copied, setCopied] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   /** id → прогресс исходящей/входящей передачи для баблов. */
@@ -176,11 +179,16 @@ export default function App() {
   const [sessionEpoch, setSessionEpoch] = useState(0);
   /** Гостевой peer из ?u= — держим явно, чтобы не «съехать» на свой инбокс. */
   const [guestPeerId, setGuestPeerId] = useState<string | null>(() => {
-    const route = resolveMagicRoute(getOrCreateIdentity().id);
-    return route.kind === 'guest' ? route.peerId : null;
+    const me = getOrCreateIdentity();
+    const route = resolveMagicRoute(me.id, me.username);
+    // Username в URL резолвим асинхронно — не подставляем handle как peer id.
+    if (route.kind !== 'guest') return null;
+    if (looksLikeUsername(route.peerId)) return null;
+    return route.peerId;
   });
   const [hostingSelf, setHostingSelf] = useState(() => {
-    const route = resolveMagicRoute(getOrCreateIdentity().id);
+    const me = getOrCreateIdentity();
+    const route = resolveMagicRoute(me.id, me.username);
     return route.kind !== 'guest';
   });
   const [incomingConnection, setIncomingConnection] = useState(false);
@@ -601,7 +609,7 @@ export default function App() {
 
   useEffect(() => {
     identityRef.current = identity;
-    setMagicLink(buildMagicLink(identity.id));
+    setMagicLink(buildMagicLink(identity));
   }, [identity]);
 
   useEffect(() => {
@@ -1015,8 +1023,20 @@ export default function App() {
         }
 
         const me = identityRef.current;
-        const urlRoute = resolveMagicRoute(me.id);
+        const urlHandle = getMagicTargetFromUrl();
         const legacyRoom = getRoomIdFromUrl();
+
+        // Резолв ?u=username|id → реальный peer id.
+        let urlRoute = resolveMagicRoute(me.id, me.username);
+        if (urlRoute.kind === 'guest' && urlHandle) {
+          const resolvedId = await resolveHandleToUserId(urlHandle);
+          if (cancelled) return;
+          if (resolvedId === me.id) {
+            urlRoute = { kind: 'self' };
+          } else {
+            urlRoute = { kind: 'guest', peerId: resolvedId };
+          }
+        }
 
         // Явный гость из state (после connectToUser) или из ?u= в URL.
         const guestId =
@@ -1030,14 +1050,19 @@ export default function App() {
         let provisionalPeer: string | null = null;
 
         if (guestId) {
-          // Гость: чат/звонок с конкретным ?u=ID_ДРУГА — никогда не подменяем на свой id.
+          // Гость: чат/звонок с конкретным пользователем — inbox по реальному id.
           room = personalInboxRoom(guestId);
           isHost = false;
           provisionalPeer = guestId;
           setGuestPeerId(guestId);
           guestPeerIdRef.current = guestId;
           setHostingSelf(false);
-          setMagicUserInUrl(guestId);
+          // В URL оставляем красивый username, если он был в ссылке.
+          if (urlHandle && looksLikeUsername(urlHandle)) {
+            setMagicUserInUrl(urlHandle);
+          } else {
+            setMagicUserInUrl(guestId);
+          }
         } else if (legacyRoom) {
           const resolved = resolveRoom();
           room = resolved.roomId;
@@ -1045,9 +1070,6 @@ export default function App() {
           setHostingSelf(true);
           setGuestPeerId(null);
           guestPeerIdRef.current = null;
-          if (urlRoute.kind === 'self') {
-            // Свой ?u= — остаёмся на своём профиле, убираем только если мешает room.
-          }
         } else {
           // Свой инбокс / свой профиль (?u=me или без ?u).
           room = personalInboxRoom(me.id);
@@ -1056,7 +1078,7 @@ export default function App() {
           setGuestPeerId(null);
           guestPeerIdRef.current = null;
           if (urlRoute.kind === 'self') {
-            setMagicUserInUrl(me.id);
+            setMagicUserInUrl(me.username || me.id);
           } else {
             clearMagicParamFromUrl();
           }
@@ -1065,7 +1087,7 @@ export default function App() {
 
         if (cancelled) return;
         setRoomId(room);
-        setMagicLink(buildMagicLink(me.id));
+        setMagicLink(buildMagicLink(me));
 
         if (provisionalPeer) {
           const known = contacts.find((c) => c.id === provisionalPeer);
@@ -1895,8 +1917,9 @@ export default function App() {
                     {copied ? 'Скопировано' : 'Скопировать ссылку'}
                   </button>
                   <p className="hint">
-                    Постоянная ссылка: близкие открывают её в любой момент — без новой комнаты на
-                    каждый звонок.
+                    {identity.username
+                      ? `Короткая ссылка: ?u=${identity.username}`
+                      : 'Задайте username в профиле — ссылка станет короткой и красивой.'}
                   </p>
                 </div>
 

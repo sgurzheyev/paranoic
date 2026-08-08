@@ -3,6 +3,8 @@
 export type UserIdentity = {
   id: string;
   name: string;
+  /** Короткий публичный handle для ?u=username (опционально). */
+  username: string;
   /** CSS-цвет запасного аватара (если нет фото). */
   color: string;
   /** Публичный URL аватара (Supabase Storage или локальный data URL). */
@@ -12,6 +14,32 @@ export type UserIdentity = {
 };
 
 const STORAGE_KEY = 'paranoic-identity-v1';
+
+/** 3–24 символа: латиница/цифры/_, начинается с буквы. */
+export const USERNAME_PATTERN = /^[a-z][a-z0-9_]{2,23}$/;
+
+export function normalizeUsername(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+
+export function validateUsername(
+  raw: string
+): { ok: true; value: string } | { ok: false; error: string } {
+  const value = normalizeUsername(raw);
+  if (!value) return { ok: true, value: '' }; // пустой = без username
+  if (!USERNAME_PATTERN.test(value)) {
+    return {
+      ok: false,
+      error: 'Username: 3–24 символа, латиница/цифры/_, с буквы (например gurgini)',
+    };
+  }
+  return { ok: true, value };
+}
+
+export function looksLikeUsername(handle: string): boolean {
+  const v = handle.trim().toLowerCase();
+  return USERNAME_PATTERN.test(v);
+}
 
 const AVATAR_COLORS = [
   '#34d399',
@@ -73,9 +101,12 @@ function randomColor(): string {
 }
 
 function normalizeIdentity(raw: Partial<UserIdentity> & { id: string; name: string }): UserIdentity {
+  const usernameRaw = typeof raw.username === 'string' ? raw.username : '';
+  const usernameCheck = validateUsername(usernameRaw);
   return {
     id: raw.id,
     name: raw.name,
+    username: usernameCheck.ok ? usernameCheck.value : '',
     color: raw.color || randomColor(),
     avatarUrl: typeof raw.avatarUrl === 'string' ? raw.avatarUrl : '',
     themeFon: typeof raw.themeFon === 'string' && raw.themeFon ? raw.themeFon : DEFAULT_THEME_FON,
@@ -100,6 +131,7 @@ export function getOrCreateIdentity(): UserIdentity {
   const identity: UserIdentity = {
     id: randomId(),
     name: 'Я',
+    username: '',
     color: randomColor(),
     avatarUrl: '',
     themeFon: DEFAULT_THEME_FON,
@@ -109,7 +141,7 @@ export function getOrCreateIdentity(): UserIdentity {
 }
 
 export function updateIdentity(
-  patch: Partial<Pick<UserIdentity, 'name' | 'color' | 'avatarUrl' | 'themeFon'>>
+  patch: Partial<Pick<UserIdentity, 'name' | 'username' | 'color' | 'avatarUrl' | 'themeFon'>>
 ): UserIdentity {
   const current = getOrCreateIdentity();
   const next = normalizeIdentity({ ...current, ...patch });
@@ -117,12 +149,16 @@ export function updateIdentity(
   return next;
 }
 
-/** Магическая ссылка: ?u=<id> */
-export function buildMagicLink(userId: string): string {
+/** Магическая ссылка: ?u=<username|id> */
+export function buildMagicLink(identityOrHandle: UserIdentity | string): string {
+  const handle =
+    typeof identityOrHandle === 'string'
+      ? identityOrHandle
+      : identityOrHandle.username || identityOrHandle.id;
   const url = new URL(window.location.href);
   url.search = '';
   url.hash = '';
-  url.searchParams.set('u', userId);
+  url.searchParams.set('u', handle);
   return url.toString();
 }
 
@@ -133,8 +169,8 @@ export function getMagicTargetFromUrl(): string | null {
 
 /**
  * Роутинг магической ссылки:
- * - guest: ?u=чужой_id → открываем диалог с этим пользователем
- * - self:  ?u=мой_id → свой профиль / инбокс
+ * - guest: ?u=чужой_id|username → диалог с этим пользователем
+ * - self:  ?u=мой_id|мой_username → свой профиль / инбокс
  * - host:  нет ?u → свой инбокс
  */
 export type MagicRoute =
@@ -142,11 +178,16 @@ export type MagicRoute =
   | { kind: 'self' }
   | { kind: 'host' };
 
-export function resolveMagicRoute(currentUserId: string): MagicRoute {
+/** Синхронный черновой роут (без lookup username → id). */
+export function resolveMagicRoute(currentUserId: string, currentUsername = ''): MagicRoute {
   const target = getMagicTargetFromUrl();
   if (!target) return { kind: 'host' };
-  if (target === currentUserId) return { kind: 'self' };
-  return { kind: 'guest', peerId: target };
+  const t = target.trim();
+  if (t === currentUserId) return { kind: 'self' };
+  if (currentUsername && t.toLowerCase() === currentUsername.toLowerCase()) {
+    return { kind: 'self' };
+  }
+  return { kind: 'guest', peerId: t };
 }
 
 export function clearMagicParamFromUrl(): void {

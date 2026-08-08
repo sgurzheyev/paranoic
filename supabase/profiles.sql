@@ -12,8 +12,13 @@ create table if not exists public.profiles (
   color text not null default '#34d399',
   avatar_url text,
   theme_fon text,
+  username text,
   updated_at timestamptz not null default now()
 );
+
+create unique index if not exists profiles_username_unique
+  on public.profiles (lower(username))
+  where username is not null and length(trim(username)) > 0;
 
 alter table public.profiles enable row level security;
 
