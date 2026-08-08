@@ -2559,6 +2559,9 @@ textarea {
   align-items: center;
   justify-content: center;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 .map-avatar-marker:hover,

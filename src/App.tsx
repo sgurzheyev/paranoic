@@ -1688,6 +1688,7 @@ export default function App() {
           );
         }}
         onCallUser={(user) => {
+          // Мгновенный видеовызов без промежуточных меню.
           pendingStartCallRef.current = true;
           void connectToUser(
             user.userId,

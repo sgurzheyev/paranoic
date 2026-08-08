@@ -26,8 +26,8 @@ type GlobeLobbyProps = {
 
 const FOCUS_ZOOM = 6.2;
 const WORLD_ZOOM = 2.1;
-/** Интервал двойного тапа по маркеру (ms). */
-const MARKER_DOUBLE_TAP_MS = 340;
+/** Интервал двойного тапа/клика по маркеру (ms). */
+const MARKER_DOUBLE_TAP_MS = 300;
 
 type MarkerTapHandlers = {
   onSingle: () => void;
@@ -52,8 +52,9 @@ function buildMarkerElement(
   btn.setAttribute('aria-label', person.isMe ? 'Вы' : person.name);
   btn.title = person.isMe
     ? 'Вы на карте'
-    : 'Тап — чат · двойной тап — звонок';
+    : 'Тап — чат · двойной тап — видеозвонок';
   btn.style.setProperty('--marker-color', person.color || '#60a5fa');
+  btn.style.touchAction = 'manipulation';
 
   if (person.avatarUrl) {
     const img = document.createElement('img');
@@ -88,6 +89,8 @@ function buildMarkerElement(
   let lastTapAt = 0;
   let lastDoubleAt = 0;
   let singleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** После touch-двойного тапа глушим следующий click (ghost click). */
+  let suppressClickUntil = 0;
 
   const clearSingleTimer = () => {
     if (singleTimer != null) {
@@ -105,10 +108,9 @@ function buildMarkerElement(
     handlers.onDouble();
   };
 
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleTap = (fromTouch: boolean) => {
     const now = Date.now();
+    if (fromTouch) suppressClickUntil = now + 500;
     if (now - lastTapAt < MARKER_DOUBLE_TAP_MS) {
       fireDouble();
       return;
@@ -119,11 +121,30 @@ function buildMarkerElement(
       singleTimer = null;
       if (lastTapAt === now) handlers.onSingle();
     }, MARKER_DOUBLE_TAP_MS);
+  };
+
+  btn.addEventListener(
+    'touchend',
+    (e) => {
+      // Надёжный двойной тап на мобилках (до ghost click).
+      e.preventDefault();
+      e.stopPropagation();
+      handleTap(true);
+    },
+    { passive: false }
+  );
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (Date.now() < suppressClickUntil) return;
+    handleTap(false);
   });
 
   btn.addEventListener('dblclick', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    suppressClickUntil = Date.now() + 500;
     fireDouble();
   });
 
@@ -152,6 +173,7 @@ export default function GlobeLobby({
   const [mapReady, setMapReady] = useState(false);
   const [tokenMissing, setTokenMissing] = useState(false);
   const [selected, setSelected] = useState<MapPerson | null>(null);
+  const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(WORLD_ZOOM);
 
   const contacts = useMemo(
@@ -168,6 +190,7 @@ export default function GlobeLobby({
     const map = mapRef.current;
     if (!map) return;
     if (openCard && !person.isMe) setSelected(person);
+    setFocusedContactId(person.userId);
 
     const atAntarctica =
       Math.abs(person.lat - ANTARCTICA.lat) < 0.6 &&
@@ -175,11 +198,13 @@ export default function GlobeLobby({
 
     map.flyTo({
       center: [person.lng, person.lat],
-      zoom: atAntarctica ? Math.max(map.getZoom(), 4.2) : Math.max(map.getZoom(), FOCUS_ZOOM),
-      duration: 2000,
+      zoom: atAntarctica
+        ? Math.max(map.getZoom(), 4.2)
+        : Math.max(map.getZoom(), FOCUS_ZOOM),
+      duration: 2200,
       essential: true,
-      curve: 1.55,
-      speed: 0.9,
+      curve: 1.6,
+      easing: (t) => 1 - Math.pow(1 - t, 3),
       padding: { top: 100, bottom: 200, left: 48, right: 48 },
     });
   };
@@ -359,7 +384,7 @@ export default function GlobeLobby({
             flyToPerson(current, false);
             return;
           }
-          // Двойной тап → мгновенный P2P-вызов.
+          // Двойной тап → мгновенный P2P-видеовызов без меню.
           setSelected(null);
           onCallUserRef.current(current);
         },
@@ -433,7 +458,7 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Тап по аватарке — чат · двойной тап — звонок. Контакт в ленте — плавный flyTo.
+            Тап — чат · двойной тап — видеозвонок. Контакт в ленте — плавный flyTo.
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
@@ -451,9 +476,13 @@ export default function GlobeLobby({
                   <button
                     key={c.userId}
                     type="button"
-                    className="flex w-16 shrink-0 flex-col items-center gap-1.5"
+                    className={`flex w-16 shrink-0 flex-col items-center gap-1.5 rounded-xl p-1 transition ${
+                      focusedContactId === c.userId
+                        ? 'bg-white/15 ring-1 ring-white/30'
+                        : 'hover:bg-white/10'
+                    }`}
                     onClick={() => {
-                      // Фокус камеры на GPS / Антарктиду (Ghost Mode).
+                      // Плавный перелёт камеры к GPS / Антарктиде (Ghost Mode).
                       flyToPerson(c, false);
                     }}
                     aria-label={`Показать ${c.name} на карте`}
