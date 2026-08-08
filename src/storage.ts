@@ -20,6 +20,8 @@ export type StoredMessage = {
   deliveryStatus?: DeliveryStatus;
   /** epoch ms — для эфемерной очистки. */
   createdAt?: number;
+  /** Лайк ❤️ (двойной тап). */
+  hearted?: boolean;
 };
 
 const messagesDb = localforage.createInstance({

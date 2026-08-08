@@ -123,6 +123,9 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
+  const [peerTyping, setPeerTyping] = useState(false);
+  /** id → счётчик вспышек ❤️ для перезапуска анимации. */
+  const [heartBursts, setHeartBursts] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
   const [roomId, setRoomId] = useState('');
   const [magicLink, setMagicLink] = useState(() => buildMagicLink(getOrCreateIdentity().id));
@@ -174,6 +177,10 @@ export default function App() {
   const ensureP2PRef = useRef<() => P2PConnection>(() => {
     throw new Error('P2P not ready');
   });
+  const typingIdleTimerRef = useRef<number | null>(null);
+  const typingSentRef = useRef(false);
+  const peerTypingClearRef = useRef<number | null>(null);
+  const lastBubbleTapRef = useRef<{ id: string; at: number } | null>(null);
 
   useEffect(() => {
     guestPeerIdRef.current = guestPeerId;
@@ -254,16 +261,45 @@ export default function App() {
     [revokeMediaUrls]
   );
 
+  const stopTypingPing = useCallback(() => {
+    if (typingIdleTimerRef.current != null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+      typingIdleTimerRef.current = null;
+    }
+    if (typingSentRef.current) {
+      typingSentRef.current = false;
+      p2pRef.current?.sendTyping(false);
+    }
+  }, []);
+
+  const pingTyping = useCallback(() => {
+    if (!p2pRef.current?.isReady) return;
+    if (!typingSentRef.current) {
+      typingSentRef.current = true;
+      p2pRef.current.sendTyping(true);
+    }
+    if (typingIdleTimerRef.current != null) {
+      window.clearTimeout(typingIdleTimerRef.current);
+    }
+    typingIdleTimerRef.current = window.setTimeout(() => {
+      typingIdleTimerRef.current = null;
+      typingSentRef.current = false;
+      p2pRef.current?.sendTyping(false);
+    }, 1800);
+  }, []);
+
   const setActivePeer = useCallback(
     async (id: string | null, label?: string) => {
       peerIdRef.current = id;
       setPeerId(id);
       if (label) setPeerLabel(label);
+      setPeerTyping(false);
+      stopTypingPing();
       const conv = id ? conversationId(identityRef.current.id, id) : null;
       conversationIdRef.current = conv;
       await hydrateConversation(conv);
     },
-    [hydrateConversation]
+    [hydrateConversation, stopTypingPing]
   );
 
   const addMessage = useCallback(async (message: ChatMessage, persist = true) => {
@@ -308,6 +344,48 @@ export default function App() {
       await removeOutboxMany(ids);
     }
   }, []);
+
+  const applyHeart = useCallback((id: string, animate: boolean) => {
+    if (!id) return;
+    if (animate) {
+      setHeartBursts((prev) => ({ ...prev, [id]: (prev[id] ?? 0) + 1 }));
+    }
+    setMessages((prev) => {
+      const target = prev.find((m) => m.id === id);
+      if (target?.hearted) return prev;
+      return prev.map((m) => (m.id === id ? { ...m, hearted: true } : m));
+    });
+    const conv = conversationIdRef.current;
+    if (conv) void updateStoredMessage(conv, id, { hearted: true });
+  }, []);
+
+  const likeMessage = useCallback(
+    (id: string) => {
+      applyHeart(id, true);
+      p2pRef.current?.sendReaction(id, '❤️');
+    },
+    [applyHeart]
+  );
+
+  const onBubbleTap = useCallback(
+    (id: string, target: EventTarget | null) => {
+      if (
+        target instanceof Element &&
+        target.closest('a, button, video, audio, input, textarea')
+      ) {
+        return;
+      }
+      const now = Date.now();
+      const last = lastBubbleTapRef.current;
+      if (last && last.id === id && now - last.at < 340) {
+        lastBubbleTapRef.current = null;
+        likeMessage(id);
+      } else {
+        lastBubbleTapRef.current = { id, at: now };
+      }
+    },
+    [likeMessage]
+  );
 
   const flushOutbox = useCallback(async () => {
     const p2p = p2pRef.current;
@@ -513,6 +591,9 @@ export default function App() {
                 }
               })();
             }
+          } else {
+            setPeerTyping(false);
+            typingSentRef.current = false;
           }
           if (status === 'waiting-answer') {
             setIncomingConnection(false);
@@ -581,6 +662,7 @@ export default function App() {
             };
             const text = await decryptMessage(packet.cipher, packet.iv, key);
             const id = packet.id || `m-${Date.now()}`;
+            setPeerTyping(false);
             await addMessage({
               id,
               sender: packet.sender || 'Близкий',
@@ -602,6 +684,22 @@ export default function App() {
         },
         onMessageDelivery: (ids, status) => {
           void patchDeliveryStatus(ids, status);
+        },
+        onTyping: (active) => {
+          setPeerTyping(active);
+          if (peerTypingClearRef.current != null) {
+            window.clearTimeout(peerTypingClearRef.current);
+            peerTypingClearRef.current = null;
+          }
+          if (active) {
+            peerTypingClearRef.current = window.setTimeout(() => {
+              peerTypingClearRef.current = null;
+              setPeerTyping(false);
+            }, 3200);
+          }
+        },
+        onMessageReaction: (id) => {
+          applyHeart(id, true);
         },
         onFileIncoming: (meta) => {
           setMessages((prev) => {
@@ -697,7 +795,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer]);
+  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -953,6 +1051,7 @@ export default function App() {
       deliveryStatus: 'sending',
     });
     setInputText('');
+    stopTypingPing();
     setError('');
     setScreen('chat');
 
@@ -1486,7 +1585,25 @@ export default function App() {
                         size="sm"
                       />
                     )}
-                    <div className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>
+                    <div
+                      className={`bubble ${m.mine ? 'mine' : 'theirs'}${m.hearted ? ' hearted' : ''}`}
+                      onClick={(e) => onBubbleTap(m.id, e.target)}
+                      role="presentation"
+                    >
+                      {heartBursts[m.id] != null && (
+                        <span
+                          key={heartBursts[m.id]}
+                          className="heart-burst"
+                          aria-hidden
+                        >
+                          ❤️
+                        </span>
+                      )}
+                      {m.hearted && (
+                        <span className="bubble-heart" aria-label="Нравится">
+                          ❤️
+                        </span>
+                      )}
                       {m.kind === 'text' && <p>{m.text}</p>}
                       {(m.kind === 'file-transfer' || m.kind === 'file-pending') && (
                         <div className="file-transfer-card">
@@ -1588,6 +1705,23 @@ export default function App() {
               )}
             </div>
 
+            <div
+              className={`typing-indicator${peerTyping ? ' visible' : ''}`}
+              aria-live="polite"
+              aria-hidden={!peerTyping}
+            >
+              {peerTyping ? (
+                <>
+                  <span className="typing-dots" aria-hidden>
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  Печатает…
+                </>
+              ) : null}
+            </div>
+
             <form className="chat-compose" onSubmit={sendText}>
               <button
                 type="button"
@@ -1600,7 +1734,12 @@ export default function App() {
               </button>
               <input
                 value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInputText(value);
+                  if (value.trim()) pingTyping();
+                  else stopTypingPing();
+                }}
                 placeholder={
                   peerId
                     ? connected

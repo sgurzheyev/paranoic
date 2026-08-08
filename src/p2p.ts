@@ -68,6 +68,10 @@ export type P2PHandlers = {
   onPeerHello?: (peer: PeerIdentity) => void;
   /** ACK доставки/прочтения от пира. */
   onMessageDelivery?: (ids: string[], status: 'delivered' | 'read') => void;
+  /** Пир печатает / перестал печатать. */
+  onTyping?: (active: boolean) => void;
+  /** Реакция на сообщение (например ❤️). */
+  onMessageReaction?: (id: string, emoji: string) => void;
 };
 
 type SignalJoin = { type: 'join'; peerId: string };
@@ -181,7 +185,9 @@ type ControlPacket =
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number; msgId?: string }
   | { t: 'file-done'; id: string; msgId?: string }
   | { t: 'msg-delivered'; ids: string[]; msgId?: string }
-  | { t: 'msg-read'; ids: string[]; msgId?: string };
+  | { t: 'msg-read'; ids: string[]; msgId?: string }
+  | { t: 'typing'; active: boolean; msgId?: string }
+  | { t: 'msg-reaction'; id: string; emoji: string; msgId?: string };
 
 /** Звонок через Realtime как запасной канал к DataChannel. */
 type SignalCtrl = { peerId: string; packet: ControlPacket; msgId: string };
@@ -292,6 +298,7 @@ const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     echoCancellation: true,
     noiseSuppression: true,
+    autoGainControl: true,
   },
   video: VIDEO_LEVEL_CONSTRAINTS.high,
 };
@@ -530,6 +537,27 @@ export class P2PConnection {
     this.sendControl({
       t: status === 'delivered' ? 'msg-delivered' : 'msg-read',
       ids: unique,
+      msgId: this.newMsgId(),
+    });
+  }
+
+  /** Лёгкий пинг «печатает…» по DataChannel. */
+  sendTyping(active: boolean): void {
+    if (!this.isReady) return;
+    this.sendControl({
+      t: 'typing',
+      active: Boolean(active),
+      msgId: this.newMsgId(),
+    });
+  }
+
+  /** Реакция на сообщение (двойной тап → ❤️). */
+  sendReaction(id: string, emoji = '❤️'): void {
+    if (!id || !this.isReady) return;
+    this.sendControl({
+      t: 'msg-reaction',
+      id,
+      emoji: emoji || '❤️',
       msgId: this.newMsgId(),
     });
   }
@@ -1475,6 +1503,17 @@ export class P2PConnection {
         ids,
         packet.t === 'msg-delivered' ? 'delivered' : 'read'
       );
+      return;
+    }
+
+    if (packet.t === 'typing') {
+      this.handlers.onTyping?.(Boolean(packet.active));
+      return;
+    }
+
+    if (packet.t === 'msg-reaction') {
+      if (!packet.id) return;
+      this.handlers.onMessageReaction?.(packet.id, packet.emoji || '❤️');
       return;
     }
   }
