@@ -9,7 +9,6 @@ import {
   CheckCheck,
   Clock,
   X,
-  PhoneOff,
   Unplug,
   Send,
   ArrowLeft,
@@ -19,16 +18,16 @@ import {
   PhoneIncoming,
   Settings2,
   Paperclip,
-  Monitor,
-  MonitorOff,
   Ghost,
   Timer,
   RefreshCw,
+  PanelLeft,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
+import CallOverlay from './CallOverlay';
 import {
   deriveKeyFromRoom,
   exportKey,
@@ -164,6 +163,10 @@ export default function App() {
     return route.kind !== 'guest';
   });
   const [incomingConnection, setIncomingConnection] = useState(false);
+  /** PiP свёрнут / развёрнут на весь экран. */
+  const [callExpanded, setCallExpanded] = useState(false);
+  /** Мобильный сайдбар контактов в мессенджере. */
+  const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -674,7 +677,8 @@ export default function App() {
               void (async () => {
                 try {
                   await p2pRef.current?.startCall();
-                  setScreen('call');
+                  setCallExpanded(false);
+                  setScreen('chat');
                 } catch (e) {
                   setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
                 }
@@ -691,14 +695,18 @@ export default function App() {
         onSignalingStatus: (status) => setSignalingStatus(status),
         onCallState: (state) => {
           setCallState(state);
-          if (state === 'in-call' || state === 'calling' || state === 'ringing') {
-            setScreen('call');
+          if (state === 'ringing') {
+            setCallExpanded(true);
+          } else if (state === 'in-call' || state === 'calling') {
+            setCallExpanded(false);
+            setScreen((s) => (s === 'call' || s === 'home' ? 'chat' : s));
           }
           if (state === 'idle') {
             attachLocalVideo(null);
             setScreenSharing(false);
             setNetworkQuality('good');
-            setScreen((s) => (s === 'call' ? 'home' : s));
+            setCallExpanded(false);
+            setScreen((s) => (s === 'call' ? 'chat' : s));
           }
         },
         onNetworkQuality: (quality) => setNetworkQuality(quality),
@@ -712,11 +720,13 @@ export default function App() {
           setError('Вызов отклонён');
         },
         onIncomingCall: () => {
-          setScreen('call');
+          setCallExpanded(true);
+          setScreen((s) => (s === 'home' ? 'chat' : s));
         },
         onCallDeclined: () => {
           setError('Звонок отклонён');
-          setScreen('home');
+          setCallExpanded(false);
+          setScreen((s) => (s === 'call' ? 'chat' : s));
         },
         onRemoteStream: (stream) => {
           if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
@@ -1018,10 +1028,10 @@ export default function App() {
   }, [appMode, sessionEpoch, guestPeerId, setActivePeer]);
 
   useEffect(() => {
-    if (screen === 'call' && p2pRef.current) {
+    if (callState !== 'idle' && p2pRef.current) {
       attachLocalVideo(p2pRef.current.getLocalStream());
     }
-  }, [screen, callState, attachLocalVideo]);
+  }, [callState, callExpanded, attachLocalVideo]);
 
   const copyMagicLink = async () => {
     await navigator.clipboard.writeText(magicLink);
@@ -1029,11 +1039,16 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const connectToUser = async (targetUserId: string, label?: string) => {
+  const connectToUser = async (
+    targetUserId: string,
+    label?: string,
+    opts?: { openChat?: boolean }
+  ) => {
     if (targetUserId === identity.id) return;
     setError('');
     setAppMode('paranoic');
-    setScreen('home');
+    setScreen(opts?.openChat ? 'chat' : 'home');
+    setMessengerSidebarOpen(false);
     setHostingSelf(false);
     setGuestPeerId(targetUserId);
     guestPeerIdRef.current = targetUserId;
@@ -1072,7 +1087,8 @@ export default function App() {
     try {
       await ensureP2P().startCall();
       attachLocalVideo(null);
-      setScreen('call');
+      setCallExpanded(false);
+      setScreen('chat');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
     }
@@ -1098,16 +1114,19 @@ export default function App() {
     try {
       const stream = await ensureP2P().acceptCall();
       attachLocalVideo(stream);
-      setScreen('call');
+      setCallExpanded(false);
+      setScreen('chat');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
-      setScreen('home');
+      setCallExpanded(false);
+      setScreen('chat');
     }
   };
 
   const declineMediaCall = async () => {
     await ensureP2P().declineCall();
-    setScreen('home');
+    setCallExpanded(false);
+    setScreen('chat');
   };
 
   const hangUp = async () => {
@@ -1115,7 +1134,8 @@ export default function App() {
     attachLocalVideo(null);
     setScreenSharing(false);
     setNetworkQuality('good');
-    setScreen('home');
+    setCallExpanded(false);
+    setScreen('chat');
   };
 
   const toggleScreenShare = async () => {
@@ -1457,7 +1477,10 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell themed" style={shellStyle}>
+    <div
+      className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}`}
+      style={shellStyle}
+    >
       {profileOpen && (
         <ProfileModal
           identity={identity}
@@ -1780,9 +1803,88 @@ export default function App() {
         )}
 
         {screen === 'chat' && (
-          <section className="chat">
+          <section className="messenger">
+            <aside
+              className={`messenger-sidebar${messengerSidebarOpen ? ' open' : ''}`}
+              aria-label="Контакты"
+            >
+              <div className="messenger-sidebar-head">
+                <button
+                  type="button"
+                  className="text-link"
+                  onClick={() => {
+                    setMessengerSidebarOpen(false);
+                    setScreen('home');
+                  }}
+                >
+                  <ArrowLeft size={16} /> Профиль
+                </button>
+                <h2>Чаты</h2>
+              </div>
+              <ul className="messenger-contacts">
+                {contacts.length === 0 ? (
+                  <li className="empty-contacts">Пока нет контактов</li>
+                ) : (
+                  contacts.map((c) => {
+                    const online = onlineIds.has(c.id);
+                    const active = peerId === c.id;
+                    return (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          className={`messenger-contact${active ? ' active' : ''}`}
+                          onClick={() => {
+                            if (active) {
+                              setMessengerSidebarOpen(false);
+                              return;
+                            }
+                            void connectToUser(c.id, c.name, { openChat: true });
+                          }}
+                        >
+                          <Avatar
+                            name={c.name}
+                            color={c.color}
+                            avatarUrl={
+                              c.avatarUrl ||
+                              presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                            }
+                            size="sm"
+                            online={online ? true : 'off'}
+                          />
+                          <span className="contact-info">
+                            <span className="contact-name">{c.name}</span>
+                            <span className="contact-status">
+                              {online ? 'в сети' : 'не в сети'}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </aside>
+
+            {messengerSidebarOpen && (
+              <button
+                type="button"
+                className="messenger-sidebar-scrim"
+                aria-label="Закрыть список"
+                onClick={() => setMessengerSidebarOpen(false)}
+              />
+            )}
+
+            <div className="messenger-pane chat">
             <div className="chat-top">
-              <button type="button" className="text-link" onClick={() => setScreen('home')}>
+              <button
+                type="button"
+                className="icon-btn messenger-sidebar-toggle"
+                aria-label="Контакты"
+                onClick={() => setMessengerSidebarOpen((v) => !v)}
+              >
+                <PanelLeft size={20} />
+              </button>
+              <button type="button" className="text-link chat-back-home" onClick={() => setScreen('home')}>
                 <ArrowLeft size={16} /> Назад
               </button>
               <div className="chat-peer">
@@ -1792,16 +1894,30 @@ export default function App() {
                   avatarUrl={peerAvatarUrl}
                   size="sm"
                 />
-                <span>Переписка с {peerLabel}</span>
+                <div className="chat-peer-meta">
+                  <span className="chat-peer-name">{peerLabel}</span>
+                  <span className="chat-peer-sub">
+                    {peerTyping ? 'печатает…' : connected ? 'на связи' : 'офлайн'}
+                  </span>
+                </div>
               </div>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => void startCall()}
+                aria-label="Позвонить"
+                disabled={!connected}
+              >
+                <Phone size={20} />
+              </button>
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Прикрепить файл"
-                disabled={!connected}
+                disabled={!peerId}
               >
-                <Paperclip size={22} />
+                <Paperclip size={20} />
               </button>
             </div>
 
@@ -2031,86 +2147,25 @@ export default function App() {
                 <Send size={22} />
               </button>
             </form>
-          </section>
-        )}
-
-        {screen === 'call' && (
-          <section className="call">
-            {callState === 'ringing' ? (
-              <div className="incoming-media-card">
-                <div className="avatar lg" style={{ background: 'var(--call)' }}>
-                  <PhoneIncoming size={28} />
-                </div>
-                <h2 className="incoming-media-title">Входящий звонок</h2>
-                <p className="incoming-media-sub">{peerLabel}</p>
-                <div className="incoming-call-actions row">
-                  <button
-                    type="button"
-                    className="accept-file-btn large"
-                    onClick={() => void acceptMediaCall()}
-                  >
-                    Принять
-                  </button>
-                  <button
-                    type="button"
-                    className="decline-call-btn large"
-                    onClick={() => void declineMediaCall()}
-                  >
-                    Отклонить
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="call-stage">
-                  <div className="video-circle remote">
-                    <video ref={remoteVideoRef} autoPlay playsInline />
-                    <span className="video-label">{peerLabel}</span>
-                  </div>
-                  <div className="video-circle local">
-                    <video ref={localVideoRef} autoPlay playsInline muted />
-                    <span className="video-label">Вы</span>
-                  </div>
-                </div>
-                <p className="call-status">
-                  {callState === 'calling'
-                    ? 'Ожидаем ответа… Камера откроется после «Принять»'
-                    : callState === 'in-call'
-                      ? screenSharing
-                        ? 'Демонстрация экрана'
-                        : networkQuality === 'critical'
-                          ? 'Слабая сеть — только аудио'
-                          : networkQuality === 'poor'
-                            ? 'Слабая сеть — понижено качество видео'
-                            : 'Разговор идёт'
-                      : 'Звонок'}
-                </p>
-                <div className="call-actions">
-                  {callState === 'in-call' && (
-                    <button
-                      type="button"
-                      className={`call-glass-btn ${screenSharing ? 'active' : ''}`}
-                      onClick={() => void toggleScreenShare()}
-                      aria-pressed={screenSharing}
-                    >
-                      {screenSharing ? <MonitorOff size={22} /> : <Monitor size={22} />}
-                      {screenSharing ? 'Камера' : 'Показать экран'}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="mega-btn hangup"
-                    onClick={() => void hangUp()}
-                  >
-                    <PhoneOff size={32} />
-                    {callState === 'calling' ? 'Отменить' : 'Завершить'}
-                  </button>
-                </div>
-              </>
-            )}
+            </div>
           </section>
         )}
       </main>
+
+      <CallOverlay
+        callState={callState}
+        peerLabel={peerLabel}
+        screenSharing={screenSharing}
+        networkQuality={networkQuality}
+        expanded={callExpanded}
+        onExpandedChange={setCallExpanded}
+        localVideoRef={localVideoRef}
+        remoteVideoRef={remoteVideoRef}
+        onAccept={() => void acceptMediaCall()}
+        onDecline={() => void declineMediaCall()}
+        onHangUp={() => void hangUp()}
+        onToggleScreenShare={() => void toggleScreenShare()}
+      />
 
       <input
         ref={fileInputRef}
