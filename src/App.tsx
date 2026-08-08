@@ -1466,11 +1466,19 @@ export default function App() {
           settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
         }
         onChatUser={(user) => {
-          void connectToUser(user.userId, user.isContact ? user.name : 'Незнакомец');
+          void connectToUser(
+            user.userId,
+            user.isContact ? user.name : 'Незнакомец',
+            { openChat: true }
+          );
         }}
         onCallUser={(user) => {
           pendingStartCallRef.current = true;
-          void connectToUser(user.userId, user.isContact ? user.name : 'Незнакомец');
+          void connectToUser(
+            user.userId,
+            user.isContact ? user.name : 'Незнакомец',
+            { openChat: true }
+          );
         }}
       />
     );

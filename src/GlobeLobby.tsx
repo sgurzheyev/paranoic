@@ -26,11 +26,18 @@ type GlobeLobbyProps = {
 
 const FOCUS_ZOOM = 6.2;
 const WORLD_ZOOM = 2.1;
+/** Интервал двойного тапа по маркеру (ms). */
+const MARKER_DOUBLE_TAP_MS = 340;
+
+type MarkerTapHandlers = {
+  onSingle: () => void;
+  onDouble: () => void;
+};
 
 function buildMarkerElement(
   person: MapPerson,
   selected: boolean,
-  onClick: () => void
+  handlers: MarkerTapHandlers
 ): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -43,6 +50,9 @@ function buildMarkerElement(
     .filter(Boolean)
     .join(' ');
   btn.setAttribute('aria-label', person.isMe ? 'Вы' : person.name);
+  btn.title = person.isMe
+    ? 'Вы на карте'
+    : 'Тап — чат · двойной тап — звонок';
   btn.style.setProperty('--marker-color', person.color || '#60a5fa');
 
   if (person.avatarUrl) {
@@ -75,10 +85,46 @@ function buildMarkerElement(
     btn.appendChild(tag);
   }
 
+  let lastTapAt = 0;
+  let lastDoubleAt = 0;
+  let singleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearSingleTimer = () => {
+    if (singleTimer != null) {
+      clearTimeout(singleTimer);
+      singleTimer = null;
+    }
+  };
+
+  const fireDouble = () => {
+    const now = Date.now();
+    if (now - lastDoubleAt < 450) return;
+    lastDoubleAt = now;
+    clearSingleTimer();
+    lastTapAt = 0;
+    handlers.onDouble();
+  };
+
   btn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    onClick();
+    const now = Date.now();
+    if (now - lastTapAt < MARKER_DOUBLE_TAP_MS) {
+      fireDouble();
+      return;
+    }
+    lastTapAt = now;
+    clearSingleTimer();
+    singleTimer = setTimeout(() => {
+      singleTimer = null;
+      if (lastTapAt === now) handlers.onSingle();
+    }, MARKER_DOUBLE_TAP_MS);
+  });
+
+  btn.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fireDouble();
   });
 
   return btn;
@@ -95,6 +141,13 @@ export default function GlobeLobby({
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
   const selectedIdRef = useRef<string | null>(null);
+  const peopleRef = useRef(people);
+  const onChatUserRef = useRef(onChatUser);
+  const onCallUserRef = useRef(onCallUser);
+
+  peopleRef.current = people;
+  onChatUserRef.current = onChatUser;
+  onCallUserRef.current = onCallUser;
 
   const [mapReady, setMapReady] = useState(false);
   const [tokenMissing, setTokenMissing] = useState(false);
@@ -110,19 +163,29 @@ export default function GlobeLobby({
 
   selectedIdRef.current = selected?.userId ?? null;
 
-  const flyToPerson = (person: MapPerson, openCard = true) => {
+  /** Плавный flyTo к GPS (или Антарктиде при Ghost Mode). */
+  const flyToPerson = (person: MapPerson, openCard = false) => {
     const map = mapRef.current;
     if (!map) return;
     if (openCard && !person.isMe) setSelected(person);
+
+    const atAntarctica =
+      Math.abs(person.lat - ANTARCTICA.lat) < 0.6 &&
+      Math.abs(person.lng - ANTARCTICA.lng) < 0.6;
+
     map.flyTo({
       center: [person.lng, person.lat],
-      zoom: Math.max(map.getZoom(), FOCUS_ZOOM),
-      speed: 1.15,
-      curve: 1.42,
+      zoom: atAntarctica ? Math.max(map.getZoom(), 4.2) : Math.max(map.getZoom(), FOCUS_ZOOM),
+      duration: 2000,
       essential: true,
-      padding: { top: 80, bottom: 180, left: 40, right: 40 },
+      curve: 1.55,
+      speed: 0.9,
+      padding: { top: 100, bottom: 200, left: 48, right: 48 },
     });
   };
+
+  const resolvePerson = (userId: string): MapPerson | undefined =>
+    peopleRef.current.find((p) => p.userId === userId);
 
   /** Инициализация Mapbox Standard night. */
   useEffect(() => {
@@ -279,13 +342,27 @@ export default function GlobeLobby({
         continue;
       }
 
-      const el = buildMarkerElement(person, selectedNow, () => {
-        if (person.isMe) {
-          flyToPerson(person, false);
-          return;
-        }
-        setSelected(person);
-        flyToPerson(person, false);
+      const el = buildMarkerElement(person, selectedNow, {
+        onSingle: () => {
+          const current = resolvePerson(person.userId) ?? person;
+          if (current.isMe) {
+            flyToPerson(current, false);
+            return;
+          }
+          // Одиночный тап → сразу полноэкранный чат.
+          setSelected(null);
+          onChatUserRef.current(current);
+        },
+        onDouble: () => {
+          const current = resolvePerson(person.userId) ?? person;
+          if (current.isMe) {
+            flyToPerson(current, false);
+            return;
+          }
+          // Двойной тап → мгновенный P2P-вызов.
+          setSelected(null);
+          onCallUserRef.current(current);
+        },
       });
 
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
@@ -356,7 +433,7 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Mapbox Standard · ночь. Нажмите аватар — звонок или чат.
+            Тап по аватарке — чат · двойной тап — звонок. Контакт в ленте — плавный flyTo.
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
@@ -375,8 +452,11 @@ export default function GlobeLobby({
                     key={c.userId}
                     type="button"
                     className="flex w-16 shrink-0 flex-col items-center gap-1.5"
-                    onClick={() => flyToPerson(c)}
-                    aria-label={`Найти ${c.name} на карте`}
+                    onClick={() => {
+                      // Фокус камеры на GPS / Антарктиду (Ghost Mode).
+                      flyToPerson(c, false);
+                    }}
+                    aria-label={`Показать ${c.name} на карте`}
                   >
                     <span
                       className="relative h-12 w-12 overflow-hidden rounded-full border-2 border-white/50 shadow-md"
