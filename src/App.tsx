@@ -31,9 +31,18 @@ import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
 import CallOverlay from './CallOverlay';
+import IncomingCallModal from './IncomingCallModal';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
+  CallInbox,
+  callerDisplayName,
+  newCallId,
+  type CallerInfo,
+} from './callSignaling';
+import {
+  bindAudioUnlock,
+  closeActiveNotification,
   playReceiveSound,
   playSendSound,
   startRingtone,
@@ -192,6 +201,11 @@ export default function App() {
     return route.kind !== 'guest';
   });
   const [incomingConnection, setIncomingConnection] = useState(false);
+  /** Caller ID из Realtime call_offer / DC invite. */
+  const [incomingRing, setIncomingRing] = useState<{
+    callId: string;
+    from: CallerInfo;
+  } | null>(null);
   /** PiP свёрнут / развёрнут на весь экран. */
   const [callExpanded, setCallExpanded] = useState(false);
   /** Мобильный сайдбар контактов в мессенджере. */
@@ -225,6 +239,17 @@ export default function App() {
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
   const pendingStartCallRef = useRef(false);
+  /** После Accept по Realtime — принять WebRTC, когда придёт call-invite. */
+  const pendingRingAcceptRef = useRef(false);
+  const pendingAcceptCallerRef = useRef<CallerInfo | null>(null);
+  const outboundCallIdRef = useRef<string | null>(null);
+  const callInboxRef = useRef<CallInbox | null>(null);
+  const peerMetaRef = useRef({
+    id: '',
+    label: 'Близкий',
+    avatarUrl: '',
+    color: '#60a5fa',
+  });
   const screenRef = useRef<Screen>(screen);
   const pendingReadAckRef = useRef<Set<string>>(new Set());
   const flushOutboxRef = useRef<() => Promise<void>>(async () => undefined);
@@ -613,6 +638,71 @@ export default function App() {
   }, [identity]);
 
   useEffect(() => {
+    peerMetaRef.current = {
+      id: peerId || guestPeerId || '',
+      label: peerLabel,
+      avatarUrl: peerAvatarUrl,
+      color: peerColor,
+    };
+  }, [peerId, guestPeerId, peerLabel, peerAvatarUrl, peerColor]);
+
+  /** Разблокировка автоплея рингтона после первого жеста. */
+  useEffect(() => bindAudioUnlock(), []);
+
+  /** Постоянный слушатель call_offer на calls:{myId}. */
+  useEffect(() => {
+    if (!hasSupabaseConfig()) return;
+    let cancelled = false;
+    const inbox = new CallInbox({
+      onOffer: (offer) => {
+        if (cancelled) return;
+        setIncomingRing({ callId: offer.callId, from: offer.from });
+        setPeerLabel(offer.from.name || callerDisplayName(offer.from));
+        setPeerAvatarUrl(offer.from.avatarUrl || '');
+        setPeerColor(offer.from.color || '#60a5fa');
+        startRingtone();
+        notifyIfHidden('Входящий звонок', {
+          body: `Вам звонит ${callerDisplayName(offer.from)}`,
+          tag: 'paranoic-call',
+        });
+      },
+      onReject: () => {
+        if (cancelled) return;
+        stopRingtone();
+        closeActiveNotification();
+        outboundCallIdRef.current = null;
+        setError('Звонок отклонён');
+        void p2pRef.current?.hangUp();
+        setCallState('idle');
+      },
+      onCancel: (event) => {
+        if (cancelled) return;
+        setIncomingRing((prev) => {
+          if (prev && prev.callId !== event.callId && prev.from.id !== event.fromUserId) {
+            return prev;
+          }
+          return null;
+        });
+        pendingRingAcceptRef.current = false;
+        stopRingtone();
+        closeActiveNotification();
+        if (p2pRef.current?.currentCallState === 'ringing') {
+          void p2pRef.current.declineCall();
+        }
+      },
+    });
+    callInboxRef.current = inbox;
+    void inbox.start(identity.id).catch((e) => {
+      console.warn('[paranoic call inbox]', e);
+    });
+    return () => {
+      cancelled = true;
+      callInboxRef.current = null;
+      void inbox.stop();
+    };
+  }, [identity.id]);
+
+  useEffect(() => {
     peerIdRef.current = peerId;
   }, [peerId]);
 
@@ -732,6 +822,24 @@ export default function App() {
               pendingStartCallRef.current = false;
               void (async () => {
                 try {
+                  const me = identityRef.current;
+                  const target =
+                    guestPeerIdRef.current || peerIdRef.current || peerMetaRef.current.id;
+                  if (target) {
+                    const callId = newCallId();
+                    outboundCallIdRef.current = callId;
+                    void callInboxRef.current?.sendOffer(
+                      target,
+                      {
+                        id: me.id,
+                        name: me.name,
+                        username: me.username || '',
+                        avatarUrl: me.avatarUrl || '',
+                        color: me.color,
+                      },
+                      callId
+                    );
+                  }
                   await p2pRef.current?.startCall();
                   setCallExpanded(false);
                   setScreen('chat');
@@ -739,6 +847,9 @@ export default function App() {
                   setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
                 }
               })();
+            } else if (pendingRingAcceptRef.current) {
+              pendingRingAcceptRef.current = false;
+              // Ждём call-invite — auto-accept в onCallState/onIncomingCall.
             }
           } else {
             setPeerTyping(false);
@@ -753,14 +864,48 @@ export default function App() {
           setCallState(state);
           if (state === 'ringing') {
             setCallExpanded(true);
+            const meta = peerMetaRef.current;
+            setIncomingRing((prev) =>
+              prev ?? {
+                callId: newCallId(),
+                from: {
+                  id: meta.id || peerIdRef.current || 'peer',
+                  name: meta.label,
+                  username: '',
+                  avatarUrl: meta.avatarUrl,
+                  color: meta.color,
+                },
+              }
+            );
             startRingtone();
             notifyIfHidden('Входящий звонок', {
-              body: 'Вам звонят в Paranoic',
+              body: `Вам звонит ${meta.label || 'близкий'}`,
               tag: 'paranoic-call',
             });
+            if (pendingRingAcceptRef.current) {
+              pendingRingAcceptRef.current = false;
+              void (async () => {
+                try {
+                  stopRingtone();
+                  closeActiveNotification();
+                  const stream = await p2pRef.current?.acceptCall();
+                  if (stream) attachLocalVideo(stream);
+                  setIncomingRing(null);
+                  setCallExpanded(false);
+                  setScreen('chat');
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+                }
+              })();
+            }
           } else if (state === 'in-call' || state === 'calling') {
             setCallExpanded(false);
             stopRingtone();
+            closeActiveNotification();
+            if (state === 'in-call') {
+              setIncomingRing(null);
+              outboundCallIdRef.current = null;
+            }
             setScreen((s) => (s === 'call' || s === 'home' ? 'chat' : s));
           }
           if (state === 'idle') {
@@ -769,6 +914,10 @@ export default function App() {
             setNetworkQuality('good');
             setCallExpanded(false);
             stopRingtone();
+            closeActiveNotification();
+            if (!pendingRingAcceptRef.current) {
+              setIncomingRing(null);
+            }
             setScreen((s) => (s === 'call' ? 'chat' : s));
           }
         },
@@ -782,6 +931,16 @@ export default function App() {
             body: 'Кто-то открыл вашу магическую ссылку',
             tag: 'paranoic-link',
           });
+          if (pendingRingAcceptRef.current) {
+            void (async () => {
+              try {
+                await p2pRef.current?.acceptIncomingConnection();
+                setIncomingConnection(false);
+              } catch (e) {
+                console.warn('[paranoic] auto-accept join failed', e);
+              }
+            })();
+          }
         },
         onConnectionDeclined: () => {
           setIncomingConnection(false);
@@ -789,18 +948,50 @@ export default function App() {
           stopRingtone();
         },
         onIncomingCall: () => {
+          const meta = peerMetaRef.current;
+          setIncomingRing((prev) =>
+            prev ?? {
+              callId: newCallId(),
+              from: {
+                id: meta.id || peerIdRef.current || 'peer',
+                name: meta.label,
+                username: '',
+                avatarUrl: meta.avatarUrl,
+                color: meta.color,
+              },
+            }
+          );
           setCallExpanded(true);
           setScreen((s) => (s === 'home' ? 'chat' : s));
           startRingtone();
           notifyIfHidden('Входящий звонок', {
-            body: peerLabel || 'Близкий',
+            body: `Вам звонит ${meta.label || 'близкий'}`,
             tag: 'paranoic-call',
           });
+          if (pendingRingAcceptRef.current) {
+            pendingRingAcceptRef.current = false;
+            void (async () => {
+              try {
+                stopRingtone();
+                closeActiveNotification();
+                const stream = await p2pRef.current?.acceptCall();
+                if (stream) attachLocalVideo(stream);
+                setIncomingRing(null);
+                setCallExpanded(false);
+                setScreen('chat');
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+              }
+            })();
+          }
         },
         onCallDeclined: () => {
           setError('Звонок отклонён');
           setCallExpanded(false);
+          setIncomingRing(null);
+          outboundCallIdRef.current = null;
           stopRingtone();
+          closeActiveNotification();
           setScreen((s) => (s === 'call' ? 'chat' : s));
         },
         onRemoteStream: (stream) => {
@@ -1189,6 +1380,23 @@ export default function App() {
     setError('');
     void ensureNotifyPermission();
     try {
+      const me = identityRef.current;
+      const target = peerIdRef.current || guestPeerIdRef.current;
+      if (target) {
+        const callId = newCallId();
+        outboundCallIdRef.current = callId;
+        void callInboxRef.current?.sendOffer(
+          target,
+          {
+            id: me.id,
+            name: me.name,
+            username: me.username || '',
+            avatarUrl: me.avatarUrl || '',
+            color: me.color,
+          },
+          callId
+        );
+      }
       await ensureP2P().startCall();
       attachLocalVideo(null);
       setCallExpanded(false);
@@ -1216,13 +1424,42 @@ export default function App() {
   const acceptMediaCall = async () => {
     setError('');
     stopRingtone();
+    closeActiveNotification();
     void ensureNotifyPermission();
+    const ring = incomingRing;
     try {
+      if (p2pRef.current?.currentCallState === 'ringing') {
+        const stream = await ensureP2P().acceptCall();
+        attachLocalVideo(stream);
+        setIncomingRing(null);
+        pendingRingAcceptRef.current = false;
+        pendingAcceptCallerRef.current = null;
+        setCallExpanded(false);
+        setScreen('chat');
+        return;
+      }
+
+      // Realtime offer: звонящий сам заходит в наш inbox — принимаем join и ждём invite.
+      if (ring?.from.id) {
+        pendingRingAcceptRef.current = true;
+        pendingAcceptCallerRef.current = ring.from;
+        setIncomingRing(null);
+        setScreen('chat');
+        if (incomingConnection) {
+          await ensureP2P().acceptIncomingConnection();
+          setIncomingConnection(false);
+        }
+        return;
+      }
+
       const stream = await ensureP2P().acceptCall();
       attachLocalVideo(stream);
+      setIncomingRing(null);
       setCallExpanded(false);
       setScreen('chat');
     } catch (e) {
+      pendingRingAcceptRef.current = false;
+      pendingAcceptCallerRef.current = null;
       setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
       setCallExpanded(false);
       setScreen('chat');
@@ -1231,13 +1468,35 @@ export default function App() {
 
   const declineMediaCall = async () => {
     stopRingtone();
-    await ensureP2P().declineCall();
+    closeActiveNotification();
+    const ring = incomingRing;
+    setIncomingRing(null);
+    pendingRingAcceptRef.current = false;
+    pendingAcceptCallerRef.current = null;
+    if (ring?.from.id) {
+      void callInboxRef.current?.sendReject(
+        ring.from.id,
+        identityRef.current.id,
+        ring.callId
+      );
+    }
+    if (p2pRef.current?.currentCallState === 'ringing') {
+      await ensureP2P().declineCall();
+    }
     setCallExpanded(false);
-    setScreen('chat');
+    setScreen((s) => (s === 'call' ? 'chat' : s));
   };
 
   const hangUp = async () => {
     stopRingtone();
+    closeActiveNotification();
+    const target = peerIdRef.current || guestPeerIdRef.current;
+    const callId = outboundCallIdRef.current;
+    if (target && callId && callState === 'calling') {
+      void callInboxRef.current?.sendCancel(target, identityRef.current.id, callId);
+    }
+    outboundCallIdRef.current = null;
+    setIncomingRing(null);
     await p2pRef.current?.hangUp();
     attachLocalVideo(null);
     setScreenSharing(false);
@@ -2455,8 +2714,16 @@ export default function App() {
         />
       )}
 
+      {incomingRing && (
+        <IncomingCallModal
+          caller={incomingRing.from}
+          onAccept={() => void acceptMediaCall()}
+          onReject={() => void declineMediaCall()}
+        />
+      )}
+
       <CallOverlay
-        callState={callState}
+        callState={callState === 'ringing' ? 'idle' : callState}
         peerLabel={peerLabel}
         screenSharing={screenSharing}
         networkQuality={networkQuality}
