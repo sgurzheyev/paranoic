@@ -21,6 +21,8 @@ import {
   Paperclip,
   Monitor,
   MonitorOff,
+  Ghost,
+  Timer,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -53,9 +55,12 @@ import {
   purgeLegacyGlobalHistory,
   saveMediaBlob,
   updateStoredMessage,
+  purgeExpiredMessages,
+  EPHEMERAL_TTL_MS,
   type DeliveryStatus,
   type StoredMessage,
 } from './storage';
+import { loadSettings, type AppSettings } from './settings';
 import {
   enqueueOutbox,
   listOutbox,
@@ -105,6 +110,7 @@ function nowTime() {
 
 export default function App() {
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [appMode, setAppMode] = useState<AppMode>(() =>
     getMagicTargetFromUrl() || getRoomIdFromUrl() ? 'paranoic' : 'select'
   );
@@ -261,20 +267,24 @@ export default function App() {
   );
 
   const addMessage = useCallback(async (message: ChatMessage, persist = true) => {
+    const withAge: ChatMessage = {
+      ...message,
+      createdAt: message.createdAt ?? Date.now(),
+    };
     setMessages((prev) => {
-      if (prev.some((m) => m.id === message.id)) {
-        return prev.map((m) => (m.id === message.id ? { ...m, ...message } : m));
+      if (prev.some((m) => m.id === withAge.id)) {
+        return prev.map((m) => (m.id === withAge.id ? { ...m, ...withAge } : m));
       }
-      return [...prev, message];
+      return [...prev, withAge];
     });
     const conv = conversationIdRef.current;
     if (
       persist &&
       conv &&
-      message.kind !== 'file-pending' &&
-      message.kind !== 'file-transfer'
+      withAge.kind !== 'file-pending' &&
+      withAge.kind !== 'file-transfer'
     ) {
-      await appendStoredMessage(conv, toStored(message));
+      await appendStoredMessage(conv, toStored(withAge));
     }
   }, []);
 
@@ -393,7 +403,7 @@ export default function App() {
     };
   }, [revokeMediaUrls]);
 
-  /** Presence + непрерывный GPS (или Антарктида при отказе). */
+  /** Presence + GPS (или Ghost Mode / Антарктида). */
   useEffect(() => {
     if (appMode !== 'paranoic' && appMode !== 'family') return;
 
@@ -408,9 +418,9 @@ export default function App() {
       },
     });
     presenceRef.current = presence;
+    const ghost = settings.ghostMode;
 
     void (async () => {
-      // Сразу публикуем Антарктиду, пока ждём разрешение GPS.
       setGeo({ ...ANTARCTICA });
       try {
         await presence.start({
@@ -433,12 +443,18 @@ export default function App() {
         return;
       }
 
-      const handle = watchGeo((point) => {
-        if (cancelled) return;
-        setGeo(point);
-        void presence.updateLocation(point.lat, point.lng);
-      });
-      geoWatchBox.stop = () => handle.stop();
+      if (ghost) {
+        // Ghost Mode: не трогаем watchPosition, остаёмся в Антарктиде.
+        setGeo({ ...ANTARCTICA });
+        void presence.updateLocation(ANTARCTICA.lat, ANTARCTICA.lng);
+      } else {
+        const handle = watchGeo((point) => {
+          if (cancelled) return;
+          setGeo(point);
+          void presence.updateLocation(point.lat, point.lng);
+        });
+        geoWatchBox.stop = () => handle.stop();
+      }
 
       void syncProfileToSupabase(identityRef.current);
     })();
@@ -449,7 +465,25 @@ export default function App() {
       void presence.stop();
       if (presenceRef.current === presence) presenceRef.current = null;
     };
-  }, [appMode, identity.id]);
+  }, [appMode, identity.id, settings.ghostMode]);
+
+  /** Эфемерные сообщения: чистим IndexedDB каждые 5 мин и при включении настройки. */
+  useEffect(() => {
+    if (!settings.ephemeral24h) return;
+
+    const runPurge = async () => {
+      const { removed, conversationIds } = await purgeExpiredMessages(EPHEMERAL_TTL_MS);
+      if (removed === 0) return;
+      const conv = conversationIdRef.current;
+      if (conv && conversationIds.includes(conv)) {
+        await hydrateConversation(conv);
+      }
+    };
+
+    void runPurge();
+    const timer = window.setInterval(() => void runPurge(), 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [settings.ephemeral24h, hydrateConversation]);
 
   const attachLocalVideo = useCallback((stream: MediaStream | null) => {
     if (localVideoRef.current) localVideoRef.current.srcObject = stream;
@@ -1059,7 +1093,9 @@ export default function App() {
       <GlobeLobby
         onBack={() => setAppMode('select')}
         people={mapPeople}
-        geoSource={geo ? geo.source : 'pending'}
+        geoSource={
+          settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
+        }
         onChatUser={(user) => {
           void connectToUser(user.userId, user.isContact ? user.name : 'Незнакомец');
         }}
@@ -1076,8 +1112,10 @@ export default function App() {
       {profileOpen && (
         <ProfileModal
           identity={identity}
+          settings={settings}
           onClose={() => setProfileOpen(false)}
           onSaved={(next) => applyIdentity(next)}
+          onSettingsChange={setSettings}
         />
       )}
       <header className="app-header">
@@ -1192,6 +1230,16 @@ export default function App() {
                   </button>
                 )}
                 <p className="mono-id">ID · {identity.id}</p>
+                {settings.ghostMode && (
+                  <p className="ghost-mode-pill">
+                    <Ghost size={12} /> Ghost Mode · Антарктида
+                  </p>
+                )}
+                {settings.ephemeral24h && (
+                  <p className="ghost-mode-pill soft">
+                    <Timer size={12} /> Сообщения исчезают через 24 ч
+                  </p>
+                )}
               </div>
               <button
                 type="button"

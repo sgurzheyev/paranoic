@@ -310,7 +310,7 @@ export default function GlobeLobby({
     geoSource === 'gps'
       ? 'Ваша точка — по GPS'
       : geoSource === 'antarctica'
-        ? 'Без GPS вы в условной Антарктиде'
+        ? 'Ghost Mode / без GPS — условная Антарктида'
         : 'Запрашиваем геолокацию…';
 
   return (

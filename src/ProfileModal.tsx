@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Check, ImagePlus, X } from 'lucide-react';
+import { useRef, useState, type ReactNode } from 'react';
+import { Check, Ghost, ImagePlus, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
   THEME_FON_PRESETS,
@@ -7,17 +7,64 @@ import {
   type UserIdentity,
 } from './identity';
 import { syncProfileToSupabase, uploadAvatar } from './profile';
+import { saveSettings, type AppSettings } from './settings';
 
 type ProfileModalProps = {
   identity: UserIdentity;
+  settings: AppSettings;
   onClose: () => void;
   onSaved: (next: UserIdentity) => void;
+  onSettingsChange: (next: AppSettings) => void;
 };
 
-export default function ProfileModal({ identity, onClose, onSaved }: ProfileModalProps) {
+function IosToggle({
+  checked,
+  onChange,
+  label,
+  description,
+  icon,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  description: string;
+  icon: ReactNode;
+}) {
+  return (
+    <div className="ios-toggle-row">
+      <div className="ios-toggle-copy">
+        <div className="ios-toggle-label">
+          {icon}
+          <span>{label}</span>
+        </div>
+        <p>{description}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        className={`ios-switch ${checked ? 'on' : ''}`}
+        onClick={() => onChange(!checked)}
+      >
+        <span className="ios-switch-knob" />
+      </button>
+    </div>
+  );
+}
+
+export default function ProfileModal({
+  identity,
+  settings,
+  onClose,
+  onSaved,
+  onSettingsChange,
+}: ProfileModalProps) {
   const [name, setName] = useState(identity.name);
   const [avatarUrl, setAvatarUrl] = useState(identity.avatarUrl);
   const [themeFon, setThemeFon] = useState(identity.themeFon);
+  const [ghostMode, setGhostMode] = useState(settings.ghostMode);
+  const [ephemeral24h, setEphemeral24h] = useState(settings.ephemeral24h);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -37,6 +84,15 @@ export default function ProfileModal({ identity, onClose, onSaved }: ProfileModa
     }
   };
 
+  const applyPrivacy = (patch: Partial<AppSettings>) => {
+    const nextGhost = patch.ghostMode ?? ghostMode;
+    const nextEph = patch.ephemeral24h ?? ephemeral24h;
+    if (patch.ghostMode != null) setGhostMode(patch.ghostMode);
+    if (patch.ephemeral24h != null) setEphemeral24h(patch.ephemeral24h);
+    const saved = saveSettings({ ghostMode: nextGhost, ephemeral24h: nextEph });
+    onSettingsChange(saved);
+  };
+
   const save = async () => {
     setBusy(true);
     setError('');
@@ -46,6 +102,7 @@ export default function ProfileModal({ identity, onClose, onSaved }: ProfileModa
         avatarUrl,
         themeFon,
       });
+      applyPrivacy({ ghostMode, ephemeral24h });
       await syncProfileToSupabase(next);
       onSaved(next);
       onClose();
@@ -124,6 +181,24 @@ export default function ProfileModal({ identity, onClose, onSaved }: ProfileModa
               );
             })}
           </div>
+        </div>
+
+        <div className="profile-privacy-card">
+          <p className="profile-privacy-title">Приватность</p>
+          <IosToggle
+            checked={ghostMode}
+            onChange={(next) => applyPrivacy({ ghostMode: next })}
+            label="Ghost Mode"
+            description="Режим невидимки: на карте вы в условной Антарктиде, GPS выключен."
+            icon={<Ghost size={16} />}
+          />
+          <IosToggle
+            checked={ephemeral24h}
+            onChange={(next) => applyPrivacy({ ephemeral24h: next })}
+            label="Удалять через 24 часа"
+            description="Старые сообщения автоматически стираются из локального хранилища чата."
+            icon={<Timer size={16} />}
+          />
         </div>
 
         {error && (

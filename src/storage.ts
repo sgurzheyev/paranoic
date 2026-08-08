@@ -18,6 +18,8 @@ export type StoredMessage = {
   mediaKey?: string;
   /** Только для своих текстовых сообщений. */
   deliveryStatus?: DeliveryStatus;
+  /** epoch ms — для эфемерной очистки. */
+  createdAt?: number;
 };
 
 const messagesDb = localforage.createInstance({
@@ -71,7 +73,10 @@ export async function appendStoredMessage(
 ): Promise<void> {
   if (!convId) return;
   const history = await loadChatHistory(convId);
-  history.push(message);
+  history.push({
+    ...message,
+    createdAt: message.createdAt ?? Date.now(),
+  });
   await saveChatHistory(convId, history);
 }
 
@@ -142,6 +147,67 @@ export async function purgeLegacyGlobalHistory(selfId?: string): Promise<void> {
   } catch {
     /* */
   }
+}
+
+export const EPHEMERAL_TTL_MS = 24 * 60 * 60 * 1000;
+
+function messageAgeMs(row: StoredMessage, now: number): number | null {
+  if (typeof row.createdAt === 'number' && Number.isFinite(row.createdAt)) {
+    return now - row.createdAt;
+  }
+  // Legacy без createdAt — не трогаем.
+  return null;
+}
+
+/**
+ * Удаляет сообщения старше maxAgeMs во всех `chat:idA:idB`.
+ * Возвращает число удалённых и список затронутых conversationId.
+ */
+export async function purgeExpiredMessages(
+  maxAgeMs = EPHEMERAL_TTL_MS
+): Promise<{ removed: number; conversationIds: string[] }> {
+  const now = Date.now();
+  let removed = 0;
+  const touched = new Set<string>();
+
+  try {
+    const keys = await messagesDb.keys();
+    for (const raw of keys) {
+      const key = String(raw);
+      const pair = parseChatKey(key);
+      if (!pair) continue;
+
+      const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
+      const kept: StoredMessage[] = [];
+      const droppedMedia: string[] = [];
+
+      for (const row of history) {
+        const age = messageAgeMs(row, now);
+        if (age != null && age > maxAgeMs) {
+          removed += 1;
+          touched.add(conversationId(pair[0], pair[1]));
+          if (row.mediaKey) droppedMedia.push(row.mediaKey);
+          continue;
+        }
+        kept.push(row);
+      }
+
+      if (kept.length !== history.length) {
+        await messagesDb.setItem(key, kept);
+        for (const mk of droppedMedia) {
+          try {
+            await mediaDb.removeItem(mk);
+          } catch {
+            /* */
+          }
+        }
+      }
+    }
+  } catch {
+    /* */
+  }
+
+  return { removed, conversationIds: [...touched] };
 }
 
 export async function saveMediaBlob(key: string, blob: Blob): Promise<void> {
