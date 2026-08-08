@@ -44,6 +44,7 @@ export type P2PHandlers = {
   onMessage?: (data: string) => void;
   onError?: (error: Error) => void;
   onRemoteStream?: (stream: MediaStream | null) => void;
+  onLocalStream?: (stream: MediaStream | null) => void;
   onCallState?: (state: CallState) => void;
   /** Входящий медиазвонок — ждём Accept. */
   onIncomingCall?: () => void;
@@ -57,6 +58,7 @@ export type P2PHandlers = {
 };
 
 type SignalJoin = { type: 'join'; peerId: string };
+type SignalJoinAck = { type: 'join-ack'; peerId: string; targetPeerId: string };
 type SignalOffer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalAnswer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
@@ -117,22 +119,31 @@ const MAX_BUFFERED_AMOUNT = 256 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
 const ICE_CONNECT_TIMEOUT_MS = 25_000;
+const ICE_SOFT_RESTART_DELAY_MS = 1_600;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
 const MEDIA_WATCH_MS = 3_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
+const BROADCAST_RETRIES = 4;
+const JOIN_RETRY_MS = 1_200;
+const CALL_INVITE_RETRY_MS = 1_400;
 
 type ControlPacket =
-  | { t: 'call-offer'; sdp: RTCSessionDescriptionInit }
-  | { t: 'call-answer'; sdp: RTCSessionDescriptionInit }
-  | { t: 'call-decline' }
-  | { t: 'call-hangup' }
-  | { t: 'renegotiate-offer'; sdp: RTCSessionDescriptionInit }
-  | { t: 'renegotiate-answer'; sdp: RTCSessionDescriptionInit }
-  | { t: 'media-refresh' }
-  | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string }
-  | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number }
-  | { t: 'file-done'; id: string };
+  | { t: 'call-invite'; msgId?: string }
+  | { t: 'call-accept'; msgId?: string }
+  | { t: 'call-offer'; sdp: RTCSessionDescriptionInit; msgId?: string }
+  | { t: 'call-answer'; sdp: RTCSessionDescriptionInit; msgId?: string }
+  | { t: 'call-decline'; msgId?: string }
+  | { t: 'call-hangup'; msgId?: string }
+  | { t: 'renegotiate-offer'; sdp: RTCSessionDescriptionInit; msgId?: string }
+  | { t: 'renegotiate-answer'; sdp: RTCSessionDescriptionInit; msgId?: string }
+  | { t: 'media-refresh'; msgId?: string }
+  | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string; msgId?: string }
+  | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number; msgId?: string }
+  | { t: 'file-done'; id: string; msgId?: string };
+
+/** Звонок через Realtime как запасной канал к DataChannel. */
+type SignalCtrl = { peerId: string; packet: ControlPacket; msgId: string };
 
 type IncomingFile = {
   meta: MediaFileMeta;
@@ -270,6 +281,7 @@ export class P2PConnection {
   private stalledChecks = 0;
   private iceRestarting = false;
   private iceCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceSoftRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
   private peerId = '';
   private remotePeerId: string | null = null;
@@ -279,12 +291,16 @@ export class P2PConnection {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private cachedIceServers: RTCIceServer[] | null = null;
   private joinRetryTimer: ReturnType<typeof setInterval> | null = null;
+  private callInviteRetryTimer: ReturnType<typeof setInterval> | null = null;
   private signalingStatus: SignalingDebugStatus = '';
   private localIdentity: PeerIdentity | null = null;
   /** Входящий join ждёт Accept на стороне хоста. */
   private pendingJoinPeerId: string | null = null;
-  /** Входящий медиа-offer ждёт Accept. */
+  /** Входящий медиа-offer ждёт Accept (после call-invite). */
   private pendingCallOffer: RTCSessionDescriptionInit | null = null;
+  /** Калеe принял звонок и ждёт SDP offer. */
+  private callAcceptedPendingOffer = false;
+  private handledCtrlIds = new Set<string>();
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
@@ -357,6 +373,9 @@ export class P2PConnection {
     signal.on('broadcast', { event: 'join' }, ({ payload }) => {
       void this.onSignalJoin(payload as SignalJoin);
     });
+    signal.on('broadcast', { event: 'join-ack' }, ({ payload }) => {
+      this.onSignalJoinAck(payload as SignalJoinAck);
+    });
     signal.on('broadcast', { event: 'offer' }, ({ payload }) => {
       void this.onSignalOffer(payload as SignalOffer);
     });
@@ -368,6 +387,9 @@ export class P2PConnection {
     });
     signal.on('broadcast', { event: 'reject' }, ({ payload }) => {
       this.onSignalReject(payload as SignalReject);
+    });
+    signal.on('broadcast', { event: 'ctrl' }, ({ payload }) => {
+      void this.onSignalCtrl(payload as SignalCtrl);
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -401,24 +423,33 @@ export class P2PConnection {
       console.warn('[paranoic signal] join blocked: no ICE servers');
       return;
     }
-    await this.broadcast('join', { type: 'join', peerId: this.peerId });
+    await this.broadcastReliable('join', { type: 'join', peerId: this.peerId });
   }
 
   private startJoinRetry(): void {
     this.clearJoinRetry();
+    // Сразу ещё раз + короткий интервал — меньше потерь первого join на Realtime.
+    void this.sendJoin();
     this.joinRetryTimer = setInterval(() => {
       if (this.handshakeStarted || this.pc || this.status === 'connected') {
         this.clearJoinRetry();
         return;
       }
       void this.sendJoin();
-    }, 2500);
+    }, JOIN_RETRY_MS);
   }
 
   private clearJoinRetry(): void {
     if (this.joinRetryTimer) {
       clearInterval(this.joinRetryTimer);
       this.joinRetryTimer = null;
+    }
+  }
+
+  private clearCallInviteRetry(): void {
+    if (this.callInviteRetryTimer) {
+      clearInterval(this.callInviteRetryTimer);
+      this.callInviteRetryTimer = null;
     }
   }
 
@@ -429,27 +460,31 @@ export class P2PConnection {
     this.channel.send(payload);
   }
 
-  async startCall(): Promise<MediaStream> {
+  /**
+   * Исходящий звонок: сначала только invite (без getUserMedia).
+   * Камера/мик открываются после Accept на другой стороне.
+   */
+  async startCall(): Promise<MediaStream | null> {
     if (!this.pc || !this.isReady) throw new Error('Сначала подключитесь к близкому');
     if (this.callState === 'in-call' || this.callState === 'calling') {
-      return this.localStream!;
+      return this.localStream;
     }
     if (this.callState === 'ringing') {
       throw new Error('Сначала ответьте на входящий звонок');
     }
 
     this.setCallState('calling');
-    try {
-      const stream = await this.acquireLocalMedia();
-      await this.attachLocalTracks(stream);
-      await this.renegotiateAsOfferer();
-      // in-call только после call-answer — иначе «ложный» ответ на мобильных
-      return stream;
-    } catch (e) {
-      this.stopLocalMedia();
-      this.setCallState('idle');
-      throw e;
-    }
+    const msgId = crypto.randomUUID();
+    this.sendCallControl({ t: 'call-invite', msgId });
+    this.clearCallInviteRetry();
+    this.callInviteRetryTimer = setInterval(() => {
+      if (this.callState !== 'calling') {
+        this.clearCallInviteRetry();
+        return;
+      }
+      this.sendCallControl({ t: 'call-invite', msgId });
+    }, CALL_INVITE_RETRY_MS);
+    return null;
   }
 
   /** Хост принимает входящее подключение по магической ссылке. */
@@ -466,7 +501,7 @@ export class P2PConnection {
     if (!this.pendingJoinPeerId) return;
     const target = this.pendingJoinPeerId;
     this.pendingJoinPeerId = null;
-    await this.broadcast('reject', {
+    await this.broadcastReliable('reject', {
       type: 'reject',
       peerId: this.peerId,
       targetPeerId: target,
@@ -476,36 +511,31 @@ export class P2PConnection {
     this.setStatus('waiting-answer');
   }
 
-  /** Калеe принимает медиазвонок (после user gesture — важно для мобильных). */
+  /** Калеe принимает медиазвонок — только здесь открываем getUserMedia. */
   async acceptCall(): Promise<MediaStream> {
-    if (!this.pc || !this.pendingCallOffer) {
+    if (!this.pc || this.callState !== 'ringing') {
       throw new Error('Нет входящего звонка');
     }
-    const offer = this.pendingCallOffer;
-    this.pendingCallOffer = null;
 
     try {
+      this.callAcceptedPendingOffer = true;
+      this.sendCallControl({ t: 'call-accept', msgId: crypto.randomUUID() });
       const stream = await this.acquireLocalMedia();
       await this.attachLocalTracks(stream);
+      this.handlers.onLocalStream?.(stream);
 
-      const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
-      this.ignoreOffer = !this.polite && offerCollision;
-      if (this.ignoreOffer) {
-        throw new Error('Конфликт сигналинга звонка, попробуйте ещё раз');
+      // Если offer уже успел прийти до Accept — отвечаем сразу.
+      if (this.pendingCallOffer) {
+        await this.answerPendingCallOffer();
       }
-
-      await this.pc.setRemoteDescription(offer);
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
-      this.sendControl({ t: 'call-answer', sdp: this.pc.localDescription! });
-      this.setCallState('in-call');
-      this.startMediaWatchdog();
       return stream;
     } catch (e) {
+      this.callAcceptedPendingOffer = false;
       this.stopLocalMedia();
+      this.handlers.onLocalStream?.(null);
       this.setCallState('idle');
       try {
-        if (this.isReady) this.sendControl({ t: 'call-decline' });
+        this.sendCallControl({ t: 'call-decline', msgId: crypto.randomUUID() });
       } catch {
         /* */
       }
@@ -515,25 +545,27 @@ export class P2PConnection {
 
   async declineCall(): Promise<void> {
     this.pendingCallOffer = null;
-    try {
-      if (this.isReady) this.sendControl({ t: 'call-decline' });
-    } catch {
-      /* */
-    }
+    this.callAcceptedPendingOffer = false;
+    this.sendCallControl({ t: 'call-decline', msgId: crypto.randomUUID() });
     this.stopLocalMedia();
+    this.handlers.onLocalStream?.(null);
     this.clearRemoteStream();
     this.setCallState('idle');
   }
 
   async hangUp(): Promise<void> {
+    this.clearCallInviteRetry();
+    this.callAcceptedPendingOffer = false;
+    this.pendingCallOffer = null;
     this.setCallState('ending');
     this.stopMediaWatchdog();
     try {
-      if (this.isReady) this.sendControl({ t: 'call-hangup' });
+      this.sendCallControl({ t: 'call-hangup', msgId: crypto.randomUUID() });
     } catch {
       /* ignore */
     }
     this.stopLocalMedia();
+    this.handlers.onLocalStream?.(null);
     this.clearRemoteStream();
     this.setCallState('idle');
   }
@@ -619,6 +651,62 @@ export class P2PConnection {
     }
   }
 
+  /** Повторная отправка критичных Realtime-событий (join/offer/answer/ctrl). */
+  private async broadcastReliable(event: string, payload: object): Promise<void> {
+    if (!this.signal) return;
+    for (let attempt = 0; attempt < BROADCAST_RETRIES; attempt++) {
+      try {
+        const result = await this.signal.send({
+          type: 'broadcast',
+          event,
+          payload,
+        });
+        if (result !== 'timed out' && result !== 'error') return;
+        console.warn('[paranoic signal] broadcast retry', event, result, attempt + 1);
+      } catch (e) {
+        console.warn('[paranoic signal] broadcast retry error', event, e);
+      }
+      await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
+    }
+  }
+
+  private newMsgId(): string {
+    return crypto.randomUUID();
+  }
+
+  /** DataChannel + Realtime backup для сигналов звонка. */
+  private sendCallControl(packet: ControlPacket): void {
+    const msgId = packet.msgId || this.newMsgId();
+    const withId = { ...packet, msgId } as ControlPacket;
+    try {
+      if (this.isReady) this.sendControl(withId);
+    } catch (e) {
+      console.warn('[paranoic] call ctrl dc failed', e);
+    }
+    void this.broadcastReliable('ctrl', {
+      peerId: this.peerId,
+      packet: withId,
+      msgId,
+    } satisfies SignalCtrl);
+  }
+
+  private onSignalCtrl(payload: SignalCtrl): void {
+    if (!payload?.packet || payload.peerId === this.peerId) return;
+    const msgId = payload.msgId || payload.packet.msgId;
+    if (msgId && this.handledCtrlIds.has(msgId)) return;
+    // Dedup делает handleControl; здесь только быстрый skip дублей Realtime.
+    const packet =
+      msgId && !payload.packet.msgId
+        ? ({ ...payload.packet, msgId } as ControlPacket)
+        : payload.packet;
+    void this.handleControl(packet);
+  }
+
+  private onSignalJoinAck(payload: SignalJoinAck): void {
+    if (!payload?.targetPeerId || payload.targetPeerId !== this.peerId) return;
+    this.clearJoinRetry();
+  }
+
   private detachSignal(): void {
     const ch = this.signal;
     this.signal = null;
@@ -639,7 +727,7 @@ export class P2PConnection {
 
     // Уже на связи — занято.
     if (this.status === 'connected') {
-      await this.broadcast('reject', {
+      await this.broadcastReliable('reject', {
         type: 'reject',
         peerId: this.peerId,
         targetPeerId: payload.peerId,
@@ -649,8 +737,15 @@ export class P2PConnection {
 
     // Handshake уже идёт: тот же гость (retry join) — игнор; другой — busy.
     if (this.handshakeStarted || this.pc) {
-      if (payload.peerId === this.remotePeerId) return;
-      await this.broadcast('reject', {
+      if (payload.peerId === this.remotePeerId) {
+        void this.broadcastReliable('join-ack', {
+          type: 'join-ack',
+          peerId: this.peerId,
+          targetPeerId: payload.peerId,
+        });
+        return;
+      }
+      await this.broadcastReliable('reject', {
         type: 'reject',
         peerId: this.peerId,
         targetPeerId: payload.peerId,
@@ -659,11 +754,18 @@ export class P2PConnection {
     }
 
     // Повторный join того же гостя, пока ждём Accept — игнор.
-    if (this.pendingJoinPeerId === payload.peerId) return;
+    if (this.pendingJoinPeerId === payload.peerId) {
+      void this.broadcastReliable('join-ack', {
+        type: 'join-ack',
+        peerId: this.peerId,
+        targetPeerId: payload.peerId,
+      });
+      return;
+    }
 
     // Другой гость, пока висит Accept — отклоняем нового.
     if (this.pendingJoinPeerId && this.pendingJoinPeerId !== payload.peerId) {
-      await this.broadcast('reject', {
+      await this.broadcastReliable('reject', {
         type: 'reject',
         peerId: this.peerId,
         targetPeerId: payload.peerId,
@@ -675,6 +777,12 @@ export class P2PConnection {
     this.remotePeerId = payload.peerId;
     console.log('[paranoic signal] incoming join, awaiting accept', payload.peerId);
     this.setSignalingStatus('Входящий вызов...');
+    // ACK сразу — гость перестаёт спамить join, пока ждём Accept.
+    void this.broadcastReliable('join-ack', {
+      type: 'join-ack',
+      peerId: this.peerId,
+      targetPeerId: payload.peerId,
+    });
     this.handlers.onIncomingConnection?.({ peerId: payload.peerId });
   }
 
@@ -710,7 +818,7 @@ export class P2PConnection {
       await pc.setLocalDescription(offer);
       this.setStatus('connecting');
       this.setSignalingStatus('Обмен маршрутами (ICE)...');
-      await this.broadcast('offer', {
+      await this.broadcastReliable('offer', {
         peerId: this.peerId,
         sdp: pc.localDescription!,
       });
@@ -750,7 +858,7 @@ export class P2PConnection {
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
       this.setSignalingStatus('Обмен маршрутами (ICE)...');
-      await this.broadcast('answer', {
+      await this.broadcastReliable('answer', {
         peerId: this.peerId,
         sdp: this.pc.localDescription!,
       });
@@ -849,9 +957,53 @@ export class P2PConnection {
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      this.sendControl({ t: 'call-offer', sdp: this.pc.localDescription! });
+      this.sendCallControl({
+        t: 'call-offer',
+        sdp: this.pc.localDescription!,
+        msgId: this.newMsgId(),
+      });
     } finally {
       this.makingOffer = false;
+    }
+  }
+
+  private async answerPendingCallOffer(): Promise<void> {
+    if (!this.pc || !this.pendingCallOffer) return;
+    const offer = this.pendingCallOffer;
+    this.pendingCallOffer = null;
+    this.callAcceptedPendingOffer = false;
+
+    const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
+    this.ignoreOffer = !this.polite && offerCollision;
+    if (this.ignoreOffer) {
+      throw new Error('Конфликт сигналинга звонка, попробуйте ещё раз');
+    }
+
+    await this.pc.setRemoteDescription(offer);
+    const answer = await this.pc.createAnswer();
+    await this.pc.setLocalDescription(answer);
+    this.sendCallControl({
+      t: 'call-answer',
+      sdp: this.pc.localDescription!,
+      msgId: this.newMsgId(),
+    });
+    this.setCallState('in-call');
+    this.startMediaWatchdog();
+  }
+
+  private async beginCallAsOffererAfterAccept(): Promise<void> {
+    if (!this.pc || this.callState !== 'calling') return;
+    this.clearCallInviteRetry();
+    try {
+      const stream = await this.acquireLocalMedia();
+      await this.attachLocalTracks(stream);
+      this.handlers.onLocalStream?.(stream);
+      await this.renegotiateAsOfferer();
+    } catch (e) {
+      this.stopLocalMedia();
+      this.handlers.onLocalStream?.(null);
+      this.setCallState('idle');
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось начать звонок'));
     }
   }
 
@@ -867,6 +1019,15 @@ export class P2PConnection {
   }
 
   private async handleControl(packet: ControlPacket): Promise<void> {
+    if (packet.msgId) {
+      if (this.handledCtrlIds.has(packet.msgId)) return;
+      this.handledCtrlIds.add(packet.msgId);
+      if (this.handledCtrlIds.size > 80) {
+        const first = this.handledCtrlIds.values().next().value;
+        if (first) this.handledCtrlIds.delete(first);
+      }
+    }
+
     if (packet.t === 'hello') {
       this.handlers.onPeerHello?.({
         userId: packet.userId,
@@ -884,15 +1045,39 @@ export class P2PConnection {
       return;
     }
 
+    if (packet.t === 'call-invite') {
+      if (this.callState === 'in-call' || this.callState === 'calling') return;
+      // Только invite — без авто-getUserMedia.
+      this.setCallState('ringing');
+      this.handlers.onIncomingCall?.();
+      return;
+    }
+
+    if (packet.t === 'call-accept') {
+      // Калеe принял — теперь caller открывает медиа и шлёт offer.
+      if (this.callState !== 'calling') return;
+      await this.beginCallAsOffererAfterAccept();
+      return;
+    }
+
     if (packet.t === 'call-offer') {
       const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
       this.ignoreOffer = !this.polite && offerCollision;
       if (this.ignoreOffer) return;
 
-      // Не отвечаем автоматически — ждём Accept (user gesture для getUserMedia).
       this.pendingCallOffer = packet.sdp;
-      this.setCallState('ringing');
-      this.handlers.onIncomingCall?.();
+      if (this.callAcceptedPendingOffer && this.localStream) {
+        try {
+          await this.answerPendingCallOffer();
+        } catch (e) {
+          console.warn('[paranoic] answer after accept failed', e);
+        }
+        return;
+      }
+      if (this.callState !== 'ringing') {
+        this.setCallState('ringing');
+        this.handlers.onIncomingCall?.();
+      }
       return;
     }
 
@@ -905,9 +1090,12 @@ export class P2PConnection {
     }
 
     if (packet.t === 'call-decline') {
+      this.clearCallInviteRetry();
       this.pendingCallOffer = null;
+      this.callAcceptedPendingOffer = false;
       this.stopMediaWatchdog();
       this.stopLocalMedia();
+      this.handlers.onLocalStream?.(null);
       this.clearRemoteStream();
       this.setCallState('idle');
       this.handlers.onCallDeclined?.();
@@ -919,7 +1107,11 @@ export class P2PConnection {
         await this.pc.setRemoteDescription(packet.sdp);
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
-        this.sendControl({ t: 'renegotiate-answer', sdp: this.pc.localDescription! });
+        this.sendCallControl({
+          t: 'renegotiate-answer',
+          sdp: this.pc.localDescription!,
+          msgId: this.newMsgId(),
+        });
         this.iceRestarting = false;
       } catch (e) {
         console.warn('[paranoic] renegotiate-offer failed', e);
@@ -940,9 +1132,12 @@ export class P2PConnection {
     }
 
     if (packet.t === 'call-hangup') {
+      this.clearCallInviteRetry();
       this.pendingCallOffer = null;
+      this.callAcceptedPendingOffer = false;
       this.stopMediaWatchdog();
       this.stopLocalMedia();
+      this.handlers.onLocalStream?.(null);
       this.clearRemoteStream();
       this.setCallState('idle');
       return;
@@ -1036,13 +1231,15 @@ export class P2PConnection {
         case 'connected':
           this.iceRestarting = false;
           this.clearIceCheckTimeout();
+          this.clearIceSoftRestartTimer();
           break;
         case 'disconnected':
-          void this.tryIceRestart();
+          // Краткий просад — не роняем UI звонка, мягкий ICE через debounce.
+          this.scheduleIceSoftRestart();
           break;
         case 'failed':
           void this.tryIceRestart().then((ok) => {
-            if (!ok) {
+            if (!ok && this.callState !== 'in-call' && this.callState !== 'calling' && this.callState !== 'ringing') {
               this.clearIceCheckTimeout();
               this.setStatus('failed');
               this.handlers.onError?.(new Error('Не удалось связаться'));
@@ -1051,7 +1248,7 @@ export class P2PConnection {
           break;
         case 'closed':
           this.clearIceCheckTimeout();
-          this.setStatus('disconnected');
+          if (this.callState === 'idle') this.setStatus('disconnected');
           break;
       }
     };
@@ -1062,8 +1259,12 @@ export class P2PConnection {
         this.armIceCheckTimeout(pc);
       } else if (state === 'connected' || state === 'completed') {
         this.clearIceCheckTimeout();
-      } else if (state === 'failed' || state === 'disconnected') {
-        if (state === 'failed') this.clearIceCheckTimeout();
+        this.clearIceSoftRestartTimer();
+        this.iceRestarting = false;
+      } else if (state === 'disconnected') {
+        this.scheduleIceSoftRestart();
+      } else if (state === 'failed') {
+        this.clearIceCheckTimeout();
         void this.tryIceRestart();
       } else if (state === 'closed') {
         this.clearIceCheckTimeout();
@@ -1080,6 +1281,25 @@ export class P2PConnection {
     }
   }
 
+  private clearIceSoftRestartTimer(): void {
+    if (this.iceSoftRestartTimer) {
+      clearTimeout(this.iceSoftRestartTimer);
+      this.iceSoftRestartTimer = null;
+    }
+  }
+
+  private scheduleIceSoftRestart(): void {
+    if (this.iceSoftRestartTimer || this.iceRestarting) return;
+    this.iceSoftRestartTimer = setTimeout(() => {
+      this.iceSoftRestartTimer = null;
+      if (!this.pc) return;
+      const ice = this.pc.iceConnectionState;
+      const conn = this.pc.connectionState;
+      if (ice === 'connected' || ice === 'completed' || conn === 'connected') return;
+      void this.tryIceRestart();
+    }, ICE_SOFT_RESTART_DELAY_MS);
+  }
+
   private armIceCheckTimeout(pc: RTCPeerConnection): void {
     this.clearIceCheckTimeout();
     this.iceCheckTimer = setTimeout(() => {
@@ -1087,9 +1307,14 @@ export class P2PConnection {
       if (this.pc !== pc) return;
       if (pc.iceConnectionState !== 'checking') return;
 
+      // Во время активного звонка — ещё одна попытка ICE, без сброса UI.
+      if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+        void this.tryIceRestart();
+        return;
+      }
+
       this.setStatus('failed');
       this.handlers.onError?.(new Error(ICE_CONNECT_TIMEOUT_ERROR));
-      // Не рвём signaling-комнату — иначе хост инбокса «умирает» и магическая ссылка ломается.
       this.softResetPeer();
     }, ICE_CONNECT_TIMEOUT_MS);
   }
@@ -1097,25 +1322,29 @@ export class P2PConnection {
   private async tryIceRestart(): Promise<boolean> {
     if (!this.pc || this.iceRestarting) return false;
     if (this.pc.signalingState === 'closed') return false;
-    // Пока DataChannel не открыт — ICE restart через control бесполезен.
     if (!this.isReady && this.status !== 'connected') return false;
 
     this.iceRestarting = true;
+    const preservedCall = this.callState;
     try {
       if (typeof this.pc.restartIce === 'function') {
         this.pc.restartIce();
       }
-      // Отдельный тип — не путаем с входящим медиазвонком (call-offer).
       this.makingOffer = true;
       try {
         const offer = await this.pc.createOffer({ iceRestart: true });
         await this.pc.setLocalDescription(offer);
-        if (this.isReady) {
-          this.sendControl({ t: 'renegotiate-offer', sdp: this.pc.localDescription! });
-        }
+        // DC может быть кратко мёртв — дублируем через Realtime.
+        this.sendCallControl({
+          t: 'renegotiate-offer',
+          sdp: this.pc.localDescription!,
+          msgId: this.newMsgId(),
+        });
       } finally {
         this.makingOffer = false;
       }
+      // Не трогаем callState / экран звонка.
+      if (preservedCall !== 'idle') this.callState = preservedCall;
       return true;
     } catch {
       this.iceRestarting = false;
@@ -1126,7 +1355,9 @@ export class P2PConnection {
   /** Закрывает PC/канал, но сохраняет Supabase signaling (инбокс хоста жив). */
   private softResetPeer(): void {
     this.clearJoinRetry();
+    this.clearCallInviteRetry();
     this.clearIceCheckTimeout();
+    this.clearIceSoftRestartTimer();
     this.stopMediaWatchdog();
     this.incomingFiles.clear();
     this.makingOffer = false;
@@ -1139,8 +1370,11 @@ export class P2PConnection {
     this.pendingCandidates = [];
     this.pendingJoinPeerId = null;
     this.pendingCallOffer = null;
+    this.callAcceptedPendingOffer = false;
     this.remotePeerId = null;
+    this.handledCtrlIds.clear();
     this.setCallState('idle');
+    this.handlers.onLocalStream?.(null);
 
     if (this.channel) {
       this.channel.onopen = null;
@@ -1260,9 +1494,13 @@ export class P2PConnection {
     };
 
     channel.onclose = () => {
+      // Во время звонка краткий close часто ложный — пробуем ICE, не сбрасываем UI сразу.
+      if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+        this.scheduleIceSoftRestart();
+        return;
+      }
       if (this.status === 'connected') {
         this.setStatus('disconnected');
-        // Хост остаётся в инбоксе и готов принять следующий join.
         if (this.isHost && this.signal) {
           this.softResetPeer();
         }
@@ -1270,8 +1508,12 @@ export class P2PConnection {
     };
 
     channel.onerror = () => {
-      this.handlers.onError?.(new Error('Сбой канала связи'));
-      this.setStatus('failed');
+      // Не показываем «Сбой канала связи» на кратковременных ошибках DC.
+      console.warn('[paranoic] datachannel error (soft)');
+      if (this.callState === 'in-call' || this.callState === 'calling' || this.status === 'connected') {
+        this.scheduleIceSoftRestart();
+        return;
+      }
     };
 
     channel.onmessage = (event) => {
@@ -1342,7 +1584,9 @@ export class P2PConnection {
   private reset(): void {
     this.detachSignal();
     this.clearJoinRetry();
+    this.clearCallInviteRetry();
     this.clearIceCheckTimeout();
+    this.clearIceSoftRestartTimer();
     this.stopMediaWatchdog();
     this.incomingFiles.clear();
     this.makingOffer = false;
@@ -1355,10 +1599,13 @@ export class P2PConnection {
     this.pendingCandidates = [];
     this.pendingJoinPeerId = null;
     this.pendingCallOffer = null;
+    this.callAcceptedPendingOffer = false;
+    this.handledCtrlIds.clear();
     this.remotePeerId = null;
     this.cachedIceServers = null;
     this.isHost = false;
     this.setSignalingStatus('');
+    this.handlers.onLocalStream?.(null);
 
     if (this.channel) {
       this.channel.onopen = null;

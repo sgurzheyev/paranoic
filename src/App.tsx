@@ -389,6 +389,9 @@ export default function App() {
         onRemoteStream: (stream) => {
           if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
         },
+        onLocalStream: (stream) => {
+          attachLocalVideo(stream);
+        },
         onPeerHello: (peer) => {
           void (async () => {
             setPeerLabel(peer.name);
@@ -626,11 +629,11 @@ export default function App() {
   const startCall = async () => {
     setError('');
     try {
-      const stream = await ensureP2P().startCall();
-      attachLocalVideo(stream);
+      await ensureP2P().startCall();
+      attachLocalVideo(null);
       setScreen('call');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Камера или микрофон недоступны');
+      setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
     }
   };
 
@@ -1223,7 +1226,7 @@ export default function App() {
                 </div>
                 <p className="call-status">
                   {callState === 'calling'
-                    ? 'Ожидаем ответа…'
+                    ? 'Ожидаем ответа… Камера откроется после «Принять»'
                     : callState === 'in-call'
                       ? 'Разговор идёт'
                       : 'Звонок'}
