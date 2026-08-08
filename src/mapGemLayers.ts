@@ -32,6 +32,7 @@ export function ensureGemLayers(map: MapboxMap): void {
     type: 'circle',
     source: GEMS_SOURCE,
     filter: ['!', ['has', 'point_count']],
+    layout: { visibility: 'none' },
     paint: {
       'circle-color': GOLD_GLOW,
       'circle-radius': 18,
@@ -45,6 +46,7 @@ export function ensureGemLayers(map: MapboxMap): void {
     type: 'circle',
     source: GEMS_SOURCE,
     filter: ['!', ['has', 'point_count']],
+    layout: { visibility: 'none' },
     paint: {
       'circle-color': GOLD,
       'circle-radius': 7,
@@ -60,6 +62,7 @@ export function ensureGemLayers(map: MapboxMap): void {
     type: 'circle',
     source: GEMS_SOURCE,
     filter: ['has', 'point_count'],
+    layout: { visibility: 'none' },
     paint: {
       'circle-color': [
         'step',
@@ -83,6 +86,7 @@ export function ensureGemLayers(map: MapboxMap): void {
     source: GEMS_SOURCE,
     filter: ['has', 'point_count'],
     layout: {
+      visibility: 'none',
       'text-field': ['get', 'point_count_abbreviated'],
       'text-size': 13,
       'text-allow-overlap': true,
@@ -91,6 +95,24 @@ export function ensureGemLayers(map: MapboxMap): void {
       'text-color': '#1a1200',
     },
   });
+}
+
+/** Показать / скрыть все слои капсул (Empty Style по умолчанию = none). */
+export function setGemsLayerVisibility(map: MapboxMap, visible: boolean): void {
+  const value = visible ? 'visible' : 'none';
+  for (const id of [
+    GEMS_GLOW_LAYER,
+    GEMS_POINT_LAYER,
+    GEMS_CLUSTER_LAYER,
+    GEMS_CLUSTER_COUNT_LAYER,
+  ]) {
+    if (!map.getLayer(id)) continue;
+    try {
+      map.setLayoutProperty(id, 'visibility', value);
+    } catch {
+      /* */
+    }
+  }
 }
 
 export function setGemFeatures(map: MapboxMap, gems: MapGem[]): void {

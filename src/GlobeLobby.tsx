@@ -3,7 +3,10 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft,
+  Box,
   Gem,
+  Ghost,
+  Layers,
   MapPin,
   MessageCircle,
   Phone,
@@ -24,11 +27,13 @@ import {
   bindGemInteractions,
   ensureGemLayers,
   setGemFeatures,
+  setGemsLayerVisibility,
   startGemPulse,
 } from './mapGemLayers';
 import { fetchAllMapGems, type MapGem } from './mapGems';
 import MemoryGemPopup from './MemoryGemPopup';
 import MemoryGemComposer from './MemoryGemComposer';
+import ArFootprints from './ArFootprints';
 
 export type MapPerson = PresenceUser & {
   isContact: boolean;
@@ -44,8 +49,9 @@ type GlobeLobbyProps = {
   isAdmin?: boolean;
   onOpenAdmin?: () => void;
   banned?: boolean;
-  /** Текущий пользователь — для создания капсул. */
   currentUserId: string;
+  ghostMode: boolean;
+  onGhostModeChange: (next: boolean) => void;
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -185,6 +191,8 @@ export default function GlobeLobby({
   onOpenAdmin,
   banned = false,
   currentUserId,
+  ghostMode,
+  onGhostModeChange,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -208,6 +216,10 @@ export default function GlobeLobby({
   const [openedGem, setOpenedGem] = useState<MapGem | null>(null);
   /** Точка long-press / Drop a Gem. */
   const [dropPoint, setDropPoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [showContacts, setShowContacts] = useState(true);
+  const [showGems, setShowGems] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [arOpen, setArOpen] = useState(false);
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
   openGemRef.current = (gem) => setOpenedGem(gem);
@@ -218,6 +230,14 @@ export default function GlobeLobby({
   );
 
   const me = useMemo(() => people.find((p) => p.isMe), [people]);
+
+  /** Empty Style: только Family contacts (+ вы), без незнакомцев. */
+  const visiblePeople = useMemo(() => {
+    if (!showContacts) {
+      return me ? [me] : [];
+    }
+    return people.filter((p) => p.isMe || p.isContact);
+  }, [people, showContacts, me]);
 
   const authorLabel = (authorId: string) => {
     const person = peopleRef.current.find((p) => p.userId === authorId);
@@ -382,12 +402,12 @@ export default function GlobeLobby({
     });
   }, [mapReady, me, geoSource]);
 
-  /** Синхронизация HTML-маркеров аватарок с presence. */
+  /** Синхронизация HTML-маркеров аватарок (только Family / контакты). */
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map) return;
 
-    const nextIds = new Set(people.map((p) => p.userId));
+    const nextIds = new Set(visiblePeople.map((p) => p.userId));
 
     for (const [id, marker] of markersRef.current) {
       if (!nextIds.has(id)) {
@@ -396,7 +416,7 @@ export default function GlobeLobby({
       }
     }
 
-    for (const person of people) {
+    for (const person of visiblePeople) {
       const existing = markersRef.current.get(person.userId);
       const selectedNow = selectedIdRef.current === person.userId;
 
@@ -418,7 +438,6 @@ export default function GlobeLobby({
             flyToPerson(current, false);
             return;
           }
-          // Одиночный тап → сразу полноэкранный чат.
           setSelected(null);
           onChatUserRef.current(current);
         },
@@ -428,7 +447,6 @@ export default function GlobeLobby({
             flyToPerson(current, false);
             return;
           }
-          // Двойной тап → мгновенный P2P-видеовызов без меню.
           setSelected(null);
           onCallUserRef.current(current);
         },
@@ -440,7 +458,7 @@ export default function GlobeLobby({
 
       markersRef.current.set(person.userId, marker);
     }
-  }, [people, mapReady, selected]);
+  }, [visiblePeople, mapReady, selected]);
 
   /** Слои Memory Gems + клики (кластер / распаковка) + пульсация. */
   useEffect(() => {
@@ -451,6 +469,7 @@ export default function GlobeLobby({
       try {
         ensureGemLayers(map);
         setGemFeatures(map, gems);
+        setGemsLayerVisibility(map, showGems);
       } catch (e) {
         console.warn('[paranoic gems] layers', e);
       }
@@ -459,8 +478,11 @@ export default function GlobeLobby({
     attach();
     const onStyle = () => attach();
     map.on('style.load', onStyle);
-    const unbind = bindGemInteractions(map, (gem) => openGemRef.current(gem));
-    const stopPulse = startGemPulse(map);
+    const unbind = bindGemInteractions(map, (gem) => {
+      if (!showGems) return;
+      openGemRef.current(gem);
+    });
+    const stopPulse = showGems ? startGemPulse(map) : () => undefined;
 
     return () => {
       map.off('style.load', onStyle);
@@ -468,7 +490,7 @@ export default function GlobeLobby({
       stopPulse();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady]);
+  }, [mapReady, showGems]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -476,10 +498,11 @@ export default function GlobeLobby({
     try {
       ensureGemLayers(map);
       setGemFeatures(map, gems);
+      setGemsLayerVisibility(map, showGems);
     } catch (e) {
       console.warn('[paranoic gems] setData', e);
     }
-  }, [gems, mapReady]);
+  }, [gems, mapReady, showGems]);
 
   /** Загрузка всех map_gems при инициализации карты. */
   useEffect(() => {
@@ -660,7 +683,7 @@ export default function GlobeLobby({
           >
             <ArrowLeft size={16} /> Назад
           </button>
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
             {isAdmin && onOpenAdmin && (
               <button
                 type="button"
@@ -669,6 +692,50 @@ export default function GlobeLobby({
               >
                 <ShieldCheck size={14} /> Admin Panel
               </button>
+            )}
+            <button
+              type="button"
+              className={`map-layers-btn${layersOpen ? ' open' : ''}`}
+              aria-expanded={layersOpen}
+              aria-label="Слои карты"
+              onClick={() => setLayersOpen((v) => !v)}
+            >
+              <Layers size={16} />
+              Слои
+            </button>
+            {layersOpen && (
+              <div className="map-layers-menu" role="menu">
+                <p className="map-layers-menu-title">Слои карты</p>
+                <label className="map-layers-toggle">
+                  <span>Контакты</span>
+                  <input
+                    type="checkbox"
+                    checked={showContacts}
+                    onChange={(e) => setShowContacts(e.target.checked)}
+                  />
+                  <span className="map-layers-switch" aria-hidden />
+                </label>
+                <label className="map-layers-toggle">
+                  <span>Капсулы памяти</span>
+                  <input
+                    type="checkbox"
+                    checked={showGems}
+                    onChange={(e) => setShowGems(e.target.checked)}
+                  />
+                  <span className="map-layers-switch" aria-hidden />
+                </label>
+                <label className="map-layers-toggle">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Ghost size={13} /> Режим Антарктиды
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={ghostMode}
+                    onChange={(e) => onGhostModeChange(e.target.checked)}
+                  />
+                  <span className="map-layers-switch" aria-hidden />
+                </label>
+              </div>
             )}
             <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
               Family Mode
@@ -684,11 +751,12 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Долгое нажатие — Drop a Gem · тап по аватарке — чат · золотые точки — капсулы
+            Чистая карта · контакты Family Mode
+            {showGems ? ' · капсулы включены' : ''}
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
-            {gems.length > 0 && (
+            {showGems && gems.length > 0 && (
               <span className="ml-1 text-amber-200/90">· {gems.length} капсул</span>
             )}
           </p>
@@ -757,29 +825,45 @@ export default function GlobeLobby({
               <Gem size={16} />
               Капсула
             </button>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col items-end gap-2">
               <button
                 type="button"
-                aria-label="Приблизить"
-                onClick={() => nudgeZoom(1.2)}
-                disabled={zoom >= 17.5}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
+                className="ar-fab"
+                onClick={() => setArOpen(true)}
+                aria-label="AR Footprints"
+                title="Дополненная реальность"
               >
-                <ZoomIn size={18} />
+                <Box size={22} />
+                <span>AR</span>
               </button>
-              <button
-                type="button"
-                aria-label="Отдалить"
-                onClick={() => nudgeZoom(-1.2)}
-                disabled={zoom <= 1.4}
-                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
-              >
-                <ZoomOut size={18} />
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  aria-label="Приблизить"
+                  onClick={() => nudgeZoom(1.2)}
+                  disabled={zoom >= 17.5}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
+                >
+                  <ZoomIn size={18} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Отдалить"
+                  onClick={() => nudgeZoom(-1.2)}
+                  disabled={zoom <= 1.4}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
+                >
+                  <ZoomOut size={18} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {arOpen && (
+        <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
+      )}
 
       {openedGem && (
         <MemoryGemPopup

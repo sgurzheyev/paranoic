@@ -93,7 +93,7 @@ import {
   type DeliveryStatus,
   type StoredMessage,
 } from './storage';
-import { loadSettings, type AppSettings } from './settings';
+import { loadSettings, saveSettings, type AppSettings } from './settings';
 import {
   enqueueOutbox,
   listOutbox,
@@ -2000,6 +2000,11 @@ export default function App() {
           onOpenAdmin={() => setAdminOpen(true)}
           banned={isBanned}
           currentUserId={identity.id}
+          ghostMode={settings.ghostMode}
+          onGhostModeChange={(next) => {
+            const saved = saveSettings({ ghostMode: next });
+            setSettings(saved);
+          }}
           onChatUser={(user) => {
             if (isBannedRef.current) {
               setError('Ваш аккаунт заблокирован. Связь недоступна.');
