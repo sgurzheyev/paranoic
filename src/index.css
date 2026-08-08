@@ -765,6 +765,29 @@ textarea {
   min-width: min(100%, 220px);
 }
 
+.file-transfer-lost {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 120, 120, 0.1);
+  border: 1px solid rgba(255, 140, 140, 0.28);
+}
+
+.file-transfer-lost-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: rgba(255, 200, 200, 0.95);
+}
+
+.file-transfer-lost-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .file-pending-name {
   margin: 0;
   font-weight: 600;

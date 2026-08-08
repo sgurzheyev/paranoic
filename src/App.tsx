@@ -23,6 +23,7 @@ import {
   MonitorOff,
   Ghost,
   Timer,
+  RefreshCw,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -87,10 +88,12 @@ type ChatMessage = StoredMessage & {
   mediaUrl?: string;
   /** 0..1 для file-transfer / исходящей отправки. */
   transferProgress?: number;
+  /** Обрыв связи во время передачи. */
+  transferFailed?: boolean;
 };
 
 function toStored(message: ChatMessage): StoredMessage {
-  const { mediaUrl: _url, transferProgress: _p, ...stored } = message;
+  const { mediaUrl: _url, transferProgress: _p, transferFailed: _f, ...stored } = message;
   return stored;
 }
 
@@ -167,6 +170,8 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingFilesRef = useRef<Map<string, Blob>>(new Map());
   const mediaUrlsRef = useRef<Set<string>>(new Set());
+  /** Исходящие File для «Повторить попытку» после обрыва. */
+  const retrySendFilesRef = useRef<Map<string, File>>(new Map());
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
@@ -780,7 +785,26 @@ export default function App() {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === id && (m.kind === 'file-transfer' || m.kind === 'file-pending')
-                ? { ...m, transferProgress: progress, kind: 'file-transfer' }
+                ? {
+                    ...m,
+                    transferProgress: progress,
+                    transferFailed: false,
+                    kind: 'file-transfer',
+                  }
+                : m
+            )
+          );
+        },
+        onFileTransferFailed: (id) => {
+          setUploadProgress(null);
+          setTransferProgressMap((prev) => {
+            const { [id]: _drop, ...rest } = prev;
+            return rest;
+          });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === id && (m.kind === 'file-transfer' || m.kind === 'file-pending')
+                ? { ...m, transferFailed: true, kind: 'file-transfer' }
                 : m
             )
           );
@@ -1080,15 +1104,19 @@ export default function App() {
     }
   };
 
-  const sendMedia = async (file: File) => {
-    if (!secretKey || !p2pRef.current?.isReady) return;
+  const sendMedia = async (file: File, reuseId?: string) => {
+    if (!secretKey || !p2pRef.current?.isReady) {
+      setError('Нет соединения — повторите, когда будете на связи');
+      return;
+    }
     setError('');
-    const transferId = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const transferId =
+      reuseId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    retrySendFilesRef.current.set(transferId, file);
     setUploadProgress(0);
     setTransferProgressMap((p) => ({ ...p, [transferId]: 0 }));
-    setMessages((prev) => [
-      ...prev,
-      {
+    setMessages((prev) => {
+      const row: ChatMessage = {
         id: transferId,
         sender: 'Я',
         time: nowTime(),
@@ -1098,8 +1126,13 @@ export default function App() {
         mediaName: file.name,
         mediaSize: file.size,
         transferProgress: 0,
-      },
-    ]);
+        transferFailed: false,
+      };
+      if (prev.some((m) => m.id === transferId)) {
+        return prev.map((m) => (m.id === transferId ? { ...m, ...row } : m));
+      }
+      return [...prev, row];
+    });
     setScreen('chat');
 
     const mediaKey = mediaStorageKey(transferId);
@@ -1113,6 +1146,7 @@ export default function App() {
       const mediaUrl = URL.createObjectURL(file);
       mediaUrlsRef.current.add(mediaUrl);
       await saveMediaBlob(mediaKey, file);
+      retrySendFilesRef.current.delete(transferId);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === transferId
@@ -1122,6 +1156,7 @@ export default function App() {
                 mediaUrl,
                 mediaKey,
                 transferProgress: 1,
+                transferFailed: false,
               }
             : m
         )
@@ -1141,8 +1176,21 @@ export default function App() {
         });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Файл не отправился');
-      setMessages((prev) => prev.filter((m) => m.id !== transferId));
+      const msg = e instanceof Error ? e.message : 'Файл не отправился';
+      const lost = msg === 'Связь потеряна' || !p2pRef.current?.isReady;
+      if (lost) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === transferId
+              ? { ...m, transferFailed: true, kind: 'file-transfer' }
+              : m
+          )
+        );
+      } else {
+        setError(msg);
+        retrySendFilesRef.current.delete(transferId);
+        setMessages((prev) => prev.filter((m) => m.id !== transferId));
+      }
     } finally {
       setUploadProgress(null);
       setTransferProgressMap((p) => {
@@ -1150,6 +1198,15 @@ export default function App() {
         return rest;
       });
     }
+  };
+
+  const retryFileTransfer = (id: string) => {
+    const file = retrySendFilesRef.current.get(id);
+    if (!file) {
+      setError('Файл для повтора недоступен — прикрепите снова');
+      return;
+    }
+    void sendMedia(file, id);
   };
 
   const applyIdentity = (next: UserIdentity) => {
@@ -1610,25 +1667,49 @@ export default function App() {
                           <p className="file-pending-name">{m.mediaName ?? 'Файл'}</p>
                           <p className="file-pending-size">
                             {formatFileSize(m.mediaSize ?? 0)}
-                            {progress != null
-                              ? ` · ${Math.round(progress * 100)}%`
-                              : m.mine
-                                ? ' · отправка…'
-                                : ' · загрузка…'}
+                            {m.transferFailed
+                              ? ' · связь потеряна'
+                              : progress != null
+                                ? ` · ${Math.round(progress * 100)}%`
+                                : m.mine
+                                  ? ' · отправка…'
+                                  : ' · загрузка…'}
                           </p>
-                          <div
-                            className="file-progress-track"
-                            role="progressbar"
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={Math.round((progress ?? 0) * 100)}
-                          >
+                          {!m.transferFailed && (
                             <div
-                              className="file-progress-fill"
-                              style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
-                            />
-                          </div>
-                          {m.kind === 'file-pending' && !m.mine && (
+                              className="file-progress-track"
+                              role="progressbar"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round((progress ?? 0) * 100)}
+                            >
+                              <div
+                                className="file-progress-fill"
+                                style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
+                              />
+                            </div>
+                          )}
+                          {m.transferFailed && (
+                            <div className="file-transfer-lost">
+                              <p className="file-transfer-lost-title">Связь потеряна</p>
+                              {m.mine ? (
+                                <button
+                                  type="button"
+                                  className="accept-file-btn"
+                                  onClick={() => retryFileTransfer(m.id)}
+                                  disabled={!connected}
+                                >
+                                  <RefreshCw size={16} />
+                                  Повторить попытку
+                                </button>
+                              ) : (
+                                <p className="file-transfer-lost-hint">
+                                  Дождитесь повторной отправки
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {m.kind === 'file-pending' && !m.mine && !m.transferFailed && (
                             <button
                               type="button"
                               className="accept-file-btn"

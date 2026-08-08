@@ -65,6 +65,8 @@ export type P2PHandlers = {
   /** Метаданные входящего файла до прихода чанков (для прогресса в UI). */
   onFileIncoming?: (meta: MediaFileMeta) => void;
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
+  /** Передача файла сорвалась (обрыв DC / таймаут ACK). */
+  onFileTransferFailed?: (id: string, reason: string) => void;
   onPeerHello?: (peer: PeerIdentity) => void;
   /** ACK доставки/прочтения от пира. */
   onMessageDelivery?: (ids: string[], status: 'delivered' | 'read') => void;
@@ -131,10 +133,17 @@ function logIceServers(source: string, servers: RTCIceServer[]): void {
   });
 }
 
-const FILE_CHUNK_BYTES = 128 * 1024;
+const FILE_CHUNK_BYTES = 64 * 1024;
+/** Высокий порог: не шлём следующий чанк, пока буфер DC выше. */
 const MAX_BUFFERED_AMOUNT = 256 * 1024;
+/** Низкий порог для `bufferedamountlow` — возобновление отправки. */
+const BUFFERED_AMOUNT_LOW = 64 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
+/** Подтверждение каждые N чанков (+ обязательно последний). */
+const FILE_ACK_EVERY = 4;
+const FILE_ACK_TIMEOUT_MS = 45_000;
+const FILE_TRANSFER_LOST = 'Связь потеряна';
 const ICE_CONNECT_TIMEOUT_MS = 25_000;
 /** Быстрее мягкий ICE при кратком обрыве / смене IP. */
 const ICE_SOFT_RESTART_DELAY_MS = 700;
@@ -184,6 +193,8 @@ type ControlPacket =
   | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string; msgId?: string }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number; msgId?: string }
   | { t: 'file-done'; id: string; msgId?: string }
+  | { t: 'file-ack'; id: string; upTo: number; msgId?: string }
+  | { t: 'file-abort'; id: string; msgId?: string }
   | { t: 'msg-delivered'; ids: string[]; msgId?: string }
   | { t: 'msg-read'; ids: string[]; msgId?: string }
   | { t: 'typing'; active: boolean; msgId?: string }
@@ -197,6 +208,22 @@ type IncomingFile = {
   iv: string;
   chunks: (Uint8Array | null)[];
   expected: number;
+  /** Последний непрерывный индекс с начала (для ACK). */
+  contiguous: number;
+  /** Последний upTo, отправленный в file-ack. */
+  lastAckSent: number;
+};
+
+type FileAckWaiter = {
+  upTo: number;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type FileAckState = {
+  lastAcked: number;
+  waiters: FileAckWaiter[];
 };
 
 function encodeFileChunk(id: string, index: number, payload: Uint8Array): ArrayBuffer {
@@ -235,16 +262,67 @@ function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/**
+ * Backpressure: ждём, пока `bufferedAmount` опустится ниже high-water.
+ * Возобновление только по `bufferedamountlow` / опросу — без ложного таймаута.
+ */
 async function waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+  if (channel.readyState !== 'open') {
+    throw new Error(FILE_TRANSFER_LOST);
+  }
   if (channel.bufferedAmount <= MAX_BUFFERED_AMOUNT) return;
-  channel.bufferedAmountLowThreshold = MAX_BUFFERED_AMOUNT / 2;
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      channel.removeEventListener('bufferedamountlow', done);
+
+  channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let poll: ReturnType<typeof setInterval> | null = null;
+
+    const cleanup = () => {
+      channel.removeEventListener('bufferedamountlow', onLow);
+      channel.removeEventListener('close', onLost);
+      channel.removeEventListener('error', onLost);
+      if (poll != null) {
+        clearInterval(poll);
+        poll = null;
+      }
+    };
+
+    const settleOk = () => {
+      if (settled) return;
+      if (channel.readyState !== 'open') {
+        settleLost();
+        return;
+      }
+      if (channel.bufferedAmount > MAX_BUFFERED_AMOUNT) return;
+      settled = true;
+      cleanup();
       resolve();
     };
-    channel.addEventListener('bufferedamountlow', done);
-    setTimeout(done, 100);
+
+    const settleLost = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(FILE_TRANSFER_LOST));
+    };
+
+    const onLow = () => settleOk();
+    const onLost = () => settleLost();
+
+    channel.addEventListener('bufferedamountlow', onLow);
+    channel.addEventListener('close', onLost);
+    channel.addEventListener('error', onLost);
+
+    poll = setInterval(() => {
+      if (channel.readyState !== 'open') {
+        settleLost();
+        return;
+      }
+      if (channel.bufferedAmount <= BUFFERED_AMOUNT_LOW) {
+        settleOk();
+      }
+    }, 40);
   });
 }
 
@@ -317,6 +395,9 @@ export class P2PConnection {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private incomingFiles = new Map<string, IncomingFile>();
+  /** Исходящие передачи: ожидание ACK от получателя. */
+  private fileAckState = new Map<string, FileAckState>();
+  private outgoingTransfers = new Set<string>();
   private makingOffer = false;
   private ignoreOffer = false;
   private polite = false;
@@ -825,35 +906,149 @@ export class P2PConnection {
     const pipe = this.filePipe();
     if (!pipe) throw new Error('Файловый канал ещё не готов');
 
+    pipe.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
+
     const buffer = await file.arrayBuffer();
     const { cipher, iv } = await encrypt(buffer);
     const cipherBytes = Uint8Array.from(atob(cipher), (c) => c.charCodeAt(0));
     const id = options?.transferId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const chunkCount = Math.ceil(cipherBytes.length / FILE_CHUNK_BYTES) || 1;
 
-    this.sendControl({
-      t: 'file-meta',
-      id,
-      name: file.name,
-      mime: file.type || 'application/octet-stream',
-      size: String(file.size),
-      iv,
-      chunks: chunkCount,
-    });
-    this.handlers.onFileProgress?.(id, 0);
+    this.outgoingTransfers.add(id);
+    this.fileAckState.set(id, { lastAcked: -1, waiters: [] });
 
-    for (let i = 0; i < chunkCount; i++) {
-      const start = i * FILE_CHUNK_BYTES;
-      const slice = cipherBytes.subarray(start, start + FILE_CHUNK_BYTES);
+    try {
+      this.sendControl({
+        t: 'file-meta',
+        id,
+        name: file.name,
+        mime: file.type || 'application/octet-stream',
+        size: String(file.size),
+        iv,
+        chunks: chunkCount,
+      });
+      this.handlers.onFileProgress?.(id, 0);
+
+      for (let i = 0; i < chunkCount; i++) {
+        if (pipe.readyState !== 'open' || !this.isReady) {
+          throw new Error(FILE_TRANSFER_LOST);
+        }
+
+        // Backpressure: не читаем/шлём следующий чанк, пока буфер DC полон.
+        await waitForBufferDrain(pipe);
+
+        const start = i * FILE_CHUNK_BYTES;
+        const slice = cipherBytes.subarray(start, start + FILE_CHUNK_BYTES);
+        try {
+          pipe.send(encodeFileChunk(id, i, slice));
+        } catch {
+          throw new Error(FILE_TRANSFER_LOST);
+        }
+
+        const needAck = (i + 1) % FILE_ACK_EVERY === 0 || i === chunkCount - 1;
+        if (needAck) {
+          await this.waitForFileAck(id, i);
+          this.handlers.onFileProgress?.(id, (i + 1) / chunkCount);
+        } else {
+          const acked = this.fileAckState.get(id)?.lastAcked ?? -1;
+          this.handlers.onFileProgress?.(
+            id,
+            Math.max(0, (acked + 1) / chunkCount)
+          );
+        }
+      }
+
       await waitForBufferDrain(pipe);
-      pipe.send(encodeFileChunk(id, i, slice));
-      this.handlers.onFileProgress?.(id, (i + 1) / chunkCount);
+      if (!this.isReady) throw new Error(FILE_TRANSFER_LOST);
+      this.sendControl({ t: 'file-done', id });
+      this.handlers.onFileProgress?.(id, 1);
+      return id;
+    } catch (e) {
+      this.rejectFileAckWaiters(id, e instanceof Error ? e : new Error(FILE_TRANSFER_LOST));
+      try {
+        if (this.isReady) this.sendControl({ t: 'file-abort', id, msgId: this.newMsgId() });
+      } catch {
+        /* */
+      }
+      throw e instanceof Error ? e : new Error(FILE_TRANSFER_LOST);
+    } finally {
+      this.outgoingTransfers.delete(id);
+      this.clearFileAckState(id);
     }
+  }
 
-    await waitForBufferDrain(pipe);
-    this.sendControl({ t: 'file-done', id });
-    this.handlers.onFileProgress?.(id, 1);
-    return id;
+  private waitForFileAck(id: string, upTo: number): Promise<void> {
+    const state = this.fileAckState.get(id) ?? { lastAcked: -1, waiters: [] };
+    this.fileAckState.set(id, state);
+    if (state.lastAcked >= upTo) return Promise.resolve();
+
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = state.waiters.findIndex((w) => w.timer === timer);
+        if (idx >= 0) state.waiters.splice(idx, 1);
+        reject(new Error(FILE_TRANSFER_LOST));
+      }, FILE_ACK_TIMEOUT_MS);
+
+      state.waiters.push({
+        upTo,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+        timer,
+      });
+    });
+  }
+
+  private applyFileAck(id: string, upTo: number): void {
+    const state = this.fileAckState.get(id);
+    if (!state) return;
+    if (!Number.isFinite(upTo) || upTo < 0) return;
+    state.lastAcked = Math.max(state.lastAcked, Math.floor(upTo));
+    const remaining: FileAckWaiter[] = [];
+    for (const waiter of state.waiters) {
+      if (state.lastAcked >= waiter.upTo) waiter.resolve();
+      else remaining.push(waiter);
+    }
+    state.waiters = remaining;
+  }
+
+  private rejectFileAckWaiters(id: string, error: Error): void {
+    const state = this.fileAckState.get(id);
+    if (!state) return;
+    for (const waiter of state.waiters) waiter.reject(error);
+    state.waiters = [];
+  }
+
+  private clearFileAckState(id: string): void {
+    const state = this.fileAckState.get(id);
+    if (state) {
+      for (const waiter of state.waiters) clearTimeout(waiter.timer);
+    }
+    this.fileAckState.delete(id);
+  }
+
+  /** Обрыв DC / soft-reset: сорвать активные передачи файлов. */
+  private failActiveFileTransfers(reason = FILE_TRANSFER_LOST): void {
+    const notifyIds = new Set<string>([
+      ...this.outgoingTransfers,
+      ...this.incomingFiles.keys(),
+    ]);
+
+    for (const id of [...this.fileAckState.keys()]) {
+      this.rejectFileAckWaiters(id, new Error(reason));
+      this.clearFileAckState(id);
+    }
+    this.outgoingTransfers.clear();
+    this.incomingFiles.clear();
+
+    for (const id of notifyIds) {
+      this.handlers.onFileTransferFailed?.(id, reason);
+    }
   }
 
   /** Канал для бинарных чанков: отдельный files DC, иначе fallback на chat. */
@@ -1464,6 +1659,8 @@ export class P2PConnection {
         iv: packet.iv,
         chunks: new Array(packet.chunks).fill(null),
         expected: packet.chunks,
+        contiguous: -1,
+        lastAckSent: -1,
       });
       this.handlers.onFileIncoming?.({
         id: packet.id,
@@ -1475,12 +1672,26 @@ export class P2PConnection {
       return;
     }
 
+    if (packet.t === 'file-ack') {
+      this.applyFileAck(packet.id, packet.upTo);
+      return;
+    }
+
+    if (packet.t === 'file-abort') {
+      if (this.incomingFiles.has(packet.id)) {
+        this.incomingFiles.delete(packet.id);
+        this.handlers.onFileTransferFailed?.(packet.id, FILE_TRANSFER_LOST);
+      }
+      return;
+    }
+
     if (packet.t === 'file-done') {
       const file = this.incomingFiles.get(packet.id);
       if (!file) return;
       const parts = file.chunks.filter((c): c is Uint8Array => c !== null);
       if (parts.length !== file.expected) {
         this.incomingFiles.delete(packet.id);
+        this.handlers.onFileTransferFailed?.(packet.id, 'Файл получен не полностью');
         this.handlers.onError?.(new Error('Файл получен не полностью'));
         return;
       }
@@ -1712,7 +1923,7 @@ export class P2PConnection {
     this.stopMediaWatchdog();
     this.stopNetworkWatch();
     void this.stopScreenShareInternal(false);
-    this.incomingFiles.clear();
+    this.failActiveFileTransfers(FILE_TRANSFER_LOST);
     this.makingOffer = false;
     this.ignoreOffer = false;
     this.iceRestarting = false;
@@ -2034,17 +2245,28 @@ export class P2PConnection {
   private bindFileChannel(channel: RTCDataChannel): void {
     this.fileChannel = channel;
     channel.binaryType = 'arraybuffer';
+    channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
 
     channel.onopen = () => {
+      channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
       console.info('[paranoic] file DataChannel open');
     };
 
     channel.onerror = () => {
       console.warn('[paranoic] file DataChannel error (soft)');
+      if (this.outgoingTransfers.size > 0 || this.incomingFiles.size > 0) {
+        this.failActiveFileTransfers(FILE_TRANSFER_LOST);
+      }
     };
 
     channel.onclose = () => {
       if (this.fileChannel === channel) this.fileChannel = null;
+      if (this.outgoingTransfers.size > 0 || this.incomingFiles.size > 0) {
+        // Chat-канал может ещё жить — но файловый pipe оборван.
+        if (!this.filePipe()) {
+          this.failActiveFileTransfers(FILE_TRANSFER_LOST);
+        }
+      }
     };
 
     channel.onmessage = (event) => {
@@ -2058,9 +2280,38 @@ export class P2PConnection {
     if (!chunk) return;
     const file = this.incomingFiles.get(chunk.id);
     if (!file || chunk.index >= file.expected) return;
-    file.chunks[chunk.index] = chunk.payload;
-    const got = file.chunks.filter(Boolean).length;
+    if (!file.chunks[chunk.index]) {
+      file.chunks[chunk.index] = chunk.payload;
+    }
+
+    while (
+      file.contiguous + 1 < file.expected &&
+      file.chunks[file.contiguous + 1]
+    ) {
+      file.contiguous += 1;
+    }
+
+    const got = file.contiguous + 1;
     this.handlers.onFileProgress?.(chunk.id, got / file.expected);
+
+    const dueAck =
+      file.contiguous >= 0 &&
+      file.contiguous > file.lastAckSent &&
+      (file.contiguous === file.expected - 1 ||
+        file.contiguous - file.lastAckSent >= FILE_ACK_EVERY);
+    if (dueAck && this.isReady) {
+      file.lastAckSent = file.contiguous;
+      try {
+        this.sendControl({
+          t: 'file-ack',
+          id: chunk.id,
+          upTo: file.contiguous,
+          msgId: this.newMsgId(),
+        });
+      } catch {
+        /* канал мог закрыться */
+      }
+    }
   }
 
   private bindChannel(channel: RTCDataChannel): void {
@@ -2078,8 +2329,14 @@ export class P2PConnection {
     channel.onclose = () => {
       // Во время звонка краткий close часто ложный — пробуем ICE, не сбрасываем UI сразу.
       if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+        if (this.outgoingTransfers.size > 0 || this.incomingFiles.size > 0) {
+          this.failActiveFileTransfers(FILE_TRANSFER_LOST);
+        }
         this.scheduleIceSoftRestart();
         return;
+      }
+      if (this.outgoingTransfers.size > 0 || this.incomingFiles.size > 0) {
+        this.failActiveFileTransfers(FILE_TRANSFER_LOST);
       }
       if (this.status === 'connected') {
         this.setStatus('disconnected');
@@ -2167,7 +2424,7 @@ export class P2PConnection {
     this.stopMediaWatchdog();
     this.stopNetworkWatch();
     void this.stopScreenShareInternal(false);
-    this.incomingFiles.clear();
+    this.failActiveFileTransfers(FILE_TRANSFER_LOST);
     this.makingOffer = false;
     this.ignoreOffer = false;
     this.iceRestarting = false;
