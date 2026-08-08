@@ -945,15 +945,23 @@ textarea {
   display: inline-flex;
   align-items: center;
   color: var(--muted);
-  opacity: 0.9;
+  opacity: 0.85;
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.msg-delivery.sending {
+  color: rgba(180, 186, 198, 0.85);
 }
 
 .msg-delivery.delivered {
-  color: rgba(155, 184, 232, 0.95);
+  color: rgba(220, 226, 236, 0.95);
+  opacity: 1;
 }
 
 .msg-delivery.read {
-  color: rgba(94, 234, 212, 0.95);
+  color: #3dde9a;
+  opacity: 1;
+  filter: drop-shadow(0 0 6px rgba(61, 222, 154, 0.35));
 }
 
 .media-preview {

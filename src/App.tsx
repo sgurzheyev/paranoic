@@ -34,6 +34,15 @@ import CallOverlay from './CallOverlay';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
+  playReceiveSound,
+  playSendSound,
+  startRingtone,
+  stopRingtone,
+  ensureNotifyPermission,
+  notifyIfHidden,
+  DELIVERY_LABELS,
+} from './notify';
+import {
   openNoteStream,
   recordMediaNote,
   stopStream,
@@ -436,12 +445,14 @@ export default function App() {
     for (const item of pending) {
       try {
         p2p.send(item.packet);
+        await patchDeliveryStatus([item.id], 'delivered');
+        playSendSound();
       } catch (e) {
         console.warn('[paranoic outbox] flush failed', e);
         break;
       }
     }
-  }, []);
+  }, [patchDeliveryStatus]);
 
   flushOutboxRef.current = flushOutbox;
 
@@ -473,6 +484,11 @@ export default function App() {
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage(row, false);
           }
+          playReceiveSound();
+          notifyIfHidden(msg.senderName || 'Новое сообщение', {
+            body: msg.text.slice(0, 120),
+            tag: `paranoic-msg-${msg.id}`,
+          });
         },
         onMedia: async (msg) => {
           const existing = await loadChatHistory(msg.conversationId);
@@ -502,6 +518,11 @@ export default function App() {
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage({ ...row, mediaUrl }, false);
           }
+          playReceiveSound();
+          notifyIfHidden(msg.senderName || 'Новый файл', {
+            body: msg.name || 'Медиафайл',
+            tag: `paranoic-media-${msg.id}`,
+          });
         },
       });
     } catch (e) {
@@ -724,8 +745,14 @@ export default function App() {
           setCallState(state);
           if (state === 'ringing') {
             setCallExpanded(true);
+            startRingtone();
+            notifyIfHidden('Входящий звонок', {
+              body: 'Вам звонят в Paranoic',
+              tag: 'paranoic-call',
+            });
           } else if (state === 'in-call' || state === 'calling') {
             setCallExpanded(false);
+            stopRingtone();
             setScreen((s) => (s === 'call' || s === 'home' ? 'chat' : s));
           }
           if (state === 'idle') {
@@ -733,6 +760,7 @@ export default function App() {
             setScreenSharing(false);
             setNetworkQuality('good');
             setCallExpanded(false);
+            stopRingtone();
             setScreen((s) => (s === 'call' ? 'chat' : s));
           }
         },
@@ -741,18 +769,30 @@ export default function App() {
         onIncomingConnection: () => {
           setIncomingConnection(true);
           setError('');
+          playReceiveSound();
+          notifyIfHidden('Входящий вызов', {
+            body: 'Кто-то открыл вашу магическую ссылку',
+            tag: 'paranoic-link',
+          });
         },
         onConnectionDeclined: () => {
           setIncomingConnection(false);
           setError('Вызов отклонён');
+          stopRingtone();
         },
         onIncomingCall: () => {
           setCallExpanded(true);
           setScreen((s) => (s === 'home' ? 'chat' : s));
+          startRingtone();
+          notifyIfHidden('Входящий звонок', {
+            body: peerLabel || 'Близкий',
+            tag: 'paranoic-call',
+          });
         },
         onCallDeclined: () => {
           setError('Звонок отклонён');
           setCallExpanded(false);
+          stopRingtone();
           setScreen((s) => (s === 'call' ? 'chat' : s));
         },
         onRemoteStream: (stream) => {
@@ -798,6 +838,11 @@ export default function App() {
               kind: 'text',
             });
             if (packet.sender) setPeerLabel(packet.sender);
+            playReceiveSound();
+            notifyIfHidden(packet.sender || 'Новое сообщение', {
+              body: text.slice(0, 120),
+              tag: `paranoic-msg-${id}`,
+            });
             p2pRef.current?.sendMessageAck([id], 'delivered');
             if (screenRef.current === 'chat') {
               p2pRef.current?.sendMessageAck([id], 'read');
@@ -900,6 +945,11 @@ export default function App() {
               return rest;
             });
             setScreen('chat');
+            playReceiveSound();
+            notifyIfHidden(peerLabel || 'Новый файл', {
+              body: meta.name || 'Медиафайл',
+              tag: `paranoic-media-${meta.id}`,
+            });
           } catch {
             setError('Не удалось расшифровать файл');
           }
@@ -1115,6 +1165,7 @@ export default function App() {
 
   const startCall = async () => {
     setError('');
+    void ensureNotifyPermission();
     try {
       await ensureP2P().startCall();
       attachLocalVideo(null);
@@ -1142,6 +1193,8 @@ export default function App() {
 
   const acceptMediaCall = async () => {
     setError('');
+    stopRingtone();
+    void ensureNotifyPermission();
     try {
       const stream = await ensureP2P().acceptCall();
       attachLocalVideo(stream);
@@ -1155,12 +1208,14 @@ export default function App() {
   };
 
   const declineMediaCall = async () => {
+    stopRingtone();
     await ensureP2P().declineCall();
     setCallExpanded(false);
     setScreen('chat');
   };
 
   const hangUp = async () => {
+    stopRingtone();
     await p2pRef.current?.hangUp();
     attachLocalVideo(null);
     setScreenSharing(false);
@@ -1217,6 +1272,9 @@ export default function App() {
     try {
       if (p2pRef.current?.isReady) {
         p2pRef.current.send(packet);
+        await patchDeliveryStatus([id], 'delivered');
+        playSendSound();
+        void ensureNotifyPermission();
       } else if (hasSupabaseConfig()) {
         await uploadPendingText({
           id,
@@ -1226,6 +1284,8 @@ export default function App() {
           plaintext: text,
         });
         await patchDeliveryStatus([id], 'delivered');
+        playSendSound();
+        void ensureNotifyPermission();
       } else {
         await enqueueOutbox({
           id,
@@ -1247,6 +1307,7 @@ export default function App() {
             plaintext: text,
           });
           await patchDeliveryStatus([id], 'delivered');
+          playSendSound();
         } else {
           await enqueueOutbox({
             id,
@@ -1309,6 +1370,7 @@ export default function App() {
         mediaKind,
         transferProgress: 0,
         transferFailed: false,
+        deliveryStatus: 'sending',
       };
       if (prev.some((m) => m.id === transferId)) {
         return prev.map((m) => (m.id === transferId ? { ...m, ...row } : m));
@@ -1361,10 +1423,13 @@ export default function App() {
                 mediaKind,
                 transferProgress: 1,
                 transferFailed: false,
+                deliveryStatus: 'delivered',
               }
             : m
         )
       );
+      playSendSound();
+      void ensureNotifyPermission();
       const conv = conversationIdRef.current;
       if (conv) {
         await appendStoredMessage(conv, {
@@ -1378,6 +1443,7 @@ export default function App() {
           mediaSize: file.size,
           mediaKind,
           mediaKey,
+          deliveryStatus: 'delivered',
         });
       }
     } catch (e) {
@@ -1524,9 +1590,21 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      stopRingtone();
       cancelMediaNote();
     };
   }, [cancelMediaNote]);
+
+  /** Разрешение на уведомления по первому жесту в приложении. */
+  useEffect(() => {
+    if (appMode === 'select') return;
+    const unlock = () => {
+      void ensureNotifyPermission();
+      window.removeEventListener('pointerdown', unlock);
+    };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    return () => window.removeEventListener('pointerdown', unlock);
+  }, [appMode]);
 
   const retryFileTransfer = (id: string) => {
     const file = retrySendFilesRef.current.get(id);
@@ -2197,30 +2275,26 @@ export default function App() {
                       )}
                       <div className="bubble-meta">
                         <time>{m.time}</time>
-                        {m.mine && m.kind === 'text' && (
+                        {m.mine && (m.kind === 'text' || m.kind === 'media') && (
                           <span
                             className={`msg-delivery ${m.deliveryStatus ?? 'sending'}`}
                             title={
-                              m.deliveryStatus === 'read'
-                                ? 'Прочитано'
-                                : m.deliveryStatus === 'delivered'
-                                  ? 'Доставлено'
-                                  : 'Отправляется'
+                              DELIVERY_LABELS[
+                                (m.deliveryStatus ?? 'sending') as DeliveryStatus
+                              ]
                             }
                             aria-label={
-                              m.deliveryStatus === 'read'
-                                ? 'Прочитано'
-                                : m.deliveryStatus === 'delivered'
-                                  ? 'Доставлено'
-                                  : 'Отправляется'
+                              DELIVERY_LABELS[
+                                (m.deliveryStatus ?? 'sending') as DeliveryStatus
+                              ]
                             }
                           >
                             {m.deliveryStatus === 'read' ? (
-                              <CheckCheck size={14} />
+                              <CheckCheck size={15} strokeWidth={2.4} />
                             ) : m.deliveryStatus === 'delivered' ? (
-                              <Check size={14} />
+                              <Check size={15} strokeWidth={2.4} />
                             ) : (
-                              <Clock size={13} />
+                              <Clock size={13} strokeWidth={2.2} />
                             )}
                           </span>
                         )}
