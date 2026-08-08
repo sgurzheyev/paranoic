@@ -409,11 +409,11 @@ export default function GlobeLobby({
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm font-bold text-slate-100 backdrop-blur-md transition hover:bg-black/55"
+            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
           >
             <ArrowLeft size={16} /> Назад
           </button>
-          <div className="rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm font-bold text-slate-200 backdrop-blur-md">
+          <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
             Family Mode
           </div>
         </header>
@@ -422,7 +422,7 @@ export default function GlobeLobby({
           <p className="mx-auto max-w-md text-sm text-slate-400 sm:text-base">
             Смотрите на Землю изнутри. Контакты — аватарки, незнакомцы — золотые точки.
           </p>
-          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs text-slate-300">
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
           </p>
         </div>
@@ -434,7 +434,7 @@ export default function GlobeLobby({
               aria-label="Приблизить"
               onClick={() => applyFov(fovRef.current - 8)}
               disabled={fov <= FOV_MIN}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/45 text-slate-100 backdrop-blur-md transition hover:bg-black/60 disabled:opacity-35"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
             >
               <ZoomIn size={18} />
             </button>
@@ -443,7 +443,7 @@ export default function GlobeLobby({
               aria-label="Отдалить"
               onClick={() => applyFov(fovRef.current + 8)}
               disabled={fov >= FOV_MAX}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/45 text-slate-100 backdrop-blur-md transition hover:bg-black/60 disabled:opacity-35"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
             >
               <ZoomOut size={18} />
             </button>
@@ -452,8 +452,8 @@ export default function GlobeLobby({
       </div>
 
       {selected && (
-        <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/45 p-4 backdrop-blur-[2px] sm:items-center">
-          <div className="w-full max-w-md animate-[slide-up_0.28s_ease] rounded-3xl border border-amber-300/30 bg-[#12141c]/95 p-6 shadow-2xl shadow-amber-900/20">
+        <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/40 p-4 backdrop-blur-[8px] sm:items-center">
+          <div className="w-full max-w-md animate-[slide-up_0.28s_ease] rounded-3xl border border-white/20 bg-white/[0.08] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-[24px]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div
@@ -481,7 +481,7 @@ export default function GlobeLobby({
                   <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#12141c] bg-emerald-400" />
                 </div>
                 <div>
-                  <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-amber-200/80">
+                  <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-slate-400">
                     {selected.isContact ? 'Контакт' : 'В сети'}
                   </p>
                   <h2 className="mt-1 m-0 text-2xl font-extrabold text-white">
@@ -494,7 +494,7 @@ export default function GlobeLobby({
               </div>
               <button
                 type="button"
-                className="rounded-full p-2 text-slate-400 transition hover:bg-white/5 hover:text-white"
+                className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
                 aria-label="Закрыть"
                 onClick={() => {
                   setSelected(null);
@@ -507,7 +507,7 @@ export default function GlobeLobby({
             <button
               type="button"
               onClick={() => onCallUser(selected)}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-400/45 bg-emerald-400/15 px-5 py-4 text-lg font-extrabold text-emerald-50 transition hover:bg-emerald-400/25"
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-lg font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15"
             >
               <Phone size={22} /> Позвонить
             </button>

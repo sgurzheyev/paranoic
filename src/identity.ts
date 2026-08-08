@@ -27,10 +27,25 @@ const AVATAR_COLORS = [
 /** Пресеты фона для выбора в профиле. */
 export const THEME_FON_PRESETS: { id: string; label: string; value: string }[] = [
   {
-    id: 'night',
-    label: 'Ночь',
+    id: 'sequoia',
+    label: 'Sequoia',
     value:
-      'radial-gradient(1200px 600px at 10% -10%, rgba(94, 234, 212, 0.12), transparent 55%), radial-gradient(900px 500px at 100% 0%, rgba(96, 165, 250, 0.1), transparent 50%), #12141c',
+      'radial-gradient(900px 520px at 18% -8%, rgba(180, 190, 210, 0.14), transparent 55%), radial-gradient(800px 480px at 92% 8%, rgba(140, 150, 170, 0.1), transparent 50%), linear-gradient(180deg, #14161c 0%, #0a0b0e 100%)',
+  },
+  {
+    id: 'silver',
+    label: 'Серебро',
+    value: 'linear-gradient(165deg, #1c1e24 0%, #2a2d36 42%, #12141a 100%)',
+  },
+  {
+    id: 'graphite',
+    label: 'Графит',
+    value: 'linear-gradient(180deg, #1a1b20 0%, #0e0f12 100%)',
+  },
+  {
+    id: 'mist',
+    label: 'Туман',
+    value: 'linear-gradient(165deg, #1a1d24 0%, #252a33 48%, #12151a 100%)',
   },
   {
     id: 'ocean',
@@ -41,21 +56,6 @@ export const THEME_FON_PRESETS: { id: string; label: string; value: string }[] =
     id: 'ember',
     label: 'Тлеющий',
     value: 'linear-gradient(165deg, #1a1210 0%, #3b1d18 45%, #1c1412 100%)',
-  },
-  {
-    id: 'violet',
-    label: 'Сумерки',
-    value: 'linear-gradient(165deg, #12101a 0%, #2a1f45 48%, #151822 100%)',
-  },
-  {
-    id: 'forest',
-    label: 'Лес',
-    value: 'linear-gradient(165deg, #0d1410 0%, #1a3324 50%, #101816 100%)',
-  },
-  {
-    id: 'slate',
-    label: 'Сталь',
-    value: 'linear-gradient(180deg, #1e2330 0%, #12151c 100%)',
   },
 ];
 

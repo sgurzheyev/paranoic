@@ -1,22 +1,34 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&display=swap');
 
 :root {
-  --bg0: #12141c;
-  --bg1: #1a1d28;
-  --bg2: #242836;
-  --text: #d7dbe7;
-  --text-strong: #f5f7fb;
-  --muted: #8b93a7;
-  --accent: #5eead4;
-  --accent-dim: rgba(94, 234, 212, 0.14);
-  --accent-border: rgba(94, 234, 212, 0.45);
-  --call: #34d399;
-  --chat: #60a5fa;
-  --media: #fbbf24;
-  --danger: #fb7185;
+  /* Sequoia Liquid Glass — monochrome silver */
+  --bg0: #0c0d10;
+  --bg1: rgba(255, 255, 255, 0.05);
+  --bg2: rgba(255, 255, 255, 0.08);
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-strong: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-border-soft: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.28);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --glass-glow: 0 0 24px rgba(255, 255, 255, 0.06);
+  --blur: blur(20px);
+  --blur-strong: blur(28px);
+  --text: #c8cdd6;
+  --text-strong: #f4f5f7;
+  --muted: #8b919c;
+  --accent: #d4d8de;
+  --accent-dim: rgba(255, 255, 255, 0.08);
+  --accent-border: rgba(255, 255, 255, 0.22);
+  --call: #7ddea8;
+  --chat: #9bb8e8;
+  --media: #e0c48a;
+  --danger: #e8a0ac;
   --radius: 22px;
-  --font: 'Nunito', system-ui, sans-serif;
+  --radius-sm: 16px;
+  --radius-lg: 24px;
+  --font: 'Nunito', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
 }
 
 * {
@@ -36,16 +48,28 @@ body,
 body {
   font-family: var(--font);
   background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(94, 234, 212, 0.12), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(96, 165, 250, 0.1), transparent 50%),
-    var(--bg0);
+    radial-gradient(900px 520px at 18% -8%, rgba(180, 190, 210, 0.14), transparent 55%),
+    radial-gradient(800px 480px at 92% 8%, rgba(140, 150, 170, 0.1), transparent 50%),
+    radial-gradient(700px 420px at 50% 110%, rgba(100, 110, 130, 0.12), transparent 45%),
+    linear-gradient(180deg, #14161c 0%, #0a0b0e 100%);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
 input,
 textarea {
   font: inherit;
+}
+
+/* ——— Liquid Glass primitives ——— */
+.glass-panel {
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
 }
 
 .app-shell {
@@ -55,6 +79,17 @@ textarea {
   max-width: 720px;
   margin: 0 auto;
   padding: 16px 16px 28px;
+  position: relative;
+}
+
+.app-shell::before {
+  content: '';
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(255, 255, 255, 0.06), transparent 60%);
 }
 
 .app-header {
@@ -63,6 +98,13 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
+  padding: 12px 14px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
 }
 
 .brand {
@@ -81,6 +123,7 @@ textarea {
   width: 36px;
   height: 36px;
   color: var(--accent);
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.2));
 }
 
 .brand h1 {
@@ -103,8 +146,11 @@ textarea {
   gap: 8px;
   padding: 8px 12px;
   border-radius: 999px;
-  background: var(--bg2);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   font-size: 0.82rem;
   color: var(--muted);
   max-width: min(280px, 55vw);
@@ -127,20 +173,21 @@ textarea {
 
 .status-pill.ok {
   color: var(--call);
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: rgba(125, 222, 168, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 16px rgba(125, 222, 168, 0.12);
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #f59e0b;
-  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15);
+  background: #a8aeb8;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
 }
 
 .status-pill.ok .status-dot {
   background: var(--call);
-  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.18);
+  box-shadow: 0 0 0 4px rgba(125, 222, 168, 0.18);
   animation: pulse 1.8s ease-in-out infinite;
 }
 
@@ -160,20 +207,25 @@ textarea {
   justify-content: space-between;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   margin-bottom: 12px;
   font-size: 0.95rem;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  box-shadow: var(--glass-shadow);
 }
 
 .banner.error {
-  background: rgba(251, 113, 133, 0.12);
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  color: #fecdd3;
+  background: rgba(232, 160, 172, 0.1);
+  border: 1px solid rgba(232, 160, 172, 0.35);
+  color: #f5d0d6;
 }
 
 .banner.info {
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-border);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
   color: var(--accent);
 }
 
@@ -188,18 +240,29 @@ textarea {
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  margin: 24px 0;
+  margin: 16px 0;
+  padding: 22px 18px;
   text-align: center;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
 }
 
 .room-card-icon {
   color: var(--accent);
+  filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.15));
 }
 
 .room-id-label {
   margin: 0;
   font-size: 0.85rem;
   color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .home,
@@ -244,21 +307,22 @@ textarea {
 
 .answer-paste input {
   flex: 1;
-  background: var(--bg0);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius-sm);
   color: var(--text-strong);
   padding: 12px 14px;
 }
 
 .answer-paste button {
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-border);
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
   color: var(--text-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   padding: 10px 14px;
   cursor: pointer;
   font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .mega-grid {
@@ -275,13 +339,30 @@ textarea {
   min-height: 88px;
   padding: 20px 24px;
   border-radius: var(--radius);
-  border: 1px solid transparent;
+  border: 1px solid var(--glass-border);
   font-size: 1.35rem;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text-strong);
   cursor: pointer;
-  transition: transform 0.15s ease, filter 0.15s ease, background 0.15s ease;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    var(--glass-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+    0 10px 28px rgba(0, 0, 0, 0.28);
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.2s ease, border-color 0.15s ease;
+}
+
+.mega-btn:hover {
+  filter: brightness(1.06);
+  border-color: var(--glass-highlight);
+  box-shadow:
+    0 0 28px rgba(255, 255, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 12px 32px rgba(0, 0, 0, 0.32);
 }
 
 .mega-btn:active {
@@ -297,8 +378,8 @@ textarea {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 3px solid rgba(236, 254, 255, 0.25);
-  border-top-color: #ecfeff;
+  border: 3px solid rgba(244, 245, 247, 0.25);
+  border-top-color: #f4f5f7;
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
@@ -310,9 +391,9 @@ textarea {
 }
 
 .mega-btn.primary {
-  background: linear-gradient(160deg, rgba(94, 234, 212, 0.28), rgba(94, 234, 212, 0.08));
-  border-color: var(--accent-border);
-  color: #ecfeff;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05));
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #f8f9fb;
 }
 
 .mega-btn.primary.compact {
@@ -321,25 +402,29 @@ textarea {
 }
 
 .mega-btn.call {
-  background: linear-gradient(160deg, rgba(52, 211, 153, 0.28), rgba(52, 211, 153, 0.08));
-  border-color: rgba(52, 211, 153, 0.4);
+  background: linear-gradient(165deg, rgba(125, 222, 168, 0.22), rgba(255, 255, 255, 0.05));
+  border-color: rgba(125, 222, 168, 0.35);
   min-height: 108px;
   font-size: 1.55rem;
+  box-shadow:
+    0 0 28px rgba(125, 222, 168, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 10px 28px rgba(0, 0, 0, 0.28);
 }
 
 .mega-btn.chat {
-  background: linear-gradient(160deg, rgba(96, 165, 250, 0.28), rgba(96, 165, 250, 0.08));
-  border-color: rgba(96, 165, 250, 0.4);
+  background: linear-gradient(165deg, rgba(155, 184, 232, 0.2), rgba(255, 255, 255, 0.05));
+  border-color: rgba(155, 184, 232, 0.35);
 }
 
 .mega-btn.media {
-  background: linear-gradient(160deg, rgba(251, 191, 36, 0.24), rgba(251, 191, 36, 0.08));
-  border-color: rgba(251, 191, 36, 0.4);
+  background: linear-gradient(165deg, rgba(224, 196, 138, 0.18), rgba(255, 255, 255, 0.05));
+  border-color: rgba(224, 196, 138, 0.35);
 }
 
 .mega-btn.hangup {
-  background: linear-gradient(160deg, rgba(251, 113, 133, 0.35), rgba(251, 113, 133, 0.12));
-  border-color: rgba(251, 113, 133, 0.45);
+  background: linear-gradient(165deg, rgba(232, 160, 172, 0.28), rgba(255, 255, 255, 0.04));
+  border-color: rgba(232, 160, 172, 0.4);
   color: #fff1f2;
   max-width: 320px;
   margin: 0 auto;
@@ -372,13 +457,16 @@ textarea {
 }
 
 .advanced {
-  background: var(--bg1);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius-sm);
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: var(--glass-shadow);
 }
 
 .adv-label {
@@ -399,32 +487,35 @@ textarea {
 .chat-compose input {
   flex: 1;
   width: 100%;
-  background: var(--bg0);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius-sm);
   color: var(--text-strong);
   padding: 12px 14px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .advanced button {
-  background: var(--bg2);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
   color: var(--text-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   cursor: pointer;
   white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .mono-box {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
   word-break: break-all;
-  background: var(--bg0);
-  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: var(--radius-sm);
   padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border-soft);
   color: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .mono-box.small {
@@ -461,6 +552,13 @@ textarea {
   gap: 8px;
   font-weight: 700;
   color: var(--text-strong);
+  padding: 10px 12px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
 }
 
 .chat-log {
@@ -469,8 +567,14 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 8px 0 16px;
+  padding: 12px;
   min-height: 40vh;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .empty {
@@ -492,17 +596,21 @@ textarea {
   max-width: min(85%, 420px);
   padding: 12px 14px;
   border-radius: 18px;
-  background: var(--bg2);
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
 .bubble.mine {
-  background: rgba(94, 234, 212, 0.14);
-  border: 1px solid var(--accent-border);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
 .bubble.theirs {
-  background: rgba(96, 165, 250, 0.12);
-  border: 1px solid rgba(96, 165, 250, 0.3);
+  background: rgba(155, 184, 232, 0.12);
+  border: 1px solid rgba(155, 184, 232, 0.28);
 }
 
 .bubble p {
@@ -552,13 +660,14 @@ textarea {
   gap: 6px;
   margin-top: 4px;
   padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-dim);
-  color: var(--accent);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05));
+  color: var(--text-strong);
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 14px rgba(0, 0, 0, 0.2);
 }
 
 .accept-file-btn:hover {
@@ -575,8 +684,8 @@ textarea {
   flex-direction: column;
   align-items: stretch;
   gap: 14px;
-  background: rgba(52, 211, 153, 0.1);
-  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--glass-border);
   color: var(--text-strong);
 }
 
@@ -616,13 +725,14 @@ textarea {
   justify-content: center;
   gap: 6px;
   padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(251, 113, 133, 0.4);
-  background: rgba(251, 113, 133, 0.12);
-  color: #fecdd3;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(232, 160, 172, 0.4);
+  background: linear-gradient(165deg, rgba(232, 160, 172, 0.2), rgba(255, 255, 255, 0.04));
+  color: #f5d0d6;
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .decline-call-btn.large {
@@ -641,9 +751,15 @@ textarea {
   align-items: center;
   gap: 14px;
   text-align: center;
-  padding: 24px 12px;
+  padding: 28px 20px;
   width: 100%;
   max-width: 360px;
+  background: var(--glass);
+  backdrop-filter: var(--blur-strong);
+  -webkit-backdrop-filter: var(--blur-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
 }
 
 .incoming-media-title {
@@ -661,6 +777,13 @@ textarea {
 .chat-compose {
   display: flex;
   gap: 10px;
+  padding: 10px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
 }
 
 .chat-compose button,
@@ -670,19 +793,25 @@ textarea {
   justify-content: center;
   width: 52px;
   height: 52px;
-  border-radius: 16px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
   color: var(--accent);
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .icon-btn {
   width: 42px;
   height: 42px;
-  background: transparent;
-  border-color: transparent;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--glass-border-soft);
   color: var(--text);
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--glass-border);
 }
 
 .call {
@@ -703,9 +832,12 @@ textarea {
   position: relative;
   overflow: hidden;
   border-radius: 50%;
-  background: var(--bg2);
-  border: 3px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 0 30px rgba(255, 255, 255, 0.06);
 }
 
 .video-circle video {
@@ -961,7 +1093,13 @@ textarea {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 4px 0 8px;
+  padding: 14px 16px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
 }
 
 .app-shell.themed {
@@ -1054,8 +1192,9 @@ textarea {
   align-items: flex-end;
   justify-content: center;
   padding: 16px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(3px);
+  background: rgba(8, 9, 12, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 @media (min-width: 640px) {
@@ -1069,14 +1208,16 @@ textarea {
   max-width: 420px;
   max-height: min(90svh, 720px);
   overflow: auto;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(18, 20, 28, 0.96);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  background: rgba(28, 30, 36, 0.72);
+  backdrop-filter: var(--blur-strong);
+  -webkit-backdrop-filter: var(--blur-strong);
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--glass-shadow), 0 24px 60px rgba(0, 0, 0, 0.45);
 }
 
 .profile-modal-head {
@@ -1109,12 +1250,13 @@ textarea {
 }
 
 .profile-field input {
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: var(--bg2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border-soft);
+  background: rgba(0, 0, 0, 0.28);
   color: var(--text-strong);
   padding: 12px 14px;
   font-weight: 600;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .theme-fon-grid {
@@ -1125,18 +1267,18 @@ textarea {
 
 .theme-fon-swatch {
   height: 56px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .theme-fon-swatch.active {
-  border-color: var(--accent);
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
 .profile-error {
@@ -1152,18 +1294,73 @@ textarea {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px solid var(--bg0);
+  border: 2px solid #14161c;
   background: #64748b;
 }
 
 .online-dot.on,
 .online-dot.self {
-  background: #34d399;
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2);
+  background: var(--call);
+  box-shadow: 0 0 0 3px rgba(125, 222, 168, 0.2);
 }
 
 .online-dot.off {
   background: #64748b;
+}
+
+.name-edit input {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border-soft);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-strong);
+  padding: 8px 12px;
+}
+
+.contacts-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+}
+
+.contacts-count {
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass-border-soft);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.contact-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border-soft);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.contact-row:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 18px rgba(255, 255, 255, 0.05);
 }
 
 .identity-meta {
@@ -1194,16 +1391,6 @@ textarea {
   align-items: center;
 }
 
-.name-edit input {
-  flex: 1;
-  min-width: 0;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: var(--bg2);
-  color: var(--text-strong);
-  padding: 8px 12px;
-}
-
 .mono-id {
   margin: 4px 0 0;
   font-size: 0.78rem;
@@ -1229,13 +1416,6 @@ textarea {
   color: var(--text-strong);
 }
 
-.contacts-panel {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .contacts-head {
   display: flex;
   align-items: center;
@@ -1247,14 +1427,6 @@ textarea {
   font-size: 1.05rem;
   font-weight: 800;
   color: var(--text-strong);
-}
-
-.contacts-count {
-  font-size: 0.78rem;
-  color: var(--muted);
-  background: var(--bg2);
-  border-radius: 999px;
-  padding: 2px 10px;
 }
 
 .empty-contacts {
@@ -1271,26 +1443,6 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.contact-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: var(--bg1);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.contact-row:hover:not(:disabled) {
-  border-color: rgba(52, 211, 153, 0.35);
-  background: rgba(52, 211, 153, 0.06);
 }
 
 .contact-row:disabled {
