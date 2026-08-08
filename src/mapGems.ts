@@ -1,6 +1,5 @@
 import {
-  getAuthAccessToken,
-  getAuthUserId,
+  ensureAuthSession,
   getSupabase,
   getSupabaseConfig,
   hasSupabaseConfig,
@@ -120,14 +119,25 @@ export function buildVisibleGemsContext(
 
 /**
  * INSERT в map_gems.
- * `author_id` = supabase.auth.getUser().id (auth.uid()).
- * Профиль не трогаем на клиенте — его создаёт триггер Auth / БД.
+ * `author_id` строго из session.user.id (не локальный профиль).
+ * Профиль на клиенте не трогаем.
  */
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
 
-  const authorId = await getAuthUserId();
   const sb = getSupabase();
+  const {
+    data: { session: rawSession },
+  } = await sb.auth.getSession();
+
+  const session =
+    rawSession?.user?.id != null ? rawSession : await ensureAuthSession();
+
+  const authorId = session.user.id;
+  if (!authorId) {
+    throw new Error('Сессия Auth отсутствует: нет session.user.id');
+  }
+
   const row = {
     author_id: authorId,
     lat: input.lat,
@@ -145,6 +155,9 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
 
   if (error) {
     const msg = error.message || 'Не удалось сохранить капсулу';
+    if (/Auth session missing|session/i.test(msg)) {
+      throw new Error('Сессия Auth отсутствует. Обновите страницу и сохраните капсулу снова.');
+    }
     if (/row-level security|RLS/i.test(msg)) {
       throw new Error(
         'RLS блокирует запись. Проверьте политику map_gems INSERT (author_id = auth.uid()).'
@@ -157,7 +170,7 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
 
 /**
  * Загрузка фото/видео в Storage (`map-gems`) с прогрессом (XHR).
- * Путь: `{auth.uid()}/...`, Authorization = session JWT.
+ * Путь и JWT — только из Auth session.
  */
 export async function uploadGemMedia(
   file: File,
@@ -166,9 +179,18 @@ export async function uploadGemMedia(
   const cfg = getSupabaseConfig();
   if (!cfg) throw new Error('Supabase не настроен');
 
-  const uid = await getAuthUserId();
-  const accessToken = await getAuthAccessToken();
+  const sb = getSupabase();
+  const {
+    data: { session: rawSession },
+  } = await sb.auth.getSession();
+  const session =
+    rawSession?.user?.id != null ? rawSession : await ensureAuthSession();
 
+  const uid = session.user.id;
+  const accessToken = session.access_token;
+  if (!uid || !accessToken) {
+    throw new Error('Сессия Auth отсутствует. Обновите страницу и попробуйте снова.');
+  }
   const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
   const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const endpoint = `${cfg.url.replace(/\/$/, '')}/storage/v1/object/${MAP_GEMS_BUCKET}/${path}`;
@@ -212,7 +234,6 @@ export async function uploadGemMedia(
     xhr.send(file);
   });
 
-  const sb = getSupabase();
   const { data } = sb.storage.from(MAP_GEMS_BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }

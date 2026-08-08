@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -27,34 +27,65 @@ export function getSupabase(): SupabaseClient {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: true,
       },
     });
   }
   return client;
 }
 
-/** `auth.uid()` текущего пользователя Supabase Auth. */
-export async function getAuthUserId(): Promise<string> {
+/**
+ * Гарантирует живую Auth-сессию перед запросами с RLS.
+ * 1) getSession → 2) refreshSession → 3) signInAnonymously (реинит).
+ */
+export async function ensureAuthSession(): Promise<Session> {
   const sb = getSupabase();
-  const { data, error } = await sb.auth.getUser();
-  if (error) {
-    throw new Error(error.message || 'Не удалось получить сессию Auth');
+
+  const { data: first, error: sessionErr } = await sb.auth.getSession();
+  if (sessionErr) {
+    console.warn('[paranoic auth] getSession', sessionErr.message);
   }
-  const id = data.user?.id?.trim();
-  if (!id) {
-    throw new Error('Нет сессии Supabase Auth. Войдите в аккаунт и попробуйте снова.');
+
+  let session = first.session;
+
+  if (!session?.user?.id) {
+    const { data: refreshed, error: refreshErr } = await sb.auth.refreshSession();
+    if (refreshErr) {
+      console.warn('[paranoic auth] refreshSession', refreshErr.message);
+    }
+    session = refreshed.session;
   }
-  return id;
+
+  if (!session?.user?.id) {
+    // Повторная инициализация сессии (локальный профиль ≠ Auth JWT).
+    const { data: anon, error: anonErr } = await sb.auth.signInAnonymously();
+    if (anonErr) {
+      const hint = /anonymous|disabled|not enabled/i.test(anonErr.message)
+        ? ' Включите Anonymous Sign-Ins в Supabase → Authentication → Providers.'
+        : '';
+      throw new Error(`Сессия Auth отсутствует.${hint} ${anonErr.message}`.trim());
+    }
+    session = anon.session;
+  }
+
+  if (!session?.user?.id) {
+    throw new Error('Сессия Auth отсутствует. Обновите страницу и войдите снова.');
+  }
+
+  return session;
 }
 
-/** JWT сессии для Storage / REST (не anon key). */
+/** `session.user.id` (= auth.uid()), не локальный identity.id. */
+export async function getAuthUserId(): Promise<string> {
+  const session = await ensureAuthSession();
+  return session.user.id;
+}
+
+/** JWT сессии для Storage / REST. */
 export async function getAuthAccessToken(): Promise<string> {
-  const sb = getSupabase();
-  const { data, error } = await sb.auth.getSession();
-  if (error) throw new Error(error.message || 'Нет сессии Auth');
-  const token = data.session?.access_token;
-  if (!token) {
-    throw new Error('Нет access token. Войдите в аккаунт и попробуйте снова.');
+  const session = await ensureAuthSession();
+  if (!session.access_token) {
+    throw new Error('Нет access token. Обновите страницу и войдите снова.');
   }
-  return token;
+  return session.access_token;
 }
