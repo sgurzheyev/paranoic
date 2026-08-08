@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { ArrowLeft, MapPin, MessageCircle, Phone, ShieldCheck, X, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  ArrowLeft,
+  Gem,
+  MapPin,
+  MessageCircle,
+  Phone,
+  ShieldCheck,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { initials } from './identity';
 import {
   applyMapboxAccessToken,
@@ -10,6 +20,14 @@ import {
   whenMapStyleReady,
 } from './lib/mapbox';
 import { ANTARCTICA, type PresenceUser } from './presence';
+import {
+  bindGemInteractions,
+  ensureGemLayers,
+  setGemFeatures,
+} from './mapGemLayers';
+import { fetchFamilyGems, type MapGem } from './mapGems';
+import MemoryGemPopup from './MemoryGemPopup';
+import MemoryGemComposer from './MemoryGemComposer';
 
 export type MapPerson = PresenceUser & {
   isContact: boolean;
@@ -25,6 +43,10 @@ type GlobeLobbyProps = {
   isAdmin?: boolean;
   onOpenAdmin?: () => void;
   banned?: boolean;
+  /** Текущий пользователь — для создания капсул. */
+  currentUserId: string;
+  /** Свои + контакты Family Mode (фильтр map_gems). */
+  familyAuthorIds: string[];
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -163,6 +185,8 @@ export default function GlobeLobby({
   isAdmin = false,
   onOpenAdmin,
   banned = false,
+  currentUserId,
+  familyAuthorIds,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -171,6 +195,7 @@ export default function GlobeLobby({
   const peopleRef = useRef(people);
   const onChatUserRef = useRef(onChatUser);
   const onCallUserRef = useRef(onCallUser);
+  const openGemRef = useRef<(gem: MapGem) => void>(() => undefined);
 
   peopleRef.current = people;
   onChatUserRef.current = onChatUser;
@@ -181,6 +206,11 @@ export default function GlobeLobby({
   const [selected, setSelected] = useState<MapPerson | null>(null);
   const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(WORLD_ZOOM);
+  const [gems, setGems] = useState<MapGem[]>([]);
+  const [openedGem, setOpenedGem] = useState<MapGem | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
+
+  openGemRef.current = (gem) => setOpenedGem(gem);
 
   const contacts = useMemo(
     () => people.filter((p) => p.isContact && !p.isMe),
@@ -188,6 +218,12 @@ export default function GlobeLobby({
   );
 
   const me = useMemo(() => people.find((p) => p.isMe), [people]);
+
+  const authorLabel = (authorId: string) => {
+    const person = peopleRef.current.find((p) => p.userId === authorId);
+    if (person?.isMe) return 'Вы';
+    return person?.name || authorId.slice(0, 10);
+  };
 
   selectedIdRef.current = selected?.userId ?? null;
 
@@ -404,6 +440,58 @@ export default function GlobeLobby({
     }
   }, [people, mapReady, selected]);
 
+  /** Слои Memory Gems + клики (кластер / распаковка). */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+
+    const attach = () => {
+      try {
+        ensureGemLayers(map);
+        setGemFeatures(map, gems);
+      } catch (e) {
+        console.warn('[paranoic gems] layers', e);
+      }
+    };
+
+    attach();
+    const onStyle = () => attach();
+    map.on('style.load', onStyle);
+    const unbind = bindGemInteractions(map, (gem) => openGemRef.current(gem));
+
+    return () => {
+      map.off('style.load', onStyle);
+      unbind();
+    };
+    // gems обновляются отдельным эффектом setData
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    try {
+      ensureGemLayers(map);
+      setGemFeatures(map, gems);
+    } catch (e) {
+      console.warn('[paranoic gems] setData', e);
+    }
+  }, [gems, mapReady]);
+
+  /** Загрузка капсул Family Mode (свои + контакты). */
+  const familyKey = familyAuthorIds.slice().sort().join(',');
+  useEffect(() => {
+    let cancelled = false;
+    const ids = familyKey ? familyKey.split(',') : [];
+    void (async () => {
+      const rows = await fetchFamilyGems(ids);
+      if (!cancelled) setGems(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [familyKey]);
+
   const nudgeZoom = (delta: number) => {
     const map = mapRef.current;
     if (!map) return;
@@ -481,10 +569,13 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Тап — чат · двойной тап — видеозвонок. Контакт в ленте — плавный flyTo.
+            Тап — чат · двойной тап — звонок · золотые точки — Memory Gems
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
+            {gems.length > 0 && (
+              <span className="ml-1 text-amber-200/90">· {gems.length} капсул</span>
+            )}
           </p>
         </div>
 
@@ -537,7 +628,17 @@ export default function GlobeLobby({
             </div>
           )}
 
-          <div className="flex justify-end">
+          <div className="flex items-end justify-between gap-3">
+            <button
+              type="button"
+              className="memory-gem-fab pointer-events-auto"
+              disabled={banned || !me}
+              onClick={() => setComposerOpen(true)}
+              title="Оставить капсулу памяти здесь"
+            >
+              <Gem size={16} />
+              Капсула
+            </button>
             <div className="flex flex-col gap-2">
               <button
                 type="button"
@@ -561,6 +662,24 @@ export default function GlobeLobby({
           </div>
         </div>
       </div>
+
+      {openedGem && (
+        <MemoryGemPopup
+          gem={openedGem}
+          authorLabel={authorLabel(openedGem.author_id)}
+          onClose={() => setOpenedGem(null)}
+        />
+      )}
+
+      {composerOpen && me && (
+        <MemoryGemComposer
+          authorId={currentUserId}
+          lat={me.lat}
+          lng={me.lng}
+          onClose={() => setComposerOpen(false)}
+          onCreated={(gem) => setGems((prev) => [gem, ...prev])}
+        />
+      )}
 
       {selected && (
         <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/40 p-4 backdrop-blur-[8px] sm:items-center">

@@ -1999,6 +1999,11 @@ export default function App() {
           isAdmin={isAdmin}
           onOpenAdmin={() => setAdminOpen(true)}
           banned={isBanned}
+          currentUserId={identity.id}
+          familyAuthorIds={[
+            identity.id,
+            ...contacts.map((c) => c.id),
+          ]}
           onChatUser={(user) => {
             if (isBannedRef.current) {
               setError('Ваш аккаунт заблокирован. Связь недоступна.');
