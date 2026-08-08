@@ -175,9 +175,9 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
 }
 
 /**
- * Гарантирует строку в `profiles` перед INSERT в map_gems (FK author_id).
- * В upsert — только поля схемы БД (без локального UI: name/color/theme_fon).
- * `id` обязан быть UUID v4 (колонка uuid в Supabase).
+ * Гарантирует строку в `profiles` (id / username / avatar_url).
+ * Не вызывать при Drop a Gem — профиль создаёт триггер Auth / регистрация.
+ * @deprecated Для капсул используйте auth.uid() без upsert profiles.
  */
 export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');

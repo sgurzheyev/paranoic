@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Gem, ImagePlus, Type, Video, X } from 'lucide-react';
 import {
   createMapGem,
-  resolveGemAuthorId,
   uploadGemMedia,
   type MapGem,
   type MapGemType,
@@ -10,7 +9,6 @@ import {
 import { playSuccessSound } from './notify';
 
 type MemoryGemComposerProps = {
-  authorId: string;
   lat: number;
   lng: number;
   onClose: () => void;
@@ -19,7 +17,6 @@ type MemoryGemComposerProps = {
 
 /** Модалка «Создать капсулу» (Drop a Gem) — Liquid Glass. */
 export default function MemoryGemComposer({
-  authorId,
   lat,
   lng,
   onClose,
@@ -73,13 +70,11 @@ export default function MemoryGemComposer({
     setError('');
     setProgress(0);
     try {
-      // Всегда берём id текущего пользователя (identity), не пустой/устаревший prop.
-      const uid = resolveGemAuthorId(authorId);
       let mediaUrl: string | null = null;
       if (type === 'photo' || type === 'video') {
         if (!file) throw new Error(type === 'photo' ? 'Выберите фото' : 'Выберите видео');
         setPhase('upload');
-        mediaUrl = await uploadGemMedia(uid, file, (ratio) => setProgress(ratio));
+        mediaUrl = await uploadGemMedia(file, (ratio) => setProgress(ratio));
       }
       if (type === 'text' && !text.trim()) {
         throw new Error('Введите текст капсулы');
@@ -87,7 +82,6 @@ export default function MemoryGemComposer({
       setPhase('save');
       setProgress(1);
       const gem = await createMapGem({
-        authorId: uid,
         lat,
         lng,
         type,

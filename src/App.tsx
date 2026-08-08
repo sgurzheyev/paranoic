@@ -1999,7 +1999,6 @@ export default function App() {
           isAdmin={isAdmin}
           onOpenAdmin={() => setAdminOpen(true)}
           banned={isBanned}
-          currentUserId={identity.id}
           ghostMode={settings.ghostMode}
           onGhostModeChange={(next) => {
             const saved = saveSettings({ ghostMode: next });

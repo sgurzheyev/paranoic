@@ -51,7 +51,6 @@ type GlobeLobbyProps = {
   isAdmin?: boolean;
   onOpenAdmin?: () => void;
   banned?: boolean;
-  currentUserId: string;
   ghostMode: boolean;
   onGhostModeChange: (next: boolean) => void;
 };
@@ -192,7 +191,6 @@ export default function GlobeLobby({
   isAdmin = false,
   onOpenAdmin,
   banned = false,
-  currentUserId,
   ghostMode,
   onGhostModeChange,
 }: GlobeLobbyProps) {
@@ -959,7 +957,6 @@ export default function GlobeLobby({
 
       {dropPoint && (
         <MemoryGemComposer
-          authorId={currentUserId}
           lat={dropPoint.lat}
           lng={dropPoint.lng}
           onClose={closeComposer}

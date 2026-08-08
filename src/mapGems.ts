@@ -1,6 +1,10 @@
-import { getSupabase, getSupabaseConfig, hasSupabaseConfig } from './lib/supabase';
-import { getOrCreateIdentity, isValidUuid } from './identity';
-import { ensureProfileRow } from './profile';
+import {
+  getAuthAccessToken,
+  getAuthUserId,
+  getSupabase,
+  getSupabaseConfig,
+  hasSupabaseConfig,
+} from './lib/supabase';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
@@ -19,8 +23,6 @@ export type MapGem = {
 };
 
 export type CreateMapGemInput = {
-  /** Опционально: если нет — берётся id из локальной identity. */
-  authorId?: string;
   lat: number;
   lng: number;
   type: MapGemType;
@@ -41,15 +43,6 @@ function mapRow(row: Record<string, unknown>): MapGem {
     content: (row.content as string | null) ?? null,
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
-}
-
-/** ID автора капсулы = локальная личность (profiles.id, UUID v4). */
-export function resolveGemAuthorId(fallbackId?: string): string {
-  const identity = getOrCreateIdentity();
-  const fallback = fallbackId?.trim() || '';
-  if (fallback && isValidUuid(fallback)) return fallback;
-  if (isValidUuid(identity.id)) return identity.id;
-  throw new Error('Нет валидного UUID пользователя. Обновите страницу.');
 }
 
 /**
@@ -127,20 +120,14 @@ export function buildVisibleGemsContext(
 
 /**
  * INSERT в map_gems.
- * RLS требует валидный `author_id` текущего пользователя (= identity.id).
- * Перед INSERT upsert'им profiles (FK author_id → profiles.id).
+ * `author_id` = supabase.auth.getUser().id (auth.uid()).
+ * Профиль не трогаем на клиенте — его создаёт триггер Auth / БД.
  */
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
 
-  // currentUser — локальная сессия приложения (profiles.id).
-  const currentUser = getOrCreateIdentity();
-  const authorId = resolveGemAuthorId(input.authorId || currentUser.id);
-
-  await ensureProfileRow({ ...currentUser, id: authorId });
-
+  const authorId = await getAuthUserId();
   const sb = getSupabase();
-  // Жёстко: author_id = currentUser.id (не пустой / не чужой).
   const row = {
     author_id: authorId,
     lat: input.lat,
@@ -149,10 +136,6 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
     media_url: input.mediaUrl ?? null,
     content: input.content ?? null,
   };
-
-  if (!row.author_id || row.author_id !== authorId) {
-    throw new Error('author_id пустой — капсула не сохранена');
-  }
 
   const { data, error } = await sb
     .from(MAP_GEMS_TABLE)
@@ -164,12 +147,7 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
     const msg = error.message || 'Не удалось сохранить капсулу';
     if (/row-level security|RLS/i.test(msg)) {
       throw new Error(
-        'RLS блокирует запись. Выполните supabase/map_gems.sql (и map_gems_rls_fix.sql) в SQL Editor.'
-      );
-    }
-    if (/foreign key|profiles/i.test(msg)) {
-      throw new Error(
-        'Профиль ещё не в Supabase. Сохраните профиль и попробуйте снова.'
+        'RLS блокирует запись. Проверьте политику map_gems INSERT (author_id = auth.uid()).'
       );
     }
     throw new Error(msg);
@@ -179,19 +157,17 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
 
 /**
  * Загрузка фото/видео в Storage (`map-gems`) с прогрессом (XHR).
- * Путь: `{author_id}/...` — author_id текущего пользователя.
+ * Путь: `{auth.uid()}/...`, Authorization = session JWT.
  */
 export async function uploadGemMedia(
-  authorId: string,
   file: File,
   onProgress?: (ratio: number) => void
 ): Promise<string> {
   const cfg = getSupabaseConfig();
   if (!cfg) throw new Error('Supabase не настроен');
 
-  const uid = resolveGemAuthorId(authorId);
-  const identity = getOrCreateIdentity();
-  await ensureProfileRow({ ...identity, id: uid });
+  const uid = await getAuthUserId();
+  const accessToken = await getAuthAccessToken();
 
   const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
   const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
@@ -200,7 +176,7 @@ export async function uploadGemMedia(
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', endpoint);
-    xhr.setRequestHeader('Authorization', `Bearer ${cfg.anonKey}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
     xhr.setRequestHeader('apikey', cfg.anonKey);
     xhr.setRequestHeader('x-upsert', 'false');
     if (file.type) xhr.setRequestHeader('Content-Type', file.type);
@@ -225,7 +201,7 @@ export async function uploadGemMedia(
       if (/row-level security|policy|RLS|403|401/i.test(message) || xhr.status === 403) {
         reject(
           new Error(
-            'Storage RLS блокирует upload. Выполните supabase/map_gems_rls_fix.sql.'
+            'Storage RLS блокирует upload. Нужна политика INSERT для authenticated на bucket map-gems.'
           )
         );
         return;
