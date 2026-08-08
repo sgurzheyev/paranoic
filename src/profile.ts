@@ -1,9 +1,5 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import {
-  normalizeUsername,
-  validateUsername,
-  type UserIdentity,
-} from './identity';
+import { normalizeUsername, type UserIdentity } from './identity';
 
 export const AVATARS_BUCKET = 'avatars';
 export const PROFILES_TABLE = 'profiles';
@@ -125,6 +121,14 @@ export async function isUsernameAvailable(
   }
 }
 
+/** Стандартный UUID (с дефисами). Короткие id приложения сюда не попадают. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function looksLikeUuid(value: string): boolean {
+  return UUID_RE.test(value.trim());
+}
+
 /** Upsert в таблицу `profiles` (если настроена). */
 export async function syncProfileToSupabase(identity: UserIdentity): Promise<void> {
   if (!hasSupabaseConfig()) return;
@@ -132,7 +136,7 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
     const username = identity.username || null;
     if (username) {
       const free = await isUsernameAvailable(username, identity.id);
-      if (!free) throw new Error('Этот username уже занят');
+      if (!free) throw new Error('Этот никнейм уже занят');
     }
 
     const sb = getSupabase();
@@ -148,12 +152,12 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
     if (error) {
       if (/username|unique|duplicate/i.test(error.message)) {
-        throw new Error('Этот username уже занят');
+        throw new Error('Этот никнейм уже занят');
       }
       console.warn('[paranoic] profiles upsert', error.message);
     }
   } catch (e) {
-    if (e instanceof Error && e.message.includes('username')) throw e;
+    if (e instanceof Error && /никнейм|username/i.test(e.message)) throw e;
     console.warn('[paranoic] profiles sync skipped', e);
   }
 }
@@ -203,17 +207,21 @@ export async function fetchProfileByUsername(
 
 /**
  * ?u=handle → реальный user id.
- * Сначала username в Supabase, иначе считаем handle уже id.
+ * UUID → сразу id. Иначе — lookup `profiles.username`, затем короткий/legacy id.
  */
 export async function resolveHandleToUserId(handle: string): Promise<string> {
   const raw = handle.trim();
   if (!raw) return raw;
-  const check = validateUsername(raw);
-  if (check.ok && check.value) {
-    const profile = await fetchProfileByUsername(check.value);
-    if (profile?.id) return profile.id;
+
+  if (looksLikeUuid(raw)) {
+    return raw;
   }
-  // Legacy / прямой id
+
+  // Не UUID → ищем по никнейму в profiles.
+  const byUsername = await fetchProfileByUsername(raw);
+  if (byUsername?.id) return byUsername.id;
+
+  // Короткие id приложения / прямой id в profiles.
   const byId = await fetchRemoteProfile(raw);
   if (byId?.id) return byId.id;
   return raw;

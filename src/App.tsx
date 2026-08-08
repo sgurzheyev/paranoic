@@ -1920,7 +1920,7 @@ export default function App() {
                   <p className="hint">
                     {identity.username
                       ? `Короткая ссылка: ?u=${identity.username}`
-                      : 'Задайте username в профиле — ссылка станет короткой и красивой.'}
+                      : 'Задайте никнейм в профиле — ссылка станет короткой и красивой.'}
                   </p>
                 </div>
 

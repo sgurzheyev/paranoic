@@ -149,17 +149,15 @@ export function updateIdentity(
   return next;
 }
 
-/** Магическая ссылка: ?u=<username|id> */
+/** Магическая ссылка: коротко ?u=username, иначе ?u=id */
 export function buildMagicLink(identityOrHandle: UserIdentity | string): string {
   const handle =
     typeof identityOrHandle === 'string'
       ? identityOrHandle
-      : identityOrHandle.username || identityOrHandle.id;
-  const url = new URL(window.location.href);
-  url.search = '';
-  url.hash = '';
-  url.searchParams.set('u', handle);
-  return url.toString();
+      : identityOrHandle.username
+        ? identityOrHandle.username
+        : identityOrHandle.id;
+  return `${window.location.origin}/?u=${encodeURIComponent(handle)}`;
 }
 
 export function getMagicTargetFromUrl(): string | null {

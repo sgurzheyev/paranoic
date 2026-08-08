@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
@@ -8,7 +8,7 @@ import {
   validateUsername,
   type UserIdentity,
 } from './identity';
-import { syncProfileToSupabase, uploadAvatar } from './profile';
+import { isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
 import { saveSettings, type AppSettings } from './settings';
 
 type ProfileModalProps = {
@@ -70,6 +70,7 @@ export default function ProfileModal({
   const [ephemeral24h, setEphemeral24h] = useState(settings.ephemeral24h);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [usernameHint, setUsernameHint] = useState('');
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -78,7 +79,44 @@ export default function ProfileModal({
     () => ({ ...identity, username: username.trim().toLowerCase() }),
     [identity, username]
   );
-  const shareLink = buildMagicLink(previewIdentity);
+  // Короткая ссылка при заданном никнейме, иначе fallback на id.
+  const shareLink = useMemo(() => {
+    const u = previewIdentity.username;
+    return u
+      ? `${window.location.origin}/?u=${encodeURIComponent(u)}`
+      : `${window.location.origin}/?u=${encodeURIComponent(identity.id)}`;
+  }, [previewIdentity.username, identity.id]);
+
+  useEffect(() => {
+    const check = validateUsername(username);
+    if (!check.ok) {
+      setUsernameHint(check.error);
+      return;
+    }
+    if (!check.value) {
+      setUsernameHint('Без никнейма ссылка будет с вашим ID.');
+      return;
+    }
+    if (check.value === (identity.username || '')) {
+      setUsernameHint(`Ссылка: ${buildMagicLink({ ...identity, username: check.value })}`);
+      return;
+    }
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      void isUsernameAvailable(check.value, identity.id).then((free) => {
+        if (cancelled) return;
+        setUsernameHint(
+          free
+            ? `Свободен · ${window.location.origin}/?u=${check.value}`
+            : 'Этот никнейм уже занят'
+        );
+      });
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [username, identity]);
 
   const onPickAvatar = async (file: File | undefined) => {
     if (!file) return;
@@ -121,6 +159,13 @@ export default function ProfileModal({
       if (!userCheck.ok) {
         setError(userCheck.error);
         return;
+      }
+      if (userCheck.value) {
+        const free = await isUsernameAvailable(userCheck.value, identity.id);
+        if (!free) {
+          setError('Этот никнейм уже занят');
+          return;
+        }
       }
       const next = updateIdentity({
         name: name.trim() || 'Я',
@@ -188,7 +233,7 @@ export default function ProfileModal({
         </label>
 
         <label className="profile-field">
-          <span>Username</span>
+          <span>Ваш никнейм (username)</span>
           <div className="username-input-row">
             <span className="username-at">@</span>
             <input
@@ -199,10 +244,11 @@ export default function ProfileModal({
               autoCapitalize="off"
               autoCorrect="off"
               spellCheck={false}
+              aria-describedby="username-hint"
             />
           </div>
-          <p className="profile-field-hint">
-            Короткая ссылка без ID. Только латиница, цифры и _
+          <p id="username-hint" className="profile-field-hint">
+            {usernameHint || 'Латиница, цифры и _. Короткая ссылка без длинного ID.'}
           </p>
         </label>
 
