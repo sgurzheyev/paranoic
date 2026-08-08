@@ -1,71 +1,45 @@
 import { Suspense, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { Html, Line } from '@react-three/drei';
+import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
+import { Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { ArrowLeft, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Phone, X } from 'lucide-react';
+import { initials } from './identity';
+import type { PresenceUser } from './presence';
+
+export type MapPerson = PresenceUser & {
+  isContact: boolean;
+  isMe?: boolean;
+};
 
 type GlobeLobbyProps = {
   onBack: () => void;
-  onCreateConnection: () => void;
-};
-
-type NetworkNode = {
-  id: string;
-  position: [number, number, number];
-  invite?: boolean;
-  label?: string;
+  people: MapPerson[];
+  geoSource: 'gps' | 'antarctica' | 'pending';
+  onCallUser: (user: MapPerson) => void;
 };
 
 const SPHERE_RADIUS = 8;
-const NODE_COUNT = 42;
-const INVITE_ID = 'invite-family';
+const EARTH_TEX =
+  'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg';
 
-function fibonacciSphere(count: number, radius: number): [number, number, number][] {
-  const points: [number, number, number][] = [];
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < count; i++) {
-    const y = 1 - (i / Math.max(count - 1, 1)) * 2;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const theta = golden * i;
-    points.push([Math.cos(theta) * r * radius, y * radius, Math.sin(theta) * r * radius]);
-  }
-  return points;
-}
-
-function buildNetwork(): { nodes: NetworkNode[]; links: [number, number][] } {
-  const points = fibonacciSphere(NODE_COUNT, SPHERE_RADIUS);
-  const inviteIndex = Math.floor(NODE_COUNT * 0.62);
-  const nodes: NetworkNode[] = points.map((position, i) => ({
-    id: i === inviteIndex ? INVITE_ID : `n-${i}`,
-    position,
-    invite: i === inviteIndex,
-    label: i === inviteIndex ? 'Инвайт от близкого' : undefined,
-  }));
-
-  const links: [number, number][] = [];
-  for (let i = 0; i < nodes.length; i++) {
-    const a = new THREE.Vector3(...nodes[i].position);
-    const nearest: { j: number; d: number }[] = [];
-    for (let j = 0; j < nodes.length; j++) {
-      if (i === j) continue;
-      const d = a.distanceTo(new THREE.Vector3(...nodes[j].position));
-      nearest.push({ j, d });
-    }
-    nearest.sort((x, y) => x.d - y.d);
-    for (const n of nearest.slice(0, 2)) {
-      const key: [number, number] = i < n.j ? [i, n.j] : [n.j, i];
-      if (!links.some(([x, y]) => x === key[0] && y === key[1])) {
-        links.push(key);
-      }
-    }
-  }
-  return { nodes, links };
+/** lat/lng → точка на внутренней поверхности сферы (вид из центра). */
+export function latLngToPosition(
+  lat: number,
+  lng: number,
+  radius = SPHERE_RADIUS
+): [number, number, number] {
+  const phi = ((90 - lat) * Math.PI) / 180;
+  const theta = ((lng + 180) * Math.PI) / 180;
+  const x = -radius * Math.sin(phi) * Math.cos(theta);
+  const z = radius * Math.sin(phi) * Math.sin(theta);
+  const y = radius * Math.cos(phi);
+  return [x, y, z];
 }
 
 function LookAroundControls({ enabled }: { enabled: boolean }) {
   const { camera, gl } = useThree();
-  const yaw = useRef(0.35);
-  const pitch = useRef(-0.12);
+  const yaw = useRef(0.4);
+  const pitch = useRef(-0.08);
   const dragging = useRef(false);
   const last = useRef({ x: 0, y: 0 });
 
@@ -97,7 +71,7 @@ function LookAroundControls({ enabled }: { enabled: boolean }) {
       last.current = { x: e.clientX, y: e.clientY };
       yaw.current -= dx * 0.005;
       pitch.current -= dy * 0.004;
-      pitch.current = Math.max(-1.2, Math.min(1.2, pitch.current));
+      pitch.current = Math.max(-1.35, Math.min(1.35, pitch.current));
     };
     const onUp = (e: PointerEvent) => {
       dragging.current = false;
@@ -135,7 +109,6 @@ function CameraFlyTo({
 }) {
   const { camera } = useThree();
   const progress = useRef(0);
-  const startPos = useRef(new THREE.Vector3());
   const startQuat = useRef(new THREE.Quaternion());
 
   useFrame((_, dt) => {
@@ -144,13 +117,11 @@ function CameraFlyTo({
       return;
     }
     if (progress.current === 0) {
-      startPos.current.copy(camera.position);
       startQuat.current.copy(camera.quaternion);
     }
-    progress.current = Math.min(1, progress.current + dt * 0.85);
+    progress.current = Math.min(1, progress.current + dt * 0.9);
     const t = 1 - (1 - progress.current) ** 3;
-    const dest = new THREE.Vector3(...target).multiplyScalar(0.55);
-    camera.position.lerpVectors(startPos.current, dest, t);
+    camera.position.set(0, 0, 0);
 
     const look = new THREE.Vector3(...target);
     const m = new THREE.Matrix4().lookAt(camera.position, look, new THREE.Vector3(0, 1, 0));
@@ -161,76 +132,69 @@ function CameraFlyTo({
   return null;
 }
 
-function DimNode({
-  position,
-  onHover,
-}: {
-  position: [number, number, number];
-  onHover: (h: boolean) => void;
-}) {
-  const ref = useRef<THREE.Mesh>(null);
+function EarthShell() {
+  const texture = useLoader(THREE.TextureLoader, EARTH_TEX);
+  texture.colorSpace = THREE.SRGBColorSpace;
 
   return (
-    <mesh
-      ref={ref}
-      position={position}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        onHover(true);
-      }}
-      onPointerOut={() => onHover(false)}
-    >
-      <sphereGeometry args={[0.09, 12, 12]} />
-      <meshBasicMaterial color="#64748b" transparent opacity={0.45} />
+    <mesh>
+      <sphereGeometry args={[SPHERE_RADIUS, 72, 72]} />
+      <meshBasicMaterial map={texture} side={THREE.BackSide} />
     </mesh>
   );
 }
 
-function InviteNode({
+function Atmosphere() {
+  return (
+    <mesh>
+      <sphereGeometry args={[SPHERE_RADIUS * 0.992, 48, 48]} />
+      <meshBasicMaterial
+        color="#0a1628"
+        side={THREE.BackSide}
+        transparent
+        opacity={0.22}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+function GoldDot({
   position,
-  label,
   selected,
   onSelect,
-  onHover,
 }: {
   position: [number, number, number];
-  label: string;
   selected: boolean;
   onSelect: () => void;
-  onHover: (h: boolean) => void;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const glowRef = useRef<THREE.Mesh>(null);
-  const hovered = useRef(false);
 
   useFrame(({ clock }) => {
-    const pulse = 1 + Math.sin(clock.elapsedTime * 2.4) * 0.12;
-    const boost = hovered.current || selected ? 1.25 : 1;
+    const pulse = 1 + Math.sin(clock.elapsedTime * 2.6) * 0.14;
+    const boost = selected ? 1.3 : 1;
     if (meshRef.current) meshRef.current.scale.setScalar(pulse * boost);
     if (glowRef.current) {
-      glowRef.current.scale.setScalar(pulse * boost * 2.2);
+      glowRef.current.scale.setScalar(pulse * boost * 2.1);
       const mat = glowRef.current.material as THREE.MeshBasicMaterial;
-      mat.opacity = 0.18 + Math.sin(clock.elapsedTime * 2.4) * 0.08;
+      mat.opacity = 0.16 + Math.sin(clock.elapsedTime * 2.6) * 0.07;
     }
   });
 
-  const handleOver = (e: ThreeEvent<PointerEvent>) => {
+  const over = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
-    hovered.current = true;
-    onHover(true);
     document.body.style.cursor = 'pointer';
   };
-  const handleOut = () => {
-    hovered.current = false;
-    onHover(false);
+  const out = () => {
     document.body.style.cursor = 'default';
   };
 
   return (
     <group position={position}>
       <mesh ref={glowRef}>
-        <sphereGeometry args={[0.22, 16, 16]} />
-        <meshBasicMaterial color="#fbbf24" transparent opacity={0.2} depthWrite={false} />
+        <sphereGeometry args={[0.16, 14, 14]} />
+        <meshBasicMaterial color="#fbbf24" transparent opacity={0.18} depthWrite={false} />
       </mesh>
       <mesh
         ref={meshRef}
@@ -238,77 +202,149 @@ function InviteNode({
           e.stopPropagation();
           onSelect();
         }}
-        onPointerOver={handleOver}
-        onPointerOut={handleOut}
+        onPointerOver={over}
+        onPointerOut={out}
       >
-        <sphereGeometry args={[0.2, 20, 20]} />
+        <sphereGeometry args={[0.14, 16, 16]} />
         <meshStandardMaterial
           color="#fbbf24"
           emissive="#f59e0b"
-          emissiveIntensity={1.4}
+          emissiveIntensity={1.35}
           roughness={0.35}
-          metalness={0.2}
+          metalness={0.25}
         />
       </mesh>
-      <pointLight color="#fbbf24" intensity={1.6} distance={4} />
-      <Html center distanceFactor={10} style={{ pointerEvents: 'none' }}>
-        <div className="whitespace-nowrap rounded-full border border-amber-300/40 bg-black/55 px-3 py-1 text-xs font-bold text-amber-100 shadow-lg backdrop-blur-sm">
-          {label}
-        </div>
+      <pointLight color="#fbbf24" intensity={0.9} distance={3} />
+    </group>
+  );
+}
+
+function AvatarMarker({
+  person,
+  position,
+  selected,
+  onSelect,
+}: {
+  person: MapPerson;
+  position: [number, number, number];
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const over = () => {
+    document.body.style.cursor = 'pointer';
+  };
+  const out = () => {
+    document.body.style.cursor = 'default';
+  };
+
+  return (
+    <group position={position}>
+      <Html
+        center
+        distanceFactor={9}
+        style={{ pointerEvents: 'auto' }}
+        zIndexRange={[100, 0]}
+      >
+        <button
+          type="button"
+          className={`relative flex h-11 w-11 items-center justify-center rounded-full border-2 text-xs font-extrabold text-white shadow-lg transition ${
+            selected ? 'scale-110 border-white' : 'border-white/70 hover:scale-105'
+          }`}
+          style={{ background: person.color }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+          }}
+          onPointerOver={over}
+          onPointerOut={out}
+          aria-label={person.name}
+        >
+          {initials(person.name)}
+          <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#03050a] bg-emerald-400" />
+        </button>
       </Html>
     </group>
   );
 }
 
-function NetworkScene({
-  onInviteSelect,
+function MapScene({
+  people,
+  selectedId,
+  onSelect,
   flying,
 }: {
-  onInviteSelect: (pos: [number, number, number]) => void;
+  people: MapPerson[];
+  selectedId: string | null;
+  onSelect: (person: MapPerson, pos: [number, number, number]) => void;
   flying: boolean;
 }) {
-  const { nodes, links } = useMemo(() => buildNetwork(), []);
-  const [, setHoverDim] = useState(false);
-
   return (
     <>
-      <color attach="background" args={['#03050a']} />
-      <ambientLight intensity={0.35} />
+      <color attach="background" args={['#02040a']} />
+      <ambientLight intensity={0.55} />
       <LookAroundControls enabled={!flying} />
+      <Suspense fallback={null}>
+        <EarthShell />
+      </Suspense>
+      <Atmosphere />
 
-      {links.map(([a, b]) => (
-        <Line
-          key={`${a}-${b}`}
-          points={[nodes[a].position, nodes[b].position]}
-          color="#334155"
-          lineWidth={1}
-          transparent
-          opacity={0.35}
-        />
-      ))}
-
-      {nodes.map((node) =>
-        node.invite ? (
-          <InviteNode
-            key={node.id}
-            position={node.position}
-            label={node.label || 'Инвайт от близкого'}
-            selected={flying}
-            onSelect={() => onInviteSelect(node.position)}
-            onHover={() => undefined}
+      {people.map((person) => {
+        const pos = latLngToPosition(person.lat, person.lng);
+        if (person.isMe) {
+          return (
+            <group key={person.userId} position={pos}>
+              <mesh>
+                <sphereGeometry args={[0.11, 12, 12]} />
+                <meshBasicMaterial color="#5eead4" />
+              </mesh>
+              <Html center distanceFactor={11} style={{ pointerEvents: 'none' }}>
+                <div className="mt-8 whitespace-nowrap rounded-full border border-teal-300/40 bg-black/55 px-2.5 py-1 text-[10px] font-bold text-teal-100">
+                  Вы
+                </div>
+              </Html>
+            </group>
+          );
+        }
+        if (person.isContact) {
+          return (
+            <AvatarMarker
+              key={person.userId}
+              person={person}
+              position={pos}
+              selected={selectedId === person.userId}
+              onSelect={() => onSelect(person, pos)}
+            />
+          );
+        }
+        return (
+          <GoldDot
+            key={person.userId}
+            position={pos}
+            selected={selectedId === person.userId}
+            onSelect={() => onSelect(person, pos)}
           />
-        ) : (
-          <DimNode key={node.id} position={node.position} onHover={setHoverDim} />
-        )
-      )}
+        );
+      })}
     </>
   );
 }
 
-export default function GlobeLobby({ onBack, onCreateConnection }: GlobeLobbyProps) {
+export default function GlobeLobby({
+  onBack,
+  people,
+  geoSource,
+  onCallUser,
+}: GlobeLobbyProps) {
+  const [selected, setSelected] = useState<MapPerson | null>(null);
   const [selectedPos, setSelectedPos] = useState<[number, number, number] | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const flying = modalOpen && selectedPos !== null;
+  const flying = selected !== null && selectedPos !== null;
+
+  const geoHint =
+    geoSource === 'gps'
+      ? 'Ваша точка — по GPS'
+      : geoSource === 'antarctica'
+        ? 'Без GPS вы в условной Антарктиде'
+        : 'Определяем координаты…';
 
   return (
     <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
@@ -322,18 +358,19 @@ export default function GlobeLobby({ onBack, onCreateConnection }: GlobeLobbyPro
         className="absolute inset-0 touch-none"
       >
         <Suspense fallback={null}>
-          <NetworkScene
+          <MapScene
+            people={people}
+            selectedId={selected?.userId ?? null}
             flying={flying}
-            onInviteSelect={(pos) => {
+            onSelect={(person, pos) => {
+              setSelected(person);
               setSelectedPos(pos);
-              setModalOpen(true);
             }}
           />
           <CameraFlyTo target={selectedPos} active={flying} />
         </Suspense>
       </Canvas>
 
-      {/* UI overlay */}
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
         <header className="pointer-events-auto flex items-center justify-between px-4 py-4 sm:px-6">
           <button
@@ -350,36 +387,44 @@ export default function GlobeLobby({ onBack, onCreateConnection }: GlobeLobbyPro
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-400 sm:text-base">
-            Вы в центре сети. Поверните взгляд и найдите яркое приглашение.
+            Смотрите на Землю изнутри. Контакты — аватарки, незнакомцы — золотые точки.
           </p>
-        </div>
-
-        <div className="pointer-events-none mt-auto flex justify-center pb-8">
-          <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/25 bg-amber-300/10 px-4 py-2 text-xs font-bold text-amber-100/90 backdrop-blur-md">
-            <Sparkles size={14} /> Ищите золотую точку
-          </div>
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs text-slate-300">
+            <MapPin size={12} /> {geoHint}
+          </p>
         </div>
       </div>
 
-      {modalOpen && (
+      {selected && (
         <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/45 p-4 backdrop-blur-[2px] sm:items-center">
           <div className="w-full max-w-md animate-[slide-up_0.28s_ease] rounded-3xl border border-amber-300/30 bg-[#12141c]/95 p-6 shadow-2xl shadow-amber-900/20">
             <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-amber-200/80">
-                  Family Mode
-                </p>
-                <h2 className="mt-2 m-0 text-2xl font-extrabold text-white">Инвайт от близкого</h2>
-                <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  Можно создать защищённое соединение в один шаг — без ручного копирования ссылок.
-                </p>
+              <div className="flex items-center gap-3">
+                <div
+                  className="relative flex h-14 w-14 items-center justify-center rounded-full text-lg font-extrabold text-white"
+                  style={{ background: selected.isContact ? selected.color : '#f59e0b' }}
+                >
+                  {selected.isContact ? initials(selected.name) : '·'}
+                  <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#12141c] bg-emerald-400" />
+                </div>
+                <div>
+                  <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-amber-200/80">
+                    {selected.isContact ? 'Контакт' : 'В сети'}
+                  </p>
+                  <h2 className="mt-1 m-0 text-2xl font-extrabold text-white">
+                    {selected.isContact ? selected.name : 'Незнакомец'}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {selected.lat.toFixed(1)}°, {selected.lng.toFixed(1)}°
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 className="rounded-full p-2 text-slate-400 transition hover:bg-white/5 hover:text-white"
                 aria-label="Закрыть"
                 onClick={() => {
-                  setModalOpen(false);
+                  setSelected(null);
                   setSelectedPos(null);
                 }}
               >
@@ -388,10 +433,10 @@ export default function GlobeLobby({ onBack, onCreateConnection }: GlobeLobbyPro
             </div>
             <button
               type="button"
-              onClick={onCreateConnection}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-amber-300/50 bg-amber-300/15 px-5 py-4 text-lg font-extrabold text-amber-50 transition hover:bg-amber-300/25"
+              onClick={() => onCallUser(selected)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-400/45 bg-emerald-400/15 px-5 py-4 text-lg font-extrabold text-emerald-50 transition hover:bg-emerald-400/25"
             >
-              Создать соединение
+              <Phone size={22} /> Позвонить
             </button>
           </div>
         </div>

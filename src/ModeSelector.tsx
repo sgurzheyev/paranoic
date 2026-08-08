@@ -59,7 +59,7 @@ export default function ModeSelector({ onSelect }: ModeSelectorProps) {
             <div>
               <h2 className="m-0 text-2xl font-extrabold text-white">Family Mode</h2>
               <p className="mt-2 text-sm leading-relaxed text-slate-400 sm:text-base">
-                В один клик. Поиск близких через визуальную сеть.
+                Карта мира изнутри планеты: контакты, кто в сети, звонок в один тап.
               </p>
             </div>
             <span className="mt-auto text-sm font-bold text-amber-200/90">Открыть →</span>

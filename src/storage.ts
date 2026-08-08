@@ -25,32 +25,62 @@ const mediaDb = localforage.createInstance({
   storeName: 'media',
 });
 
-const HISTORY_KEY = 'chat-history';
+/** Старый глобальный ключ — больше не используем (изоляция диалогов). */
+const LEGACY_HISTORY_KEY = 'chat-history';
 
-export async function loadChatHistory(): Promise<StoredMessage[]> {
-  const rows = await messagesDb.getItem<StoredMessage[]>(HISTORY_KEY);
+/** Стабильный id диалога для пары пользователей. */
+export function conversationId(a: string, b: string): string {
+  return [a, b].sort().join(':');
+}
+
+function historyKey(conversationId: string): string {
+  return `chat:${conversationId}`;
+}
+
+export async function loadChatHistory(conversationId: string): Promise<StoredMessage[]> {
+  if (!conversationId) return [];
+  const rows = await messagesDb.getItem<StoredMessage[]>(historyKey(conversationId));
   return rows ?? [];
 }
 
-export async function saveChatHistory(messages: StoredMessage[]): Promise<void> {
-  await messagesDb.setItem(HISTORY_KEY, messages);
+export async function saveChatHistory(
+  conversationId: string,
+  messages: StoredMessage[]
+): Promise<void> {
+  if (!conversationId) return;
+  await messagesDb.setItem(historyKey(conversationId), messages);
 }
 
-export async function appendStoredMessage(message: StoredMessage): Promise<void> {
-  const history = await loadChatHistory();
+export async function appendStoredMessage(
+  conversationId: string,
+  message: StoredMessage
+): Promise<void> {
+  if (!conversationId) return;
+  const history = await loadChatHistory(conversationId);
   history.push(message);
-  await saveChatHistory(history);
+  await saveChatHistory(conversationId, history);
 }
 
 export async function updateStoredMessage(
+  conversationId: string,
   id: string,
   patch: Partial<StoredMessage>
 ): Promise<void> {
-  const history = await loadChatHistory();
+  if (!conversationId) return;
+  const history = await loadChatHistory(conversationId);
   const idx = history.findIndex((m) => m.id === id);
   if (idx < 0) return;
   history[idx] = { ...history[idx], ...patch };
-  await saveChatHistory(history);
+  await saveChatHistory(conversationId, history);
+}
+
+/** Одноразово чистит старую общую историю «я ↔ я». */
+export async function purgeLegacyGlobalHistory(): Promise<void> {
+  try {
+    await messagesDb.removeItem(LEGACY_HISTORY_KEY);
+  } catch {
+    /* */
+  }
 }
 
 export async function saveMediaBlob(key: string, blob: Blob): Promise<void> {

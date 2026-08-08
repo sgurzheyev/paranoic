@@ -29,6 +29,12 @@ export type SignalingDebugStatus =
   | 'Связь установлена!'
   | '';
 
+export type PeerIdentity = {
+  userId: string;
+  name: string;
+  color: string;
+};
+
 export type P2PHandlers = {
   onStatus?: (status: P2PStatus) => void;
   onSignalingStatus?: (status: SignalingDebugStatus) => void;
@@ -39,6 +45,7 @@ export type P2PHandlers = {
   onIncomingCall?: () => void;
   onFileProgress?: (id: string, progress: number) => void;
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
+  onPeerHello?: (peer: PeerIdentity) => void;
 };
 
 type SignalJoin = { type: 'join'; peerId: string };
@@ -111,6 +118,7 @@ type ControlPacket =
   | { t: 'call-answer'; sdp: RTCSessionDescriptionInit }
   | { t: 'call-hangup' }
   | { t: 'media-refresh' }
+  | { t: 'hello'; userId: string; name: string; color: string }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number }
   | { t: 'file-done'; id: string };
 
@@ -260,9 +268,16 @@ export class P2PConnection {
   private cachedIceServers: RTCIceServer[] | null = null;
   private joinRetryTimer: ReturnType<typeof setInterval> | null = null;
   private signalingStatus: SignalingDebugStatus = '';
+  private localIdentity: PeerIdentity | null = null;
 
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
+  }
+
+  /** Локальная личность для обмена при открытии DataChannel. */
+  setLocalIdentity(identity: PeerIdentity): void {
+    this.localIdentity = identity;
+    if (this.isReady) this.sendHello();
   }
 
   get currentStatus(): P2PStatus {
@@ -694,7 +709,26 @@ export class P2PConnection {
     }
   }
 
+  private sendHello(): void {
+    if (!this.localIdentity || !this.isReady) return;
+    this.sendControl({
+      t: 'hello',
+      userId: this.localIdentity.userId,
+      name: this.localIdentity.name,
+      color: this.localIdentity.color,
+    });
+  }
+
   private async handleControl(packet: ControlPacket): Promise<void> {
+    if (packet.t === 'hello') {
+      this.handlers.onPeerHello?.({
+        userId: packet.userId,
+        name: packet.name,
+        color: packet.color,
+      });
+      return;
+    }
+
     if (!this.pc) return;
 
     if (packet.t === 'media-refresh') {
@@ -986,6 +1020,7 @@ export class P2PConnection {
       this.clearJoinRetry();
       this.setStatus('connected');
       this.setSignalingStatus('Связь установлена!');
+      this.sendHello();
     };
 
     channel.onclose = () => {
