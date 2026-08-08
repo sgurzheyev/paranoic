@@ -1,5 +1,5 @@
 import { Suspense, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { ArrowLeft, MapPin, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
@@ -193,63 +193,49 @@ function Atmosphere() {
   );
 }
 
-function GoldDot({
-  position,
+function MapPersonBadge({
+  person,
   selected,
   onSelect,
+  goldFallback,
 }: {
-  position: [number, number, number];
+  person: MapPerson;
   selected: boolean;
   onSelect: () => void;
+  goldFallback?: boolean;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const glowRef = useRef<THREE.Mesh>(null);
-
-  useFrame(({ clock }) => {
-    const pulse = 1 + Math.sin(clock.elapsedTime * 2.6) * 0.14;
-    const boost = selected ? 1.3 : 1;
-    if (meshRef.current) meshRef.current.scale.setScalar(pulse * boost);
-    if (glowRef.current) {
-      glowRef.current.scale.setScalar(pulse * boost * 2.1);
-      const mat = glowRef.current.material as THREE.MeshBasicMaterial;
-      mat.opacity = 0.16 + Math.sin(clock.elapsedTime * 2.6) * 0.07;
-    }
-  });
-
-  const over = (e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
+  const over = () => {
     document.body.style.cursor = 'pointer';
   };
   const out = () => {
     document.body.style.cursor = 'default';
   };
+  const hasPhoto = Boolean(person.avatarUrl);
 
   return (
-    <group position={position}>
-      <mesh ref={glowRef}>
-        <sphereGeometry args={[0.16, 14, 14]} />
-        <meshBasicMaterial color="#fbbf24" transparent opacity={0.18} depthWrite={false} />
-      </mesh>
-      <mesh
-        ref={meshRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelect();
-        }}
-        onPointerOver={over}
-        onPointerOut={out}
-      >
-        <sphereGeometry args={[0.14, 16, 16]} />
-        <meshStandardMaterial
-          color="#fbbf24"
-          emissive="#f59e0b"
-          emissiveIntensity={1.35}
-          roughness={0.35}
-          metalness={0.25}
-        />
-      </mesh>
-      <pointLight color="#fbbf24" intensity={0.9} distance={3} />
-    </group>
+    <button
+      type="button"
+      className={`relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 text-xs font-extrabold text-white shadow-lg transition ${
+        selected ? 'scale-110 border-white' : goldFallback && !hasPhoto ? 'border-amber-300/70' : 'border-white/70 hover:scale-105'
+      }`}
+      style={{ background: hasPhoto ? '#1a1d28' : goldFallback && !hasPhoto ? '#f59e0b' : person.color }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      onPointerOver={over}
+      onPointerOut={out}
+      aria-label={person.name}
+    >
+      {hasPhoto ? (
+        <img src={person.avatarUrl} alt="" className="h-full w-full object-cover" draggable={false} />
+      ) : goldFallback ? (
+        <span className="text-base leading-none">·</span>
+      ) : (
+        initials(person.name)
+      )}
+      <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#03050a] bg-emerald-400" />
+    </button>
   );
 }
 
@@ -258,44 +244,23 @@ function AvatarMarker({
   position,
   selected,
   onSelect,
+  goldFallback,
 }: {
   person: MapPerson;
   position: [number, number, number];
   selected: boolean;
   onSelect: () => void;
+  goldFallback?: boolean;
 }) {
-  const over = () => {
-    document.body.style.cursor = 'pointer';
-  };
-  const out = () => {
-    document.body.style.cursor = 'default';
-  };
-
   return (
     <group position={position}>
-      <Html
-        center
-        distanceFactor={9}
-        style={{ pointerEvents: 'auto' }}
-        zIndexRange={[100, 0]}
-      >
-        <button
-          type="button"
-          className={`relative flex h-11 w-11 items-center justify-center rounded-full border-2 text-xs font-extrabold text-white shadow-lg transition ${
-            selected ? 'scale-110 border-white' : 'border-white/70 hover:scale-105'
-          }`}
-          style={{ background: person.color }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect();
-          }}
-          onPointerOver={over}
-          onPointerOut={out}
-          aria-label={person.name}
-        >
-          {initials(person.name)}
-          <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#03050a] bg-emerald-400" />
-        </button>
+      <Html center distanceFactor={9} style={{ pointerEvents: 'auto' }} zIndexRange={[100, 0]}>
+        <MapPersonBadge
+          person={person}
+          selected={selected}
+          onSelect={onSelect}
+          goldFallback={goldFallback}
+        />
       </Html>
     </group>
   );
@@ -331,19 +296,37 @@ function MapScene({
         if (person.isMe) {
           return (
             <group key={person.userId} position={pos}>
-              <mesh>
-                <sphereGeometry args={[0.11, 12, 12]} />
-                <meshBasicMaterial color="#5eead4" />
-              </mesh>
-              <Html center distanceFactor={11} style={{ pointerEvents: 'none' }}>
-                <div className="mt-8 whitespace-nowrap rounded-full border border-teal-300/40 bg-black/55 px-2.5 py-1 text-[10px] font-bold text-teal-100">
-                  Вы
-                </div>
-              </Html>
+              {person.avatarUrl ? (
+                <Html center distanceFactor={10} style={{ pointerEvents: 'none' }}>
+                  <div className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-teal-300/70 shadow-lg">
+                    <img
+                      src={person.avatarUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      draggable={false}
+                    />
+                  </div>
+                  <div className="mt-1 whitespace-nowrap rounded-full border border-teal-300/40 bg-black/55 px-2.5 py-1 text-center text-[10px] font-bold text-teal-100">
+                    Вы
+                  </div>
+                </Html>
+              ) : (
+                <>
+                  <mesh>
+                    <sphereGeometry args={[0.11, 12, 12]} />
+                    <meshBasicMaterial color="#5eead4" />
+                  </mesh>
+                  <Html center distanceFactor={11} style={{ pointerEvents: 'none' }}>
+                    <div className="mt-8 whitespace-nowrap rounded-full border border-teal-300/40 bg-black/55 px-2.5 py-1 text-[10px] font-bold text-teal-100">
+                      Вы
+                    </div>
+                  </Html>
+                </>
+              )}
             </group>
           );
         }
-        if (person.isContact) {
+        if (person.isContact || person.avatarUrl) {
           return (
             <AvatarMarker
               key={person.userId}
@@ -355,11 +338,13 @@ function MapScene({
           );
         }
         return (
-          <GoldDot
+          <AvatarMarker
             key={person.userId}
+            person={person}
             position={pos}
             selected={selectedId === person.userId}
             onSelect={() => onSelect(person, pos)}
+            goldFallback
           />
         );
       })}
@@ -472,10 +457,27 @@ export default function GlobeLobby({
             <div className="mb-4 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div
-                  className="relative flex h-14 w-14 items-center justify-center rounded-full text-lg font-extrabold text-white"
-                  style={{ background: selected.isContact ? selected.color : '#f59e0b' }}
+                  className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-full text-lg font-extrabold text-white"
+                  style={{
+                    background: selected.avatarUrl
+                      ? '#1a1d28'
+                      : selected.isContact
+                        ? selected.color
+                        : '#f59e0b',
+                  }}
                 >
-                  {selected.isContact ? initials(selected.name) : '·'}
+                  {selected.avatarUrl ? (
+                    <img
+                      src={selected.avatarUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      draggable={false}
+                    />
+                  ) : selected.isContact ? (
+                    initials(selected.name)
+                  ) : (
+                    '·'
+                  )}
                   <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#12141c] bg-emerald-400" />
                 </div>
                 <div>

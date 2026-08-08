@@ -15,9 +15,12 @@ import {
   Link2,
   Pencil,
   PhoneIncoming,
+  Settings2,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
+import Avatar from './Avatar';
+import ProfileModal from './ProfileModal';
 import {
   deriveKeyFromRoom,
   exportKey,
@@ -51,13 +54,13 @@ import {
   clearMagicParamFromUrl,
   getMagicTargetFromUrl,
   getOrCreateIdentity,
-  initials,
   personalInboxRoom,
   updateIdentity,
   type UserIdentity,
 } from './identity';
 import { loadContacts, upsertContact, type Contact } from './contacts';
 import { resolveGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
+import { syncProfileToSupabase } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -111,6 +114,9 @@ export default function App() {
   const [geo, setGeo] = useState<GeoPoint | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(identity.name);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [peerAvatarUrl, setPeerAvatarUrl] = useState('');
+  const [peerColor, setPeerColor] = useState('#60a5fa');
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [hostingSelf, setHostingSelf] = useState(true);
   const [incomingConnection, setIncomingConnection] = useState(false);
@@ -130,25 +136,26 @@ export default function App() {
   const onlineIds = useMemo(() => new Set(presenceUsers.map((u) => u.userId)), [presenceUsers]);
 
   const mapPeople = useMemo((): MapPerson[] => {
-    const contactIds = new Set(contacts.map((c) => c.id));
     const list: MapPerson[] = presenceUsers
       .filter((u) => u.userId !== identity.id)
-      .map((u) => ({
-        ...u,
-        isContact: contactIds.has(u.userId),
-        name: contactIds.has(u.userId)
-          ? contacts.find((c) => c.id === u.userId)?.name || u.name
-          : u.name,
-        color: contactIds.has(u.userId)
-          ? contacts.find((c) => c.id === u.userId)?.color || u.color
-          : u.color,
-      }));
+      .map((u) => {
+        const contact = contacts.find((c) => c.id === u.userId);
+        return {
+          ...u,
+          isContact: Boolean(contact),
+          name: contact?.name || u.name,
+          color: contact?.color || u.color,
+          avatarUrl: u.avatarUrl || contact?.avatarUrl || '',
+        };
+      });
 
     if (geo) {
       list.push({
         userId: identity.id,
         name: identity.name,
         color: identity.color,
+        avatarUrl: identity.avatarUrl,
+        themeFon: identity.themeFon,
         lat: geo.lat,
         lng: geo.lng,
         online: true,
@@ -300,9 +307,12 @@ export default function App() {
         userId: identityRef.current.id,
         name: identityRef.current.name,
         color: identityRef.current.color,
+        avatarUrl: identityRef.current.avatarUrl,
+        themeFon: identityRef.current.themeFon,
         lat: point.lat,
         lng: point.lng,
       });
+      void syncProfileToSupabase(identityRef.current);
     })();
 
     return () => {
@@ -361,11 +371,14 @@ export default function App() {
         onPeerHello: (peer) => {
           void (async () => {
             setPeerLabel(peer.name);
+            setPeerAvatarUrl(peer.avatarUrl || '');
+            setPeerColor(peer.color);
             await setActivePeer(peer.userId, peer.name);
             const next = await upsertContact({
               id: peer.userId,
               name: peer.name,
               color: peer.color,
+              avatarUrl: peer.avatarUrl || '',
             });
             setContacts(next);
           })();
@@ -422,6 +435,7 @@ export default function App() {
       userId: identityRef.current.id,
       name: identityRef.current.name,
       color: identityRef.current.color,
+      avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
   }, [addMessage, attachLocalVideo, peerLabel, setActivePeer]);
@@ -530,7 +544,11 @@ export default function App() {
     setScreen('home');
     setHostingSelf(false);
     setMagicUserInUrl(targetUserId);
-    await setActivePeer(targetUserId, label || 'Близкий');
+    const known = contacts.find((c) => c.id === targetUserId);
+    const presence = presenceUsers.find((u) => u.userId === targetUserId);
+    setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
+    setPeerColor(presence?.color || known?.color || '#60a5fa');
+    await setActivePeer(targetUserId, label || known?.name || 'Близкий');
     p2pRef.current?.close();
     p2pRef.current = null;
     setSessionEpoch((n) => n + 1);
@@ -661,19 +679,36 @@ export default function App() {
     }
   };
 
-  const saveName = () => {
-    const next = updateIdentity({ name: nameDraft.trim() || 'Я' });
+  const applyIdentity = (next: UserIdentity) => {
     setIdentity(next);
-    setEditingName(false);
+    identityRef.current = next;
     p2pRef.current?.setLocalIdentity({
       userId: next.id,
       name: next.name,
       color: next.color,
+      avatarUrl: next.avatarUrl,
     });
-    void presenceRef.current?.updateProfile({ name: next.name, color: next.color });
+    void presenceRef.current?.updateProfile({
+      name: next.name,
+      color: next.color,
+      avatarUrl: next.avatarUrl,
+      themeFon: next.themeFon,
+    });
+    void syncProfileToSupabase(next);
+  };
+
+  const saveName = () => {
+    const next = updateIdentity({ name: nameDraft.trim() || 'Я' });
+    applyIdentity(next);
+    setEditingName(false);
   };
 
   const connected = p2pStatus === 'connected';
+
+  const shellStyle =
+    appMode === 'paranoic'
+      ? ({ background: identity.themeFon } as React.CSSProperties)
+      : undefined;
 
   if (appMode === 'select') {
     return <ModeSelector onSelect={(mode) => setAppMode(mode)} />;
@@ -693,7 +728,14 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell themed" style={shellStyle}>
+      {profileOpen && (
+        <ProfileModal
+          identity={identity}
+          onClose={() => setProfileOpen(false)}
+          onSaved={(next) => applyIdentity(next)}
+        />
+      )}
       <header className="app-header">
         <div className="brand">
           <button
@@ -766,10 +808,19 @@ export default function App() {
         {screen === 'home' && (
           <section className="home">
             <div className="identity-card">
-              <div className="avatar" style={{ background: identity.color }}>
-                {initials(identity.name)}
-                <span className="online-dot self" />
-              </div>
+              <button
+                type="button"
+                className="avatar-hit"
+                onClick={() => setProfileOpen(true)}
+                aria-label="Открыть профиль"
+              >
+                <Avatar
+                  name={identity.name}
+                  color={identity.color}
+                  avatarUrl={identity.avatarUrl}
+                  online="self"
+                />
+              </button>
               <div className="identity-meta">
                 {editingName ? (
                   <div className="name-edit">
@@ -798,6 +849,14 @@ export default function App() {
                 )}
                 <p className="mono-id">ID · {identity.id}</p>
               </div>
+              <button
+                type="button"
+                className="icon-btn profile-settings-btn"
+                onClick={() => setProfileOpen(true)}
+                aria-label="Настройки профиля"
+              >
+                <Settings2 size={20} />
+              </button>
             </div>
 
             <div className="room-card magic-card">
@@ -880,10 +939,16 @@ export default function App() {
                           onClick={() => void connectToUser(c.id, c.name)}
                           disabled={connected && peerId === c.id}
                         >
-                          <span className="avatar sm" style={{ background: c.color }}>
-                            {initials(c.name)}
-                            <span className={`online-dot ${online ? 'on' : 'off'}`} />
-                          </span>
+                          <Avatar
+                            name={c.name}
+                            color={c.color}
+                            avatarUrl={
+                              c.avatarUrl ||
+                              presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                            }
+                            size="sm"
+                            online={online ? true : 'off'}
+                          />
                           <span className="contact-info">
                             <span className="contact-name">{c.name}</span>
                             <span className="contact-status">
@@ -916,7 +981,15 @@ export default function App() {
               <button type="button" className="text-link" onClick={() => setScreen('home')}>
                 <ArrowLeft size={16} /> Назад
               </button>
-              <span>Переписка с {peerLabel}</span>
+              <div className="chat-peer">
+                <Avatar
+                  name={peerLabel}
+                  color={peerColor}
+                  avatarUrl={peerAvatarUrl}
+                  size="sm"
+                />
+                <span>Переписка с {peerLabel}</span>
+              </div>
               <button
                 type="button"
                 className="icon-btn"
@@ -933,6 +1006,14 @@ export default function App() {
               ) : (
                 messages.map((m) => (
                   <div key={m.id} className={`bubble-wrap ${m.mine ? 'mine' : 'theirs'}`}>
+                    {!m.mine && (
+                      <Avatar
+                        name={peerLabel}
+                        color={peerColor}
+                        avatarUrl={peerAvatarUrl}
+                        size="sm"
+                      />
+                    )}
                     <div className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>
                       {m.kind === 'text' && <p>{m.text}</p>}
                       {m.kind === 'file-pending' && (
@@ -960,6 +1041,14 @@ export default function App() {
                         ))}
                       <time>{m.time}</time>
                     </div>
+                    {m.mine && (
+                      <Avatar
+                        name={identity.name}
+                        color={identity.color}
+                        avatarUrl={identity.avatarUrl}
+                        size="sm"
+                      />
+                    )}
                   </div>
                 ))
               )}

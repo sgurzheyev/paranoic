@@ -5,6 +5,8 @@ export type PresenceUser = {
   userId: string;
   name: string;
   color: string;
+  avatarUrl?: string;
+  themeFon?: string;
   lat: number;
   lng: number;
   online: boolean;
@@ -103,7 +105,9 @@ export class WorldPresence {
     await this.channel.track(this.me);
   }
 
-  async updateProfile(patch: Partial<Pick<PresenceUser, 'name' | 'color' | 'lat' | 'lng'>>): Promise<void> {
+  async updateProfile(
+    patch: Partial<Pick<PresenceUser, 'name' | 'color' | 'avatarUrl' | 'themeFon' | 'lat' | 'lng'>>
+  ): Promise<void> {
     if (!this.channel || !this.me) return;
     this.me = { ...this.me, ...patch, updatedAt: Date.now(), online: true };
     await this.channel.track(this.me);

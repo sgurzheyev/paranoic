@@ -4,6 +4,7 @@ export type Contact = {
   id: string;
   name: string;
   color: string;
+  avatarUrl?: string;
   addedAt: string;
 };
 
@@ -23,17 +24,25 @@ export async function saveContacts(contacts: Contact[]): Promise<void> {
   await contactsDb.setItem(CONTACTS_KEY, contacts);
 }
 
-export async function upsertContact(contact: Omit<Contact, 'addedAt'> & { addedAt?: string }): Promise<Contact[]> {
+export async function upsertContact(
+  contact: Omit<Contact, 'addedAt'> & { addedAt?: string }
+): Promise<Contact[]> {
   const list = await loadContacts();
   const idx = list.findIndex((c) => c.id === contact.id);
   const row: Contact = {
     id: contact.id,
     name: contact.name,
     color: contact.color,
+    avatarUrl: contact.avatarUrl ?? '',
     addedAt: contact.addedAt ?? new Date().toISOString(),
   };
   if (idx >= 0) {
-    list[idx] = { ...list[idx], ...row, addedAt: list[idx]!.addedAt };
+    list[idx] = {
+      ...list[idx],
+      ...row,
+      addedAt: list[idx]!.addedAt,
+      avatarUrl: row.avatarUrl || list[idx]!.avatarUrl,
+    };
   } else {
     list.push(row);
   }

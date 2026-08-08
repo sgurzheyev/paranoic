@@ -35,6 +35,7 @@ export type PeerIdentity = {
   userId: string;
   name: string;
   color: string;
+  avatarUrl?: string;
 };
 
 export type P2PHandlers = {
@@ -129,7 +130,7 @@ type ControlPacket =
   | { t: 'renegotiate-offer'; sdp: RTCSessionDescriptionInit }
   | { t: 'renegotiate-answer'; sdp: RTCSessionDescriptionInit }
   | { t: 'media-refresh' }
-  | { t: 'hello'; userId: string; name: string; color: string }
+  | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number }
   | { t: 'file-done'; id: string };
 
@@ -861,6 +862,7 @@ export class P2PConnection {
       userId: this.localIdentity.userId,
       name: this.localIdentity.name,
       color: this.localIdentity.color,
+      avatarUrl: this.localIdentity.avatarUrl || '',
     });
   }
 
@@ -870,6 +872,7 @@ export class P2PConnection {
         userId: packet.userId,
         name: packet.name,
         color: packet.color,
+        avatarUrl: packet.avatarUrl || '',
       });
       return;
     }
