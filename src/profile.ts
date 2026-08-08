@@ -171,7 +171,7 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
 
 /**
  * Гарантирует строку в `profiles` перед INSERT в map_gems (FK author_id).
- * Бросает ошибку, если upsert не удался.
+ * В upsert — только поля схемы БД (без локального UI: name/color/theme_fon).
  */
 export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
@@ -180,12 +180,8 @@ export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
   const sb = getSupabase();
   const row = {
     id: identity.id.trim(),
-    name: identity.name || 'Я',
-    color: identity.color || '#34d399',
+    username: identity.username?.trim() || null,
     avatar_url: identity.avatarUrl || null,
-    theme_fon: identity.themeFon || null,
-    username: identity.username || null,
-    updated_at: new Date().toISOString(),
   };
   const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
   if (error) {
