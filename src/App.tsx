@@ -60,7 +60,7 @@ import {
   type UserIdentity,
 } from './identity';
 import { loadContacts, upsertContact, type Contact } from './contacts';
-import { resolveGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
+import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
 import { syncProfileToSupabase } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
@@ -276,7 +276,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void purgeLegacyGlobalHistory();
+    void purgeLegacyGlobalHistory(identityRef.current.id);
     void loadContacts().then(setContacts);
   }, []);
 
@@ -301,11 +301,12 @@ export default function App() {
     };
   }, [revokeMediaUrls]);
 
-  /** Presence + геолокация для карты и зелёных точек. */
+  /** Presence + непрерывный GPS (или Антарктида при отказе). */
   useEffect(() => {
     if (appMode !== 'paranoic' && appMode !== 'family') return;
 
     let cancelled = false;
+    const geoWatchBox: { stop: (() => void) | null } = { stop: null };
     const presence = new WorldPresence({
       onSync: (users) => {
         if (!cancelled) setPresenceUsers(users);
@@ -317,23 +318,42 @@ export default function App() {
     presenceRef.current = presence;
 
     void (async () => {
-      const point = await resolveGeo();
-      if (cancelled) return;
-      setGeo(point);
-      await presence.start({
-        userId: identityRef.current.id,
-        name: identityRef.current.name,
-        color: identityRef.current.color,
-        avatarUrl: identityRef.current.avatarUrl,
-        themeFon: identityRef.current.themeFon,
-        lat: point.lat,
-        lng: point.lng,
+      // Сразу публикуем Антарктиду, пока ждём разрешение GPS.
+      setGeo({ ...ANTARCTICA });
+      try {
+        await presence.start({
+          userId: identityRef.current.id,
+          name: identityRef.current.name,
+          color: identityRef.current.color,
+          avatarUrl: identityRef.current.avatarUrl,
+          themeFon: identityRef.current.themeFon,
+          lat: ANTARCTICA.lat,
+          lng: ANTARCTICA.lng,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[presence] start failed', e);
+        }
+        return;
+      }
+      if (cancelled) {
+        void presence.stop();
+        return;
+      }
+
+      const handle = watchGeo((point) => {
+        if (cancelled) return;
+        setGeo(point);
+        void presence.updateLocation(point.lat, point.lng);
       });
+      geoWatchBox.stop = () => handle.stop();
+
       void syncProfileToSupabase(identityRef.current);
     })();
 
     return () => {
       cancelled = true;
+      geoWatchBox.stop?.();
       void presence.stop();
       if (presenceRef.current === presence) presenceRef.current = null;
     };

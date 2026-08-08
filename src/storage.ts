@@ -28,56 +28,112 @@ const mediaDb = localforage.createInstance({
 /** Старый глобальный ключ — больше не используем (изоляция диалогов). */
 const LEGACY_HISTORY_KEY = 'chat-history';
 
-/** Стабильный id диалога для пары пользователей. */
+/** Стабильный id диалога для пары пользователей (сортированный). */
 export function conversationId(a: string, b: string): string {
-  return [a, b].sort().join(':');
+  return [a, b].filter(Boolean).sort().join(':');
 }
 
-function historyKey(conversationId: string): string {
-  return `chat:${conversationId}`;
+function historyKey(convId: string): string {
+  return `chat:${convId}`;
 }
 
-export async function loadChatHistory(conversationId: string): Promise<StoredMessage[]> {
-  if (!conversationId) return [];
-  const rows = await messagesDb.getItem<StoredMessage[]>(historyKey(conversationId));
+/** Разбор ключа `chat:idA:idB` → пара id или null. */
+function parseChatKey(key: string): [string, string] | null {
+  if (!key.startsWith('chat:')) return null;
+  const body = key.slice('chat:'.length);
+  const parts = body.split(':').filter(Boolean);
+  if (parts.length !== 2) return null;
+  return [parts[0]!, parts[1]!];
+}
+
+export async function loadChatHistory(convId: string): Promise<StoredMessage[]> {
+  if (!convId) return [];
+  const rows = await messagesDb.getItem<StoredMessage[]>(historyKey(convId));
   return rows ?? [];
 }
 
 export async function saveChatHistory(
-  conversationId: string,
+  convId: string,
   messages: StoredMessage[]
 ): Promise<void> {
-  if (!conversationId) return;
-  await messagesDb.setItem(historyKey(conversationId), messages);
+  if (!convId) return;
+  await messagesDb.setItem(historyKey(convId), messages);
 }
 
 export async function appendStoredMessage(
-  conversationId: string,
+  convId: string,
   message: StoredMessage
 ): Promise<void> {
-  if (!conversationId) return;
-  const history = await loadChatHistory(conversationId);
+  if (!convId) return;
+  const history = await loadChatHistory(convId);
   history.push(message);
-  await saveChatHistory(conversationId, history);
+  await saveChatHistory(convId, history);
 }
 
 export async function updateStoredMessage(
-  conversationId: string,
+  convId: string,
   id: string,
   patch: Partial<StoredMessage>
 ): Promise<void> {
-  if (!conversationId) return;
-  const history = await loadChatHistory(conversationId);
+  if (!convId) return;
+  const history = await loadChatHistory(convId);
   const idx = history.findIndex((m) => m.id === id);
   if (idx < 0) return;
   history[idx] = { ...history[idx], ...patch };
-  await saveChatHistory(conversationId, history);
+  await saveChatHistory(convId, history);
 }
 
-/** Одноразово чистит старую общую историю «я ↔ я». */
-export async function purgeLegacyGlobalHistory(): Promise<void> {
+/**
+ * Чистит старые/тестовые ключи истории:
+ * - глобальный `chat-history`
+ * - само-чат `chat:me:me`
+ * - несортированные / битые `chat:*`
+ * - прочие legacy-ключи
+ */
+export async function purgeLegacyGlobalHistory(selfId?: string): Promise<void> {
   try {
     await messagesDb.removeItem(LEGACY_HISTORY_KEY);
+
+    const keys = await messagesDb.keys();
+    for (const raw of keys) {
+      const key = String(raw);
+
+      if (
+        key === LEGACY_HISTORY_KEY ||
+        key === 'messages' ||
+        key === 'history' ||
+        key.startsWith('history:') ||
+        key.startsWith('room:')
+      ) {
+        await messagesDb.removeItem(key);
+        continue;
+      }
+
+      if (!key.startsWith('chat:')) continue;
+
+      const pair = parseChatKey(key);
+      if (!pair) {
+        await messagesDb.removeItem(key);
+        continue;
+      }
+
+      const [a, b] = pair;
+      // Тестовый диалог «я ↔ я»
+      if (a === b) {
+        await messagesDb.removeItem(key);
+        continue;
+      }
+      if (selfId && a === selfId && b === selfId) {
+        await messagesDb.removeItem(key);
+        continue;
+      }
+
+      // Ключ должен быть отсортирован — иначе это мусор/legacy
+      const canonical = conversationId(a, b);
+      if (key !== historyKey(canonical)) {
+        await messagesDb.removeItem(key);
+      }
+    }
   } catch {
     /* */
   }

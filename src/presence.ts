@@ -15,31 +15,82 @@ export type PresenceUser = {
 
 export type GeoPoint = { lat: number; lng: number; source: 'gps' | 'antarctica' };
 
-/** Условная «Антарктида», если GPS недоступен. */
+/** Условная «Антарктида», если GPS недоступен / запрещён. */
 export const ANTARCTICA: GeoPoint = { lat: -78.5, lng: 16.5, source: 'antarctica' };
 
 const PRESENCE_CHANNEL = 'paranoic-world';
+const GEO_FALLBACK_MS = 7_000;
 
-export async function resolveGeo(): Promise<GeoPoint> {
-  if (!navigator.geolocation) return { ...ANTARCTICA };
+export type GeoWatchHandle = { stop: () => void };
 
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ...ANTARCTICA }), 6000);
-    navigator.geolocation.getCurrentPosition(
+/**
+ * Непрерывный GPS через Geolocation API.
+ * При отказе / таймауте / отсутствии API — Антарктида.
+ */
+export function watchGeo(onUpdate: (point: GeoPoint) => void): GeoWatchHandle {
+  if (!navigator.geolocation) {
+    onUpdate({ ...ANTARCTICA });
+    return { stop: () => undefined };
+  }
+
+  let settled = false;
+  let watchId: number | null = null;
+
+  const emit = (point: GeoPoint) => {
+    settled = true;
+    onUpdate(point);
+  };
+
+  const fallbackTimer = window.setTimeout(() => {
+    if (!settled) emit({ ...ANTARCTICA });
+  }, GEO_FALLBACK_MS);
+
+  try {
+    watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        clearTimeout(timer);
-        resolve({
+        window.clearTimeout(fallbackTimer);
+        emit({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           source: 'gps',
         });
       },
       () => {
-        clearTimeout(timer);
-        resolve({ ...ANTARCTICA });
+        window.clearTimeout(fallbackTimer);
+        emit({ ...ANTARCTICA });
       },
-      { enableHighAccuracy: false, timeout: 5000, maximumAge: 120_000 }
+      {
+        enableHighAccuracy: true,
+        timeout: 12_000,
+        maximumAge: 20_000,
+      }
     );
+  } catch {
+    window.clearTimeout(fallbackTimer);
+    emit({ ...ANTARCTICA });
+  }
+
+  return {
+    stop: () => {
+      window.clearTimeout(fallbackTimer);
+      if (watchId != null) {
+        try {
+          navigator.geolocation.clearWatch(watchId);
+        } catch {
+          /* */
+        }
+      }
+    },
+  };
+}
+
+/** Одноразовый снимок (для совместимости). */
+export async function resolveGeo(): Promise<GeoPoint> {
+  return new Promise((resolve) => {
+    const handle = watchGeo((point) => {
+      handle.stop();
+      resolve(point);
+    });
   });
 }
 
@@ -101,6 +152,7 @@ export class WorldPresence {
 
   async updateLocation(lat: number, lng: number): Promise<void> {
     if (!this.channel || !this.me) return;
+    if (this.me.lat === lat && this.me.lng === lng) return;
     this.me = { ...this.me, lat, lng, updatedAt: Date.now(), online: true };
     await this.channel.track(this.me);
   }
@@ -130,6 +182,7 @@ export class WorldPresence {
   async stop(): Promise<void> {
     const ch = this.channel;
     this.channel = null;
+    this.me = null;
     if (!ch) return;
     try {
       await ch.untrack();
