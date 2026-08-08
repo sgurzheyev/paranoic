@@ -24,8 +24,9 @@ import {
   bindGemInteractions,
   ensureGemLayers,
   setGemFeatures,
+  startGemPulse,
 } from './mapGemLayers';
-import { fetchFamilyGems, type MapGem } from './mapGems';
+import { fetchAllMapGems, type MapGem } from './mapGems';
 import MemoryGemPopup from './MemoryGemPopup';
 import MemoryGemComposer from './MemoryGemComposer';
 
@@ -45,8 +46,6 @@ type GlobeLobbyProps = {
   banned?: boolean;
   /** Текущий пользователь — для создания капсул. */
   currentUserId: string;
-  /** Свои + контакты Family Mode (фильтр map_gems). */
-  familyAuthorIds: string[];
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -186,7 +185,6 @@ export default function GlobeLobby({
   onOpenAdmin,
   banned = false,
   currentUserId,
-  familyAuthorIds,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -440,7 +438,7 @@ export default function GlobeLobby({
     }
   }, [people, mapReady, selected]);
 
-  /** Слои Memory Gems + клики (кластер / распаковка). */
+  /** Слои Memory Gems + клики (кластер / распаковка) + пульсация. */
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map) return;
@@ -458,12 +456,13 @@ export default function GlobeLobby({
     const onStyle = () => attach();
     map.on('style.load', onStyle);
     const unbind = bindGemInteractions(map, (gem) => openGemRef.current(gem));
+    const stopPulse = startGemPulse(map);
 
     return () => {
       map.off('style.load', onStyle);
       unbind();
+      stopPulse();
     };
-    // gems обновляются отдельным эффектом setData
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady]);
 
@@ -478,19 +477,18 @@ export default function GlobeLobby({
     }
   }, [gems, mapReady]);
 
-  /** Загрузка капсул Family Mode (свои + контакты). */
-  const familyKey = familyAuthorIds.slice().sort().join(',');
+  /** Загрузка всех map_gems при инициализации карты. */
   useEffect(() => {
+    if (!mapReady) return;
     let cancelled = false;
-    const ids = familyKey ? familyKey.split(',') : [];
     void (async () => {
-      const rows = await fetchFamilyGems(ids);
+      const rows = await fetchAllMapGems();
       if (!cancelled) setGems(rows);
     })();
     return () => {
       cancelled = true;
     };
-  }, [familyKey]);
+  }, [mapReady]);
 
   const nudgeZoom = (delta: number) => {
     const map = mapRef.current;

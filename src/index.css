@@ -3098,7 +3098,16 @@ textarea {
   background: rgba(6, 8, 12, 0.62);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  animation: incoming-call-fade 0.22s ease;
+  animation: memory-gem-fade 0.28s ease;
+}
+
+@keyframes memory-gem-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .memory-gem-card {
@@ -3116,6 +3125,19 @@ textarea {
     0 0 40px rgba(255, 215, 0, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.18);
   overflow: hidden;
+  animation: memory-gem-pop 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center bottom;
+}
+
+@keyframes memory-gem-pop {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .memory-gem-card.composer {

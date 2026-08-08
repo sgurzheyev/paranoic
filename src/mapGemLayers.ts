@@ -7,13 +7,14 @@ export const GEMS_POINT_LAYER = 'map-gems-point';
 export const GEMS_CLUSTER_LAYER = 'map-gems-clusters';
 export const GEMS_CLUSTER_COUNT_LAYER = 'map-gems-cluster-count';
 
-const GOLD = 'rgba(255, 215, 0, 0.8)';
-const GOLD_SOFT = 'rgba(255, 215, 0, 0.45)';
+/** Золотая точка: rgba(255, 215, 0, 0.9) + blur-свечение. */
+const GOLD = 'rgba(255, 215, 0, 0.9)';
+const GOLD_GLOW = 'rgba(255, 215, 0, 0.5)';
 const GOLD_STROKE = 'rgba(255, 248, 200, 0.95)';
 
 type GemPointGeom = { type: 'Point'; coordinates: [number, number] };
 
-/** GeoJSON source + золотые circle/cluster слои. */
+/** GeoJSON source + золотые circle/cluster слои (Mapbox clustering). */
 export function ensureGemLayers(map: MapboxMap): void {
   if (map.getSource(GEMS_SOURCE)) return;
 
@@ -25,16 +26,17 @@ export function ensureGemLayers(map: MapboxMap): void {
     clusterRadius: 52,
   });
 
+  // Blur-тень / свечение под точкой.
   map.addLayer({
     id: GEMS_GLOW_LAYER,
     type: 'circle',
     source: GEMS_SOURCE,
     filter: ['!', ['has', 'point_count']],
     paint: {
-      'circle-color': GOLD_SOFT,
-      'circle-radius': 16,
-      'circle-blur': 0.85,
-      'circle-opacity': 0.55,
+      'circle-color': GOLD_GLOW,
+      'circle-radius': 18,
+      'circle-blur': 0.9,
+      'circle-opacity': 0.65,
     },
   });
 
@@ -46,7 +48,7 @@ export function ensureGemLayers(map: MapboxMap): void {
     paint: {
       'circle-color': GOLD,
       'circle-radius': 7,
-      'circle-blur': 0.35,
+      'circle-blur': 0.25,
       'circle-stroke-width': 1.75,
       'circle-stroke-color': GOLD_STROKE,
       'circle-opacity': 0.95,
@@ -62,14 +64,14 @@ export function ensureGemLayers(map: MapboxMap): void {
       'circle-color': [
         'step',
         ['get', 'point_count'],
-        'rgba(255, 215, 0, 0.55)',
+        'rgba(255, 215, 0, 0.65)',
         8,
-        'rgba(255, 196, 0, 0.65)',
+        'rgba(255, 196, 0, 0.75)',
         25,
-        'rgba(255, 170, 0, 0.75)',
+        'rgba(255, 170, 0, 0.85)',
       ],
       'circle-radius': ['step', ['get', 'point_count'], 18, 8, 24, 25, 32],
-      'circle-blur': 0.2,
+      'circle-blur': 0.15,
       'circle-stroke-width': 2,
       'circle-stroke-color': GOLD_STROKE,
     },
@@ -95,6 +97,30 @@ export function setGemFeatures(map: MapboxMap, gems: MapGem[]): void {
   const source = map.getSource(GEMS_SOURCE) as GeoJSONSource | undefined;
   if (!source) return;
   source.setData(gemsToGeoJson(gems));
+}
+
+/** Лёгкая пульсация золотых точек (radius + glow opacity). */
+export function startGemPulse(map: MapboxMap): () => void {
+  let raf = 0;
+  let start = performance.now();
+  const tick = (now: number) => {
+    if (!map.getLayer(GEMS_POINT_LAYER) || !map.getLayer(GEMS_GLOW_LAYER)) {
+      raf = requestAnimationFrame(tick);
+      return;
+    }
+    const t = ((now - start) / 1400) % 1;
+    const wave = 0.5 - 0.5 * Math.cos(t * Math.PI * 2);
+    try {
+      map.setPaintProperty(GEMS_POINT_LAYER, 'circle-radius', 6.2 + wave * 2.4);
+      map.setPaintProperty(GEMS_GLOW_LAYER, 'circle-radius', 14 + wave * 8);
+      map.setPaintProperty(GEMS_GLOW_LAYER, 'circle-opacity', 0.4 + wave * 0.35);
+    } catch {
+      /* style busy */
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return () => cancelAnimationFrame(raf);
 }
 
 export function bindGemInteractions(

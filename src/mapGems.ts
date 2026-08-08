@@ -65,6 +65,27 @@ export async function fetchFamilyGems(authorIds: string[]): Promise<MapGem[]> {
   }
 }
 
+/** Все капсулы из `map_gems` (при инициализации карты). */
+export async function fetchAllMapGems(): Promise<MapGem[]> {
+  if (!hasSupabaseConfig()) return [];
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(MAP_GEMS_TABLE)
+      .select(SELECT_COLS)
+      .order('created_at', { ascending: false })
+      .limit(1000);
+    if (error) {
+      console.warn('[paranoic gems] fetch all', error.message);
+      return [];
+    }
+    return ((data as Record<string, unknown>[] | null) ?? []).map(mapRow);
+  } catch (e) {
+    console.warn('[paranoic gems] fetch all failed', e);
+    return [];
+  }
+}
+
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const sb = getSupabase();

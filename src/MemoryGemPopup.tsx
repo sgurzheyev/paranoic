@@ -79,7 +79,6 @@ export default function MemoryGemPopup({
               loop
               muted
               autoPlay
-              controls
             />
           )}
           {(gem.type === 'text' || gem.content) && gem.content && (
