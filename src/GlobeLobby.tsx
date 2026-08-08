@@ -1,17 +1,15 @@
-import {
-  Suspense,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MutableRefObject,
-} from 'react';
-import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
-import * as THREE from 'three';
-import { ArrowLeft, MapPin, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import { ArrowLeft, MapPin, MessageCircle, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { initials } from './identity';
-import type { PresenceUser } from './presence';
+import {
+  applyMapboxStandardNight,
+  getMapboxToken,
+  MAPBOX_STANDARD_STYLE_WITH_CONFIG,
+  whenMapStyleReady,
+} from './lib/mapbox';
+import { ANTARCTICA, type PresenceUser } from './presence';
 
 export type MapPerson = PresenceUser & {
   isContact: boolean;
@@ -23,472 +21,67 @@ type GlobeLobbyProps = {
   people: MapPerson[];
   geoSource: 'gps' | 'antarctica' | 'pending';
   onCallUser: (user: MapPerson) => void;
+  onChatUser: (user: MapPerson) => void;
 };
 
-const SPHERE_RADIUS = 8;
-const EARTH_TEX =
-  'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg';
-const FOV_DEFAULT = 72;
-const FOV_MIN = 28;
-const FOV_MAX = 98;
-const FOV_FOCUS = 38;
+const FOCUS_ZOOM = 6.2;
+const WORLD_ZOOM = 2.1;
 
-/** lat/lng → точка на внутренней поверхности сферы (вид из центра). */
-export function latLngToPosition(
-  lat: number,
-  lng: number,
-  radius = SPHERE_RADIUS
-): [number, number, number] {
-  const phi = ((90 - lat) * Math.PI) / 180;
-  const theta = ((lng + 180) * Math.PI) / 180;
-  const x = -radius * Math.sin(phi) * Math.cos(theta);
-  const z = radius * Math.sin(phi) * Math.sin(theta);
-  const y = radius * Math.cos(phi);
-  return [x, y, z];
-}
+function buildMarkerElement(
+  person: MapPerson,
+  selected: boolean,
+  onClick: () => void
+): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = [
+    'map-avatar-marker',
+    person.isMe ? 'is-me' : '',
+    person.isContact ? 'is-contact' : 'is-stranger',
+    selected ? 'is-selected' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  btn.setAttribute('aria-label', person.isMe ? 'Вы' : person.name);
+  btn.style.setProperty('--marker-color', person.color || '#60a5fa');
 
-function directionToYawPitch(dir: THREE.Vector3): { yaw: number; pitch: number } {
-  const d = dir.clone().normalize();
-  const yaw = Math.atan2(-d.x, -d.z);
-  const pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
-  return { yaw, pitch };
-}
+  if (person.avatarUrl) {
+    const img = document.createElement('img');
+    img.src = person.avatarUrl;
+    img.alt = '';
+    img.draggable = false;
+    img.className = 'map-avatar-marker-img';
+    btn.appendChild(img);
+  } else if (!person.isContact && !person.isMe) {
+    const dot = document.createElement('span');
+    dot.className = 'map-avatar-marker-gold';
+    dot.textContent = '·';
+    btn.appendChild(dot);
+  } else {
+    const label = document.createElement('span');
+    label.className = 'map-avatar-marker-initials';
+    label.textContent = initials(person.name);
+    btn.appendChild(label);
+  }
 
-function LookAroundControls({
-  enabled,
-  yawRef,
-  pitchRef,
-  fovRef,
-  fovTargetRef,
-  onFovChange,
-}: {
-  enabled: boolean;
-  yawRef: MutableRefObject<number>;
-  pitchRef: MutableRefObject<number>;
-  fovRef: MutableRefObject<number>;
-  fovTargetRef: MutableRefObject<number>;
-  onFovChange: (fov: number) => void;
-}) {
-  const { camera, gl } = useThree();
-  const dragging = useRef(false);
-  const last = useRef({ x: 0, y: 0 });
-  const pinchDist = useRef<number | null>(null);
-  const reportedFov = useRef(fovRef.current);
+  const pulse = document.createElement('span');
+  pulse.className = 'map-avatar-marker-dot';
+  btn.appendChild(pulse);
 
-  useEffect(() => {
-    camera.rotation.order = 'YXZ';
-    camera.position.set(0, 0, 0);
-    if (camera instanceof THREE.PerspectiveCamera) {
-      camera.fov = fovRef.current;
-      camera.updateProjectionMatrix();
-    }
-  }, [camera, fovRef]);
+  if (person.isMe) {
+    const tag = document.createElement('span');
+    tag.className = 'map-avatar-marker-you';
+    tag.textContent = 'Вы';
+    btn.appendChild(tag);
+  }
 
-  useFrame(() => {
-    if (!(camera instanceof THREE.PerspectiveCamera)) return;
-
-    // Плавный lerp FOV → целевой зум
-    const target = fovTargetRef.current;
-    fovRef.current += (target - fovRef.current) * 0.14;
-    if (Math.abs(camera.fov - fovRef.current) > 0.02) {
-      camera.fov = fovRef.current;
-      camera.updateProjectionMatrix();
-    }
-    if (Math.abs(reportedFov.current - fovRef.current) > 0.4) {
-      reportedFov.current = fovRef.current;
-      onFovChange(fovRef.current);
-    }
-
-    if (!enabled) return;
-    camera.rotation.y = yawRef.current;
-    camera.rotation.x = pitchRef.current;
-    const zoomT = (FOV_MAX - fovRef.current) / (FOV_MAX - FOV_MIN);
-    const dolly = zoomT * SPHERE_RADIUS * 0.74;
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    camera.position.copy(forward.multiplyScalar(dolly));
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick();
   });
 
-  useEffect(() => {
-    const el = gl.domElement;
-
-    const clampFovTarget = (next: number) => {
-      fovTargetRef.current = Math.min(FOV_MAX, Math.max(FOV_MIN, next));
-    };
-
-    const onDown = (e: PointerEvent) => {
-      if (!enabled || e.pointerType === 'touch') return;
-      dragging.current = true;
-      last.current = { x: e.clientX, y: e.clientY };
-      el.setPointerCapture(e.pointerId);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (!enabled || !dragging.current) return;
-      const dx = e.clientX - last.current.x;
-      const dy = e.clientY - last.current.y;
-      last.current = { x: e.clientX, y: e.clientY };
-      const sens = 0.0032 + (fovRef.current / FOV_MAX) * 0.0022;
-      yawRef.current -= dx * sens;
-      pitchRef.current = THREE.MathUtils.clamp(
-        pitchRef.current - dy * sens,
-        -1.35,
-        1.35
-      );
-    };
-    const onUp = (e: PointerEvent) => {
-      dragging.current = false;
-      try {
-        el.releasePointerCapture(e.pointerId);
-      } catch {
-        /* */
-      }
-    };
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const step = e.deltaY > 0 ? 3.5 : -3.5;
-      clampFovTarget(fovTargetRef.current + step);
-    };
-
-    const touchDist = (touches: TouchList) => {
-      if (touches.length < 2) return null;
-      const a = touches[0]!;
-      const b = touches[1]!;
-      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    };
-
-    const onTouchStart = (e: TouchEvent) => {
-      if (!enabled) return;
-      if (e.touches.length === 2) {
-        pinchDist.current = touchDist(e.touches);
-        dragging.current = false;
-      } else if (e.touches.length === 1) {
-        const t = e.touches[0]!;
-        dragging.current = true;
-        last.current = { x: t.clientX, y: t.clientY };
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (!enabled) return;
-      if (e.touches.length === 2) {
-        e.preventDefault();
-        const dist = touchDist(e.touches);
-        if (dist == null || pinchDist.current == null) return;
-        const delta = pinchDist.current - dist;
-        pinchDist.current = dist;
-        clampFovTarget(fovTargetRef.current + delta * 0.045);
-        return;
-      }
-      if (!dragging.current || e.touches.length !== 1) return;
-      const t = e.touches[0]!;
-      const dx = t.clientX - last.current.x;
-      const dy = t.clientY - last.current.y;
-      last.current = { x: t.clientX, y: t.clientY };
-      const sens = 0.0038 + (fovRef.current / FOV_MAX) * 0.002;
-      yawRef.current -= dx * sens;
-      pitchRef.current = THREE.MathUtils.clamp(
-        pitchRef.current - dy * sens,
-        -1.35,
-        1.35
-      );
-    };
-    const onTouchEnd = () => {
-      if (pinchDist.current != null) pinchDist.current = null;
-      dragging.current = false;
-    };
-
-    el.addEventListener('pointerdown', onDown);
-    el.addEventListener('pointermove', onMove);
-    el.addEventListener('pointerup', onUp);
-    el.addEventListener('pointercancel', onUp);
-    el.addEventListener('wheel', onWheel, { passive: false });
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchmove', onTouchMove, { passive: false });
-    el.addEventListener('touchend', onTouchEnd);
-    el.addEventListener('touchcancel', onTouchEnd);
-
-    return () => {
-      el.removeEventListener('pointerdown', onDown);
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('pointerup', onUp);
-      el.removeEventListener('pointercancel', onUp);
-      el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-      el.removeEventListener('touchend', onTouchEnd);
-      el.removeEventListener('touchcancel', onTouchEnd);
-    };
-  }, [enabled, gl, yawRef, pitchRef, fovRef, fovTargetRef, onFovChange]);
-
-  return null;
-}
-
-function CameraFlyTo({
-  target,
-  active,
-  yawRef,
-  pitchRef,
-  fovTargetRef,
-}: {
-  target: [number, number, number] | null;
-  active: boolean;
-  yawRef: MutableRefObject<number>;
-  pitchRef: MutableRefObject<number>;
-  fovTargetRef: MutableRefObject<number>;
-}) {
-  const { camera } = useThree();
-  const progress = useRef(0);
-  const startYaw = useRef(0);
-  const startPitch = useRef(0);
-  const endYaw = useRef(0);
-  const endPitch = useRef(0);
-  const flyingKey = useRef<string | null>(null);
-
-  useFrame((_, dt) => {
-    if (!active || !target) {
-      progress.current = 0;
-      flyingKey.current = null;
-      return;
-    }
-
-    const key = target.join(',');
-    if (flyingKey.current !== key) {
-      flyingKey.current = key;
-      progress.current = 0;
-      startYaw.current = yawRef.current;
-      startPitch.current = pitchRef.current;
-      const { yaw, pitch } = directionToYawPitch(new THREE.Vector3(...target));
-      // Кратчайший путь по yaw
-      let dy = yaw - startYaw.current;
-      while (dy > Math.PI) dy -= Math.PI * 2;
-      while (dy < -Math.PI) dy += Math.PI * 2;
-      endYaw.current = startYaw.current + dy;
-      endPitch.current = pitch;
-      fovTargetRef.current = FOV_FOCUS;
-    }
-
-    progress.current = Math.min(1, progress.current + dt * 0.85);
-    const t = 1 - (1 - progress.current) ** 3;
-    yawRef.current = THREE.MathUtils.lerp(startYaw.current, endYaw.current, t);
-    pitchRef.current = THREE.MathUtils.lerp(startPitch.current, endPitch.current, t);
-
-    camera.rotation.order = 'YXZ';
-    camera.rotation.y = yawRef.current;
-    camera.rotation.x = pitchRef.current;
-    const zoomT = (FOV_MAX - fovTargetRef.current) / (FOV_MAX - FOV_MIN);
-    const dolly = zoomT * SPHERE_RADIUS * 0.74 * t;
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    camera.position.copy(forward.multiplyScalar(dolly));
-  });
-
-  return null;
-}
-
-function EarthShell() {
-  const texture = useLoader(THREE.TextureLoader, EARTH_TEX);
-  texture.colorSpace = THREE.SRGBColorSpace;
-
-  return (
-    <mesh>
-      <sphereGeometry args={[SPHERE_RADIUS, 72, 72]} />
-      <meshBasicMaterial map={texture} side={THREE.BackSide} />
-    </mesh>
-  );
-}
-
-function Atmosphere() {
-  return (
-    <mesh>
-      <sphereGeometry args={[SPHERE_RADIUS * 0.992, 48, 48]} />
-      <meshBasicMaterial
-        color="#0a1628"
-        side={THREE.BackSide}
-        transparent
-        opacity={0.22}
-        depthWrite={false}
-      />
-    </mesh>
-  );
-}
-
-function MapPersonBadge({
-  person,
-  selected,
-  onSelect,
-  goldFallback,
-}: {
-  person: MapPerson;
-  selected: boolean;
-  onSelect: () => void;
-  goldFallback?: boolean;
-}) {
-  const over = () => {
-    document.body.style.cursor = 'pointer';
-  };
-  const out = () => {
-    document.body.style.cursor = 'default';
-  };
-  const hasPhoto = Boolean(person.avatarUrl);
-
-  return (
-    <button
-      type="button"
-      className={`relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 text-xs font-extrabold text-white shadow-lg transition ${
-        selected
-          ? 'scale-110 border-white'
-          : goldFallback && !hasPhoto
-            ? 'border-amber-300/70'
-            : 'border-white/70 hover:scale-105'
-      }`}
-      style={{
-        background: hasPhoto
-          ? '#1a1d28'
-          : goldFallback && !hasPhoto
-            ? '#f59e0b'
-            : person.color,
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
-      onPointerOver={over}
-      onPointerOut={out}
-      aria-label={person.name}
-    >
-      {hasPhoto ? (
-        <img
-          src={person.avatarUrl}
-          alt=""
-          className="h-full w-full rounded-full object-cover"
-          draggable={false}
-        />
-      ) : goldFallback ? (
-        <span className="text-base leading-none">·</span>
-      ) : (
-        initials(person.name)
-      )}
-      <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#03050a] bg-emerald-400" />
-    </button>
-  );
-}
-
-function AvatarMarker({
-  person,
-  position,
-  selected,
-  onSelect,
-  goldFallback,
-}: {
-  person: MapPerson;
-  position: [number, number, number];
-  selected: boolean;
-  onSelect: () => void;
-  goldFallback?: boolean;
-}) {
-  return (
-    <group position={position}>
-      <Html center distanceFactor={9} style={{ pointerEvents: 'auto' }} zIndexRange={[100, 0]}>
-        <MapPersonBadge
-          person={person}
-          selected={selected}
-          onSelect={onSelect}
-          goldFallback={goldFallback}
-        />
-      </Html>
-    </group>
-  );
-}
-
-function MapScene({
-  people,
-  selectedId,
-  onSelect,
-  flying,
-  yawRef,
-  pitchRef,
-  fovRef,
-  fovTargetRef,
-  onFovChange,
-  flyTarget,
-}: {
-  people: MapPerson[];
-  selectedId: string | null;
-  onSelect: (person: MapPerson, pos: [number, number, number]) => void;
-  flying: boolean;
-  yawRef: MutableRefObject<number>;
-  pitchRef: MutableRefObject<number>;
-  fovRef: MutableRefObject<number>;
-  fovTargetRef: MutableRefObject<number>;
-  onFovChange: (fov: number) => void;
-  flyTarget: [number, number, number] | null;
-}) {
-  return (
-    <>
-      <color attach="background" args={['#02040a']} />
-      <ambientLight intensity={0.55} />
-      <LookAroundControls
-        enabled={!flying}
-        yawRef={yawRef}
-        pitchRef={pitchRef}
-        fovRef={fovRef}
-        fovTargetRef={fovTargetRef}
-        onFovChange={onFovChange}
-      />
-      <CameraFlyTo
-        target={flyTarget}
-        active={flying}
-        yawRef={yawRef}
-        pitchRef={pitchRef}
-        fovTargetRef={fovTargetRef}
-      />
-      <Suspense fallback={null}>
-        <EarthShell />
-      </Suspense>
-      <Atmosphere />
-
-      {people.map((person) => {
-        const pos = latLngToPosition(person.lat, person.lng);
-        if (person.isMe) {
-          return (
-            <group key={person.userId} position={pos}>
-              <Html center distanceFactor={10} style={{ pointerEvents: 'none' }}>
-                <div className="relative flex flex-col items-center">
-                  <div
-                    className="relative h-10 w-10 overflow-hidden rounded-full border-2 border-teal-300/70 shadow-lg"
-                    style={{ background: person.avatarUrl ? '#1a1d28' : person.color }}
-                  >
-                    {person.avatarUrl ? (
-                      <img
-                        src={person.avatarUrl}
-                        alt=""
-                        className="h-full w-full rounded-full object-cover"
-                        draggable={false}
-                      />
-                    ) : (
-                      <span className="flex h-full w-full items-center justify-center text-xs font-extrabold text-white">
-                        {initials(person.name)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 whitespace-nowrap rounded-full border border-teal-300/40 bg-black/55 px-2.5 py-1 text-center text-[10px] font-bold text-teal-100">
-                    Вы
-                  </div>
-                </div>
-              </Html>
-            </group>
-          );
-        }
-        return (
-          <AvatarMarker
-            key={person.userId}
-            person={person}
-            position={pos}
-            selected={selectedId === person.userId}
-            onSelect={() => onSelect(person, pos)}
-            goldFallback={!person.isContact && !person.avatarUrl}
-          />
-        );
-      })}
-    </>
-  );
+  return btn;
 }
 
 export default function GlobeLobby({
@@ -496,42 +89,167 @@ export default function GlobeLobby({
   people,
   geoSource,
   onCallUser,
+  onChatUser,
 }: GlobeLobbyProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  const selectedIdRef = useRef<string | null>(null);
+
+  const [mapReady, setMapReady] = useState(false);
+  const [tokenMissing, setTokenMissing] = useState(false);
   const [selected, setSelected] = useState<MapPerson | null>(null);
-  const [flyTarget, setFlyTarget] = useState<[number, number, number] | null>(null);
-  const [flying, setFlying] = useState(false);
-  const [fov, setFov] = useState(FOV_DEFAULT);
-  const fovRef = useRef(FOV_DEFAULT);
-  const fovTargetRef = useRef(FOV_DEFAULT);
-  const yawRef = useRef(0.4);
-  const pitchRef = useRef(-0.08);
-  const flyEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [zoom, setZoom] = useState(WORLD_ZOOM);
 
   const contacts = useMemo(
     () => people.filter((p) => p.isContact && !p.isMe),
     [people]
   );
 
-  const focusOn = (person: MapPerson, openCard = true) => {
-    const pos = latLngToPosition(person.lat, person.lng);
-    setFlyTarget(pos);
-    setFlying(true);
-    if (openCard) setSelected(person);
-    if (flyEndTimer.current) clearTimeout(flyEndTimer.current);
-    flyEndTimer.current = setTimeout(() => setFlying(false), 1400);
+  const me = useMemo(() => people.find((p) => p.isMe), [people]);
+
+  selectedIdRef.current = selected?.userId ?? null;
+
+  const flyToPerson = (person: MapPerson, openCard = true) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (openCard && !person.isMe) setSelected(person);
+    map.flyTo({
+      center: [person.lng, person.lat],
+      zoom: Math.max(map.getZoom(), FOCUS_ZOOM),
+      speed: 1.15,
+      curve: 1.42,
+      essential: true,
+      padding: { top: 80, bottom: 180, left: 40, right: 40 },
+    });
   };
 
+  /** Инициализация Mapbox Standard night. */
   useEffect(() => {
+    const token = getMapboxToken();
+    if (!token) {
+      setTokenMissing(true);
+      return;
+    }
+    if (!containerRef.current) return;
+
+    mapboxgl.accessToken = token;
+
+    const center: [number, number] = me
+      ? [me.lng, me.lat]
+      : [ANTARCTICA.lng, ANTARCTICA.lat];
+
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: MAPBOX_STANDARD_STYLE_WITH_CONFIG as mapboxgl.StyleSpecification,
+      center,
+      zoom: WORLD_ZOOM,
+      pitch: 42,
+      bearing: -12,
+      antialias: true,
+      attributionControl: true,
+    });
+
+    map.addControl(
+      new mapboxgl.NavigationControl({
+        visualizePitch: true,
+        showCompass: true,
+        showZoom: false,
+      }),
+      'bottom-right'
+    );
+
+    const onZoom = () => setZoom(map.getZoom());
+    map.on('zoom', onZoom);
+
+    const cancelReady = whenMapStyleReady(map, (readyMap) => {
+      applyMapboxStandardNight(readyMap);
+      setMapReady(true);
+    });
+
+    mapRef.current = map;
+
     return () => {
-      if (flyEndTimer.current) clearTimeout(flyEndTimer.current);
+      cancelReady();
+      map.off('zoom', onZoom);
+      for (const marker of markersRef.current.values()) marker.remove();
+      markersRef.current.clear();
+      map.remove();
+      mapRef.current = null;
+      setMapReady(false);
     };
+    // me только для стартового центра при первом маунте
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Следим за GPS «меня» — плавно двигаем камеру при первом реальном фиксе. */
+  const didCenterOnGps = useRef(false);
+  useEffect(() => {
+    if (!mapReady || !me || didCenterOnGps.current) return;
+    if (geoSource !== 'gps') return;
+    didCenterOnGps.current = true;
+    mapRef.current?.flyTo({
+      center: [me.lng, me.lat],
+      zoom: 4.5,
+      speed: 0.9,
+      essential: true,
+    });
+  }, [mapReady, me, geoSource]);
+
+  /** Синхронизация HTML-маркеров аватарок с presence. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+
+    const nextIds = new Set(people.map((p) => p.userId));
+
+    for (const [id, marker] of markersRef.current) {
+      if (!nextIds.has(id)) {
+        marker.remove();
+        markersRef.current.delete(id);
+      }
+    }
+
+    for (const person of people) {
+      const existing = markersRef.current.get(person.userId);
+      const selectedNow = selectedIdRef.current === person.userId;
+
+      if (existing) {
+        existing.setLngLat([person.lng, person.lat]);
+        const el = existing.getElement() as HTMLButtonElement;
+        el.classList.toggle('is-selected', selectedNow);
+        const img = el.querySelector('.map-avatar-marker-img') as HTMLImageElement | null;
+        if (person.avatarUrl && img && img.src !== person.avatarUrl) {
+          img.src = person.avatarUrl;
+        }
+        continue;
+      }
+
+      const el = buildMarkerElement(person, selectedNow, () => {
+        if (person.isMe) {
+          flyToPerson(person, false);
+          return;
+        }
+        setSelected(person);
+        flyToPerson(person, false);
+      });
+
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([person.lng, person.lat])
+        .addTo(map);
+
+      markersRef.current.set(person.userId, marker);
+    }
+  }, [people, mapReady, selected]);
+
   const nudgeZoom = (delta: number) => {
-    fovTargetRef.current = Math.min(
-      FOV_MAX,
-      Math.max(FOV_MIN, fovTargetRef.current + delta)
-    );
+    const map = mapRef.current;
+    if (!map) return;
+    map.easeTo({
+      zoom: Math.min(18, Math.max(1.2, map.getZoom() + delta)),
+      duration: 320,
+      essential: true,
+    });
   };
 
   const geoHint =
@@ -543,36 +261,26 @@ export default function GlobeLobby({
 
   return (
     <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
-      <Canvas
-        camera={{ position: [0, 0, 0], fov: FOV_DEFAULT, near: 0.05, far: 100 }}
-        gl={{ antialias: true, alpha: false }}
-        onCreated={({ camera }) => {
-          camera.rotation.order = 'YXZ';
-          camera.position.set(0, 0, 0);
-        }}
-        className="absolute inset-0 touch-none"
-      >
-        <Suspense fallback={null}>
-          <MapScene
-            people={people}
-            selectedId={selected?.userId ?? null}
-            flying={flying}
-            yawRef={yawRef}
-            pitchRef={pitchRef}
-            fovRef={fovRef}
-            fovTargetRef={fovTargetRef}
-            onFovChange={setFov}
-            flyTarget={flyTarget}
-            onSelect={(person, pos) => {
-              setFlyTarget(pos);
-              setFlying(true);
-              setSelected(person);
-              if (flyEndTimer.current) clearTimeout(flyEndTimer.current);
-              flyEndTimer.current = setTimeout(() => setFlying(false), 1400);
-            }}
-          />
-        </Suspense>
-      </Canvas>
+      <div ref={containerRef} className="absolute inset-0 family-mapbox" />
+
+      {tokenMissing && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-6 text-center backdrop-blur-md">
+          <div className="max-w-md rounded-3xl border border-white/20 bg-white/10 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]">
+            <h2 className="m-0 text-xl font-extrabold text-white">Нужен Mapbox токен</h2>
+            <p className="mt-3 text-sm text-slate-300">
+              Добавьте <code className="text-teal-200">VITE_MAPBOX_TOKEN</code> в{' '}
+              <code className="text-teal-200">.env</code> и перезапустите dev-сервер.
+            </p>
+            <button
+              type="button"
+              onClick={onBack}
+              className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-white"
+            >
+              <ArrowLeft size={16} /> Назад
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
         <header className="pointer-events-auto flex items-center justify-between px-4 py-4 sm:px-6">
@@ -589,8 +297,8 @@ export default function GlobeLobby({
         </header>
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
-          <p className="mx-auto max-w-md text-sm text-slate-400 sm:text-base">
-            Колесо / щипок — зум. Нажмите аватар друга — камера плавно летит к нему.
+          <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
+            Mapbox Standard · ночь. Нажмите аватар — звонок или чат.
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
@@ -609,7 +317,7 @@ export default function GlobeLobby({
                     key={c.userId}
                     type="button"
                     className="flex w-16 shrink-0 flex-col items-center gap-1.5"
-                    onClick={() => focusOn(c)}
+                    onClick={() => flyToPerson(c)}
                     aria-label={`Найти ${c.name} на карте`}
                   >
                     <span
@@ -644,8 +352,8 @@ export default function GlobeLobby({
               <button
                 type="button"
                 aria-label="Приблизить"
-                onClick={() => nudgeZoom(-8)}
-                disabled={fov <= FOV_MIN + 0.5}
+                onClick={() => nudgeZoom(1.2)}
+                disabled={zoom >= 17.5}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
               >
                 <ZoomIn size={18} />
@@ -653,8 +361,8 @@ export default function GlobeLobby({
               <button
                 type="button"
                 aria-label="Отдалить"
-                onClick={() => nudgeZoom(8)}
-                disabled={fov >= FOV_MAX - 0.5}
+                onClick={() => nudgeZoom(-1.2)}
+                disabled={zoom <= 1.4}
                 className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
               >
                 <ZoomOut size={18} />
@@ -709,21 +417,27 @@ export default function GlobeLobby({
                 type="button"
                 className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
                 aria-label="Закрыть"
-                onClick={() => {
-                  setSelected(null);
-                  setFlying(false);
-                }}
+                onClick={() => setSelected(null)}
               >
                 <X size={20} />
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => onCallUser(selected)}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-lg font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15"
-            >
-              <Phone size={22} /> Позвонить
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => onChatUser(selected)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition hover:bg-white/15"
+              >
+                <MessageCircle size={20} /> Написать
+              </button>
+              <button
+                type="button"
+                onClick={() => onCallUser(selected)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15"
+              >
+                <Phone size={20} /> Позвонить
+              </button>
+            </div>
           </div>
         </div>
       )}

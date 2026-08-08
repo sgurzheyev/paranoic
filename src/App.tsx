@@ -142,6 +142,8 @@ export default function App() {
   const mediaUrlsRef = useRef<Set<string>>(new Set());
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
+  /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
+  const pendingStartCallRef = useRef(false);
   const ensureP2PRef = useRef<() => P2PConnection>(() => {
     throw new Error('P2P not ready');
   });
@@ -374,6 +376,17 @@ export default function App() {
             // Гость по магической ссылке — сразу в диалог с этим peer.
             if (guestPeerIdRef.current) {
               setScreen('chat');
+            }
+            if (pendingStartCallRef.current) {
+              pendingStartCallRef.current = false;
+              void (async () => {
+                try {
+                  await p2pRef.current?.startCall();
+                  setScreen('call');
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
+                }
+              })();
             }
           }
           if (status === 'waiting-answer') {
@@ -795,7 +808,11 @@ export default function App() {
         onBack={() => setAppMode('select')}
         people={mapPeople}
         geoSource={geo ? geo.source : 'pending'}
+        onChatUser={(user) => {
+          void connectToUser(user.userId, user.isContact ? user.name : 'Незнакомец');
+        }}
         onCallUser={(user) => {
+          pendingStartCallRef.current = true;
           void connectToUser(user.userId, user.isContact ? user.name : 'Незнакомец');
         }}
       />
