@@ -1,4 +1,4 @@
-import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { getSupabase, getSupabaseConfig, hasSupabaseConfig } from './lib/supabase';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
@@ -106,21 +106,54 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   return mapRow(data as Record<string, unknown>);
 }
 
-/** Загрузка фото/видео капсулы в Storage. */
+/**
+ * Загрузка фото/видео в Storage (`map-gems`) с прогрессом (XHR).
+ * Публичный URL возвращается после успешного upload.
+ */
 export async function uploadGemMedia(
   authorId: string,
-  file: File
+  file: File,
+  onProgress?: (ratio: number) => void
 ): Promise<string> {
-  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
-  const sb = getSupabase();
+  const cfg = getSupabaseConfig();
+  if (!cfg) throw new Error('Supabase не настроен');
+
   const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
   const path = `${authorId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const { error } = await sb.storage.from(MAP_GEMS_BUCKET).upload(path, file, {
-    upsert: false,
-    contentType: file.type || 'application/octet-stream',
-    cacheControl: '3600',
+  const endpoint = `${cfg.url.replace(/\/$/, '')}/storage/v1/object/${MAP_GEMS_BUCKET}/${path}`;
+
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', endpoint);
+    xhr.setRequestHeader('Authorization', `Bearer ${cfg.anonKey}`);
+    xhr.setRequestHeader('apikey', cfg.anonKey);
+    xhr.setRequestHeader('x-upsert', 'false');
+    if (file.type) xhr.setRequestHeader('Content-Type', file.type);
+
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      onProgress?.(Math.min(1, ev.loaded / Math.max(1, ev.total)));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve();
+        return;
+      }
+      let message = `Ошибка загрузки (${xhr.status})`;
+      try {
+        const parsed = JSON.parse(xhr.responseText) as { message?: string; error?: string };
+        message = parsed.message || parsed.error || message;
+      } catch {
+        /* */
+      }
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error('Сеть оборвалась при загрузке'));
+    xhr.send(file);
   });
-  if (error) throw error;
+
+  const sb = getSupabase();
   const { data } = sb.storage.from(MAP_GEMS_BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }

@@ -3179,10 +3179,89 @@ textarea {
   color: #ffe08a;
 }
 
+.memory-gem-heading {
+  margin: 4px 0 0;
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
 .memory-gem-meta {
   margin: 4px 0 0;
   font-size: 0.82rem;
   color: var(--muted);
+}
+
+.memory-gem-preview {
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.memory-gem-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-gem-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  border: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+.memory-gem-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f59e0b, #fde047);
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.45);
+  transition: width 0.18s ease;
+}
+
+.memory-gem-progress-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #ffe08a;
+}
+
+.memory-gem-ghost {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
+}
+
+.memory-gem-ghost-core {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: rgba(255, 215, 0, 0.9);
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.8);
+}
+
+.memory-gem-ghost-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  animation: memory-gem-ghost-pulse 1.35s ease-out infinite;
+}
+
+@keyframes memory-gem-ghost-pulse {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
 }
 
 .memory-gem-body {

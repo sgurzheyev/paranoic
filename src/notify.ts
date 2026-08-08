@@ -181,6 +181,13 @@ export function playReceiveSound(): void {
   tone(690, 0.11, { type: 'sine', gain: 0.035, delaySec: 0.08 });
 }
 
+/** Мягкий звук успеха (капсула сохранена). */
+export function playSuccessSound(): void {
+  tone(523, 0.08, { type: 'sine', gain: 0.04 });
+  tone(659, 0.1, { type: 'triangle', gain: 0.035, delaySec: 0.07 });
+  tone(784, 0.12, { type: 'sine', gain: 0.03, delaySec: 0.14 });
+}
+
 /** Зацикленный рингтон входящего звонка. */
 export function startRingtone(): void {
   stopRingtone();

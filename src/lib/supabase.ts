@@ -9,6 +9,11 @@ export function hasSupabaseConfig(): boolean {
   return Boolean(url && anonKey);
 }
 
+export function getSupabaseConfig(): { url: string; anonKey: string } | null {
+  if (!url || !anonKey) return null;
+  return { url, anonKey };
+}
+
 /** Ленивый клиент Supabase Realtime (signaling). */
 export function getSupabase(): SupabaseClient {
   if (!hasSupabaseConfig()) {

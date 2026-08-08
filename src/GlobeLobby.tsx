@@ -206,7 +206,9 @@ export default function GlobeLobby({
   const [zoom, setZoom] = useState(WORLD_ZOOM);
   const [gems, setGems] = useState<MapGem[]>([]);
   const [openedGem, setOpenedGem] = useState<MapGem | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
+  /** Точка long-press / Drop a Gem. */
+  const [dropPoint, setDropPoint] = useState<{ lat: number; lng: number } | null>(null);
+  const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
   openGemRef.current = (gem) => setOpenedGem(gem);
 
@@ -354,6 +356,8 @@ export default function GlobeLobby({
       window.removeEventListener('resize', onWinResize);
       window.removeEventListener('orientationchange', onWinResize);
       map.off('zoom', onZoom);
+      ghostMarkerRef.current?.remove();
+      ghostMarkerRef.current = null;
       for (const marker of markersRef.current.values()) marker.remove();
       markersRef.current.clear();
       map.remove();
@@ -490,6 +494,119 @@ export default function GlobeLobby({
     };
   }, [mapReady]);
 
+  /** Ghost-маркер в точке long-press. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+
+    if (!dropPoint) {
+      ghostMarkerRef.current?.remove();
+      ghostMarkerRef.current = null;
+      return;
+    }
+
+    if (!ghostMarkerRef.current) {
+      const el = document.createElement('div');
+      el.className = 'memory-gem-ghost';
+      el.innerHTML =
+        '<span class="memory-gem-ghost-ring"></span><span class="memory-gem-ghost-core"></span>';
+      ghostMarkerRef.current = new mapboxgl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([dropPoint.lng, dropPoint.lat])
+        .addTo(map);
+    } else {
+      ghostMarkerRef.current.setLngLat([dropPoint.lng, dropPoint.lat]);
+    }
+  }, [dropPoint, mapReady]);
+
+  /** Long-press / contextmenu → Drop a Gem. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || banned) return;
+
+    const LONG_MS = 560;
+    const MOVE_PX = 12;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startX = 0;
+    let startY = 0;
+    let startLngLat: { lng: number; lat: number } | null = null;
+
+    const clearPress = () => {
+      if (timer != null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      startLngLat = null;
+    };
+
+    const openDrop = (lng: number, lat: number) => {
+      if (banned) return;
+      clearPress();
+      setOpenedGem(null);
+      setSelected(null);
+      setDropPoint({ lat, lng });
+    };
+
+    const onContextMenu = (e: mapboxgl.MapMouseEvent) => {
+      e.preventDefault();
+      openDrop(e.lngLat.lng, e.lngLat.lat);
+    };
+
+    const onPointerDown = (e: mapboxgl.MapMouseEvent | mapboxgl.MapTouchEvent) => {
+      const oe = e.originalEvent as MouseEvent | TouchEvent;
+      if ('button' in oe && oe.button !== 0) return;
+      // Не перехватываем клики по UI-кнопкам поверх карты.
+      const target = oe.target as HTMLElement | null;
+      if (target?.closest?.('button, a, .mapboxgl-ctrl, .map-avatar-marker')) return;
+
+      const point =
+        'point' in e
+          ? e.point
+          : { x: 0, y: 0 };
+      startX = point.x;
+      startY = point.y;
+      startLngLat = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+      clearPress();
+      timer = setTimeout(() => {
+        if (!startLngLat) return;
+        openDrop(startLngLat.lng, startLngLat.lat);
+      }, LONG_MS);
+    };
+
+    const onPointerMove = (e: mapboxgl.MapMouseEvent | mapboxgl.MapTouchEvent) => {
+      if (!startLngLat || timer == null) return;
+      const dx = e.point.x - startX;
+      const dy = e.point.y - startY;
+      if (dx * dx + dy * dy > MOVE_PX * MOVE_PX) clearPress();
+    };
+
+    map.on('contextmenu', onContextMenu);
+    map.on('mousedown', onPointerDown);
+    map.on('touchstart', onPointerDown);
+    map.on('mousemove', onPointerMove);
+    map.on('touchmove', onPointerMove);
+    map.on('mouseup', clearPress);
+    map.on('touchend', clearPress);
+    map.on('dragstart', clearPress);
+
+    return () => {
+      clearPress();
+      map.off('contextmenu', onContextMenu);
+      map.off('mousedown', onPointerDown);
+      map.off('touchstart', onPointerDown);
+      map.off('mousemove', onPointerMove);
+      map.off('touchmove', onPointerMove);
+      map.off('mouseup', clearPress);
+      map.off('touchend', clearPress);
+      map.off('dragstart', clearPress);
+    };
+  }, [mapReady, banned]);
+
+  const closeComposer = () => {
+    setDropPoint(null);
+    ghostMarkerRef.current?.remove();
+    ghostMarkerRef.current = null;
+  };
+
   const nudgeZoom = (delta: number) => {
     const map = mapRef.current;
     if (!map) return;
@@ -567,7 +684,7 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Тап — чат · двойной тап — звонок · золотые точки — Memory Gems
+            Долгое нажатие — Drop a Gem · тап по аватарке — чат · золотые точки — капсулы
           </p>
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
             <MapPin size={12} /> {geoHint}
@@ -631,8 +748,11 @@ export default function GlobeLobby({
               type="button"
               className="memory-gem-fab pointer-events-auto"
               disabled={banned || !me}
-              onClick={() => setComposerOpen(true)}
-              title="Оставить капсулу памяти здесь"
+              onClick={() => {
+                if (!me) return;
+                setDropPoint({ lat: me.lat, lng: me.lng });
+              }}
+              title="Оставить капсулу здесь"
             >
               <Gem size={16} />
               Капсула
@@ -669,13 +789,16 @@ export default function GlobeLobby({
         />
       )}
 
-      {composerOpen && me && (
+      {dropPoint && (
         <MemoryGemComposer
           authorId={currentUserId}
-          lat={me.lat}
-          lng={me.lng}
-          onClose={() => setComposerOpen(false)}
-          onCreated={(gem) => setGems((prev) => [gem, ...prev])}
+          lat={dropPoint.lat}
+          lng={dropPoint.lng}
+          onClose={closeComposer}
+          onCreated={(gem) => {
+            setGems((prev) => [gem, ...prev]);
+            closeComposer();
+          }}
         />
       )}
 
