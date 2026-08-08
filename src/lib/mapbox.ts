@@ -39,6 +39,25 @@ export function hasMapboxToken(): boolean {
   return Boolean(getMapboxToken());
 }
 
+/**
+ * Ставит mapboxgl.accessToken из VITE_MAPBOX_TOKEN.
+ * При пустом токене — console.error и false.
+ */
+export function applyMapboxAccessToken(setToken: (token: string) => void): boolean {
+  const token = getMapboxToken();
+  if (!token) {
+    console.error(
+      '[paranoic mapbox] VITE_MAPBOX_TOKEN пуст или не задан. ' +
+        'Добавьте токен в .env (VITE_MAPBOX_TOKEN=pk....) и перезапустите Vite — ' +
+        'переменные окружения читаются только при старте dev-сервера.'
+    );
+    return false;
+  }
+  setToken(token);
+  console.info('[paranoic mapbox] accessToken OK (length=%d)', token.length);
+  return true;
+}
+
 type StyleReadyMap = {
   isStyleLoaded?: () => boolean;
   once?: (type: string, listener: (...args: unknown[]) => void) => unknown;

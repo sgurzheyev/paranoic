@@ -4,9 +4,9 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { ArrowLeft, MapPin, MessageCircle, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { initials } from './identity';
 import {
+  applyMapboxAccessToken,
   applyMapboxStandardNight,
-  getMapboxToken,
-  MAPBOX_STANDARD_STYLE_WITH_CONFIG,
+  MAPBOX_STANDARD_STYLE,
   whenMapStyleReady,
 } from './lib/mapbox';
 import { ANTARCTICA, type PresenceUser } from './presence';
@@ -126,29 +126,46 @@ export default function GlobeLobby({
 
   /** Инициализация Mapbox Standard night. */
   useEffect(() => {
-    const token = getMapboxToken();
-    if (!token) {
+    if (!applyMapboxAccessToken((token) => {
+      mapboxgl.accessToken = token;
+    })) {
       setTokenMissing(true);
       return;
     }
-    if (!containerRef.current) return;
 
-    mapboxgl.accessToken = token;
+    const container = containerRef.current;
+    if (!container) {
+      console.error('[paranoic mapbox] контейнер карты не найден (ref=null)');
+      return;
+    }
+
+    // Явные размеры до создания WebGL — иначе canvas = 0×0 и чёрный экран.
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.minHeight = '100vh';
 
     const center: [number, number] = me
       ? [me.lng, me.lat]
       : [ANTARCTICA.lng, ANTARCTICA.lat];
 
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: MAPBOX_STANDARD_STYLE_WITH_CONFIG as mapboxgl.StyleSpecification,
-      center,
-      zoom: WORLD_ZOOM,
-      pitch: 42,
-      bearing: -12,
-      antialias: true,
-      attributionControl: true,
-    });
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container,
+        // URL надёжнее кастомного imports-JSON при первом рендере.
+        style: MAPBOX_STANDARD_STYLE,
+        center,
+        zoom: WORLD_ZOOM,
+        pitch: 42,
+        bearing: -12,
+        antialias: true,
+        attributionControl: true,
+      });
+    } catch (err) {
+      console.error('[paranoic mapbox] не удалось создать Map', err);
+      setTokenMissing(true);
+      return;
+    }
 
     map.addControl(
       new mapboxgl.NavigationControl({
@@ -159,18 +176,55 @@ export default function GlobeLobby({
       'bottom-right'
     );
 
+    const forceResize = () => {
+      try {
+        map.resize();
+      } catch (err) {
+        console.warn('[paranoic mapbox] resize failed', err);
+      }
+    };
+
     const onZoom = () => setZoom(map.getZoom());
     map.on('zoom', onZoom);
 
+    map.on('error', (e) => {
+      console.error('[paranoic mapbox] map error', e.error ?? e);
+    });
+
+    map.on('load', () => {
+      forceResize();
+      // Повторный resize после layout (flex/absolute могут дать размер с задержкой).
+      requestAnimationFrame(() => {
+        forceResize();
+        requestAnimationFrame(forceResize);
+      });
+      window.setTimeout(forceResize, 120);
+      window.setTimeout(forceResize, 400);
+    });
+
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
       applyMapboxStandardNight(readyMap);
+      forceResize();
       setMapReady(true);
     });
+
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => forceResize())
+        : null;
+    ro?.observe(container);
+
+    const onWinResize = () => forceResize();
+    window.addEventListener('resize', onWinResize);
+    window.addEventListener('orientationchange', onWinResize);
 
     mapRef.current = map;
 
     return () => {
       cancelReady();
+      ro?.disconnect();
+      window.removeEventListener('resize', onWinResize);
+      window.removeEventListener('orientationchange', onWinResize);
       map.off('zoom', onZoom);
       for (const marker of markersRef.current.values()) marker.remove();
       markersRef.current.clear();
@@ -261,7 +315,11 @@ export default function GlobeLobby({
 
   return (
     <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
-      <div ref={containerRef} className="absolute inset-0 family-mapbox" />
+      <div
+        ref={containerRef}
+        className="family-mapbox absolute inset-0 h-full w-full"
+        style={{ width: '100%', height: '100%', minHeight: '100vh' }}
+      />
 
       {tokenMissing && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-6 text-center backdrop-blur-md">

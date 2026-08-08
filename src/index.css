@@ -1475,7 +1475,24 @@ textarea {
 }
 
 
-/* Family Mode — Mapbox avatar markers */
+/* Family Mode — Mapbox container + avatar markers */
+.family-mapbox {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #03050a;
+}
+
+.family-mapbox .mapboxgl-map,
+.family-mapbox .mapboxgl-canvas-container,
+.family-mapbox .mapboxgl-canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
 .family-mapbox .mapboxgl-ctrl-bottom-right {
   margin-bottom: 7.5rem;
   margin-right: 0.75rem;
