@@ -131,6 +131,24 @@ export function getMagicTargetFromUrl(): string | null {
   return u?.trim() || null;
 }
 
+/**
+ * Роутинг магической ссылки:
+ * - guest: ?u=чужой_id → открываем диалог с этим пользователем
+ * - self:  ?u=мой_id → свой профиль / инбокс
+ * - host:  нет ?u → свой инбокс
+ */
+export type MagicRoute =
+  | { kind: 'guest'; peerId: string }
+  | { kind: 'self' }
+  | { kind: 'host' };
+
+export function resolveMagicRoute(currentUserId: string): MagicRoute {
+  const target = getMagicTargetFromUrl();
+  if (!target) return { kind: 'host' };
+  if (target === currentUserId) return { kind: 'self' };
+  return { kind: 'guest', peerId: target };
+}
+
 export function clearMagicParamFromUrl(): void {
   const url = new URL(window.location.href);
   if (!url.searchParams.has('u')) return;

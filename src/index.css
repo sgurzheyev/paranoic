@@ -1218,6 +1218,17 @@ textarea {
   line-height: 1.4;
 }
 
+.guest-peer-card {
+  gap: 10px;
+}
+
+.guest-peer-title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
 .contacts-panel {
   margin-top: 8px;
   display: flex;

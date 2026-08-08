@@ -55,6 +55,7 @@ import {
   getMagicTargetFromUrl,
   getOrCreateIdentity,
   personalInboxRoom,
+  resolveMagicRoute,
   updateIdentity,
   type UserIdentity,
 } from './identity';
@@ -118,7 +119,15 @@ export default function App() {
   const [peerAvatarUrl, setPeerAvatarUrl] = useState('');
   const [peerColor, setPeerColor] = useState('#60a5fa');
   const [sessionEpoch, setSessionEpoch] = useState(0);
-  const [hostingSelf, setHostingSelf] = useState(true);
+  /** Гостевой peer из ?u= — держим явно, чтобы не «съехать» на свой инбокс. */
+  const [guestPeerId, setGuestPeerId] = useState<string | null>(() => {
+    const route = resolveMagicRoute(getOrCreateIdentity().id);
+    return route.kind === 'guest' ? route.peerId : null;
+  });
+  const [hostingSelf, setHostingSelf] = useState(() => {
+    const route = resolveMagicRoute(getOrCreateIdentity().id);
+    return route.kind !== 'guest';
+  });
   const [incomingConnection, setIncomingConnection] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
@@ -132,6 +141,14 @@ export default function App() {
   const pendingFilesRef = useRef<Map<string, Blob>>(new Map());
   const mediaUrlsRef = useRef<Set<string>>(new Set());
   const presenceRef = useRef<WorldPresence | null>(null);
+  const guestPeerIdRef = useRef<string | null>(guestPeerId);
+  const ensureP2PRef = useRef<() => P2PConnection>(() => {
+    throw new Error('P2P not ready');
+  });
+
+  useEffect(() => {
+    guestPeerIdRef.current = guestPeerId;
+  }, [guestPeerId]);
 
   const onlineIds = useMemo(() => new Set(presenceUsers.map((u) => u.userId)), [presenceUsers]);
 
@@ -334,6 +351,10 @@ export default function App() {
           if (status === 'connected') {
             setError('');
             setIncomingConnection(false);
+            // Гость по магической ссылке — сразу в диалог с этим peer.
+            if (guestPeerIdRef.current) {
+              setScreen('chat');
+            }
           }
           if (status === 'waiting-answer') {
             setIncomingConnection(false);
@@ -440,6 +461,8 @@ export default function App() {
     return p2pRef.current;
   }, [addMessage, attachLocalVideo, peerLabel, setActivePeer]);
 
+  ensureP2PRef.current = ensureP2P;
+
   /** Вход в персональный инбокс / magic link / legacy room. */
   useEffect(() => {
     if (appMode !== 'paranoic') return;
@@ -457,30 +480,51 @@ export default function App() {
         }
 
         const me = identityRef.current;
-        const magicTarget = getMagicTargetFromUrl();
+        const urlRoute = resolveMagicRoute(me.id);
         const legacyRoom = getRoomIdFromUrl();
+
+        // Явный гость из state (после connectToUser) или из ?u= в URL.
+        const guestId =
+          (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
+          (guestPeerIdRef.current && guestPeerIdRef.current !== me.id
+            ? guestPeerIdRef.current
+            : null);
 
         let room: string;
         let isHost: boolean;
         let provisionalPeer: string | null = null;
 
-        if (magicTarget && magicTarget !== me.id) {
-          room = personalInboxRoom(magicTarget);
+        if (guestId) {
+          // Гость: чат/звонок с конкретным ?u=ID_ДРУГА — никогда не подменяем на свой id.
+          room = personalInboxRoom(guestId);
           isHost = false;
-          provisionalPeer = magicTarget;
+          provisionalPeer = guestId;
+          setGuestPeerId(guestId);
+          guestPeerIdRef.current = guestId;
           setHostingSelf(false);
-          setMagicUserInUrl(magicTarget);
+          setMagicUserInUrl(guestId);
         } else if (legacyRoom) {
           const resolved = resolveRoom();
           room = resolved.roomId;
           isHost = resolved.isHost;
-          setHostingSelf(isHost && !legacyRoom);
-          if (magicTarget === me.id) clearMagicParamFromUrl();
+          setHostingSelf(true);
+          setGuestPeerId(null);
+          guestPeerIdRef.current = null;
+          if (urlRoute.kind === 'self') {
+            // Свой ?u= — остаёмся на своём профиле, убираем только если мешает room.
+          }
         } else {
+          // Свой инбокс / свой профиль (?u=me или без ?u).
           room = personalInboxRoom(me.id);
           isHost = true;
           setHostingSelf(true);
-          clearMagicParamFromUrl();
+          setGuestPeerId(null);
+          guestPeerIdRef.current = null;
+          if (urlRoute.kind === 'self') {
+            setMagicUserInUrl(me.id);
+          } else {
+            clearMagicParamFromUrl();
+          }
           clearRoomParamFromUrl();
         }
 
@@ -490,7 +534,11 @@ export default function App() {
 
         if (provisionalPeer) {
           const known = contacts.find((c) => c.id === provisionalPeer);
-          await setActivePeer(provisionalPeer, known?.name || 'Близкий');
+          const presence = presenceUsers.find((u) => u.userId === provisionalPeer);
+          setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
+          setPeerColor(presence?.color || known?.color || '#60a5fa');
+          setPeerLabel(known?.name || presence?.name || 'Близкий');
+          await setActivePeer(provisionalPeer, known?.name || presence?.name || 'Близкий');
         } else if (isHost) {
           await setActivePeer(null);
         }
@@ -502,7 +550,7 @@ export default function App() {
         const exported = await exportKey(key);
         setKeyString(exported);
 
-        const p2p = ensureP2P();
+        const p2p = ensureP2PRef.current();
         await p2p.joinRoom(room, { isHost });
       } catch (e) {
         if (!cancelled) {
@@ -521,9 +569,9 @@ export default function App() {
       p2pRef.current = null;
       setSignalingStatus('');
     };
-    // contacts intentionally omitted — provisional peer label is best-effort
+    // ensureP2P через ref — иначе смена peerLabel рвёт гостевую сессию и «сбрасывает» роутинг
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appMode, ensureP2P, sessionEpoch, setActivePeer]);
+  }, [appMode, sessionEpoch, guestPeerId, setActivePeer]);
 
   useEffect(() => {
     if (screen === 'call' && p2pRef.current) {
@@ -543,6 +591,8 @@ export default function App() {
     setAppMode('paranoic');
     setScreen('home');
     setHostingSelf(false);
+    setGuestPeerId(targetUserId);
+    guestPeerIdRef.current = targetUserId;
     setMagicUserInUrl(targetUserId);
     const known = contacts.find((c) => c.id === targetUserId);
     const presence = presenceUsers.find((u) => u.userId === targetUserId);
@@ -557,6 +607,8 @@ export default function App() {
   const returnToOwnInbox = () => {
     clearMagicParamFromUrl();
     clearRoomParamFromUrl();
+    setGuestPeerId(null);
+    guestPeerIdRef.current = null;
     setHostingSelf(true);
     void setActivePeer(null);
     p2pRef.current?.close();
@@ -859,64 +911,124 @@ export default function App() {
               </button>
             </div>
 
-            <div className="room-card magic-card">
-              <Link2 size={28} className="room-card-icon" />
-              <p className="room-id-label">Ваша магическая ссылка</p>
-              <p className="mono-box magic-url">{magicLink}</p>
-              <button
-                type="button"
-                className="mega-btn primary compact"
-                onClick={() => void copyMagicLink()}
-              >
-                {copied ? <Check size={28} /> : <Copy size={28} />}
-                {copied ? 'Скопировано' : 'Скопировать ссылку'}
-              </button>
-              <p className="hint">
-                Постоянная ссылка: близкие открывают её в любой момент — без новой комнаты на каждый
-                звонок.
-              </p>
-            </div>
-
-            {!connected ? (
-              <p className="lead">
-                {joining || signalingStatus
-                  ? signalingStatus ||
-                    (hostingSelf
-                      ? 'Ждём входящий звонок по вашей ссылке…'
-                      : 'Подключаемся к близкому…')
-                  : hostingSelf
-                    ? 'Ссылка активна. Или выберите контакт ниже.'
-                    : 'Звоним по магической ссылке…'}
-              </p>
+            {guestPeerId ? (
+              <div className="room-card guest-peer-card">
+                <Avatar
+                  name={peerLabel}
+                  color={peerColor}
+                  avatarUrl={peerAvatarUrl}
+                  size="lg"
+                  online={onlineIds.has(guestPeerId) ? true : 'off'}
+                />
+                <p className="room-id-label">Магическая ссылка</p>
+                <h2 className="guest-peer-title">{peerLabel}</h2>
+                <p className="mono-id">ID · {guestPeerId}</p>
+                {!connected ? (
+                  <>
+                    <p className="lead">
+                      {joining || signalingStatus
+                        ? signalingStatus || 'Подключаемся к этому пользователю…'
+                        : 'Ожидаем, пока собеседник примет вызов…'}
+                    </p>
+                    <button type="button" className="text-link" onClick={returnToOwnInbox}>
+                      Вернуться к своему профилю
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="lead">
+                      На связи: <strong>{peerLabel}</strong>
+                    </p>
+                    <div className="mega-grid">
+                      <button type="button" className="mega-btn call" onClick={() => void startCall()}>
+                        <Phone size={36} />
+                        Позвонить
+                      </button>
+                      <button
+                        type="button"
+                        className="mega-btn chat"
+                        onClick={() => setScreen('chat')}
+                      >
+                        <MessageCircle size={36} />
+                        Написать
+                      </button>
+                      <button
+                        type="button"
+                        className="mega-btn media"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <ImagePlus size={36} />
+                        Отправить фото / видео
+                      </button>
+                    </div>
+                    <button type="button" className="text-link danger" onClick={disconnect}>
+                      <Unplug size={16} /> Разорвать связь
+                    </button>
+                  </>
+                )}
+              </div>
             ) : (
               <>
-                <p className="lead">
-                  На связи: <strong>{peerLabel}</strong>
-                </p>
-                <div className="mega-grid">
-                  <button type="button" className="mega-btn call" onClick={() => void startCall()}>
-                    <Phone size={36} />
-                    Позвонить
-                  </button>
-                  <button type="button" className="mega-btn chat" onClick={() => setScreen('chat')}>
-                    <MessageCircle size={36} />
-                    Написать
-                  </button>
+                <div className="room-card magic-card">
+                  <Link2 size={28} className="room-card-icon" />
+                  <p className="room-id-label">Ваша магическая ссылка</p>
+                  <p className="mono-box magic-url">{magicLink}</p>
                   <button
                     type="button"
-                    className="mega-btn media"
-                    onClick={() => fileInputRef.current?.click()}
+                    className="mega-btn primary compact"
+                    onClick={() => void copyMagicLink()}
                   >
-                    <ImagePlus size={36} />
-                    Отправить фото / видео
+                    {copied ? <Check size={28} /> : <Copy size={28} />}
+                    {copied ? 'Скопировано' : 'Скопировать ссылку'}
                   </button>
+                  <p className="hint">
+                    Постоянная ссылка: близкие открывают её в любой момент — без новой комнаты на
+                    каждый звонок.
+                  </p>
                 </div>
-                <button type="button" className="text-link danger" onClick={disconnect}>
-                  <Unplug size={16} /> Разорвать связь
-                </button>
+
+                {!connected ? (
+                  <p className="lead">
+                    {joining || signalingStatus
+                      ? signalingStatus || 'Ждём входящий звонок по вашей ссылке…'
+                      : 'Ссылка активна. Или выберите контакт ниже.'}
+                  </p>
+                ) : (
+                  <>
+                    <p className="lead">
+                      На связи: <strong>{peerLabel}</strong>
+                    </p>
+                    <div className="mega-grid">
+                      <button type="button" className="mega-btn call" onClick={() => void startCall()}>
+                        <Phone size={36} />
+                        Позвонить
+                      </button>
+                      <button
+                        type="button"
+                        className="mega-btn chat"
+                        onClick={() => setScreen('chat')}
+                      >
+                        <MessageCircle size={36} />
+                        Написать
+                      </button>
+                      <button
+                        type="button"
+                        className="mega-btn media"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <ImagePlus size={36} />
+                        Отправить фото / видео
+                      </button>
+                    </div>
+                    <button type="button" className="text-link danger" onClick={disconnect}>
+                      <Unplug size={16} /> Разорвать связь
+                    </button>
+                  </>
+                )}
               </>
             )}
 
+            {!guestPeerId && (
             <div className="contacts-panel">
               <div className="contacts-head">
                 <h2>Контакты</h2>
@@ -963,6 +1075,7 @@ export default function App() {
                 </ul>
               )}
             </div>
+            )}
 
             {getRoomIdFromUrl() && (
               <p className="hint muted-sep">
@@ -970,7 +1083,9 @@ export default function App() {
               </p>
             )}
             {keyString && (
-              <p className="hint muted-sep">E2EE активен · инбокс {hostingSelf ? 'свой' : 'гостевой'}</p>
+              <p className="hint muted-sep">
+                E2EE активен · {guestPeerId ? `гость → ${guestPeerId}` : hostingSelf ? 'свой инбокс' : 'гостевой'}
+              </p>
             )}
           </section>
         )}
