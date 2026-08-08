@@ -1,5 +1,10 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { normalizeUsername, type UserIdentity } from './identity';
+import {
+  getOrCreateIdentity,
+  isValidUuid,
+  normalizeUsername,
+  type UserIdentity,
+} from './identity';
 
 export const AVATARS_BUCKET = 'avatars';
 export const PROFILES_TABLE = 'profiles';
@@ -172,16 +177,30 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
 /**
  * Гарантирует строку в `profiles` перед INSERT в map_gems (FK author_id).
  * В upsert — только поля схемы БД (без локального UI: name/color/theme_fon).
+ * `id` обязан быть UUID v4 (колонка uuid в Supabase).
  */
 export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
-  if (!identity.id?.trim()) throw new Error('Пустой ID пользователя');
+
+  // Короткие legacy-id не отправляем — берём мигрированную identity.
+  let id = identity.id?.trim() || '';
+  let username = identity.username?.trim() || null;
+  let avatarUrl = identity.avatarUrl || null;
+  if (!isValidUuid(id)) {
+    const fixed = getOrCreateIdentity();
+    id = fixed.id;
+    username = fixed.username?.trim() || null;
+    avatarUrl = fixed.avatarUrl || null;
+  }
+  if (!isValidUuid(id)) {
+    throw new Error('ID пользователя должен быть UUID. Обновите страницу.');
+  }
 
   const sb = getSupabase();
   const row = {
-    id: identity.id.trim(),
-    username: identity.username?.trim() || null,
-    avatar_url: identity.avatarUrl || null,
+    id,
+    username,
+    avatar_url: avatarUrl,
   };
   const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
   if (error) {

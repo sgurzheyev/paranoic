@@ -89,11 +89,25 @@ export const THEME_FON_PRESETS: { id: string; label: string; value: string }[] =
 
 export const DEFAULT_THEME_FON = THEME_FON_PRESETS[0]!.value;
 
-function randomId(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+/** UUID v4 (с дефисами) — формат, который принимает Postgres `uuid`. */
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isValidUuid(id: string): boolean {
+  return UUID_V4_RE.test(id.trim());
+}
+
+/** Полноценный UUID v4 для profiles.id / author_id (не короткие срезы). */
+export function createUserId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
   }
-  return Math.random().toString(36).slice(2, 14);
+  // Fallback без crypto.randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const n = (Math.random() * 16) | 0;
+    const v = ch === 'x' ? n : (n & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 function randomColor(): string {
@@ -103,8 +117,9 @@ function randomColor(): string {
 function normalizeIdentity(raw: Partial<UserIdentity> & { id: string; name: string }): UserIdentity {
   const usernameRaw = typeof raw.username === 'string' ? raw.username : '';
   const usernameCheck = validateUsername(usernameRaw);
+  const id = isValidUuid(raw.id) ? raw.id.trim() : createUserId();
   return {
-    id: raw.id,
+    id,
     name: raw.name,
     username: usernameCheck.ok ? usernameCheck.value : '',
     color: raw.color || randomColor(),
@@ -120,6 +135,7 @@ export function getOrCreateIdentity(): UserIdentity {
       const parsed = JSON.parse(raw) as Partial<UserIdentity>;
       if (parsed?.id && parsed?.name) {
         const normalized = normalizeIdentity(parsed as UserIdentity);
+        // Миграция: старые короткие id (напр. "b0ffd8eb4633") → UUID v4.
         localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
         return normalized;
       }
@@ -129,7 +145,7 @@ export function getOrCreateIdentity(): UserIdentity {
   }
 
   const identity: UserIdentity = {
-    id: randomId(),
+    id: createUserId(),
     name: 'Я',
     username: '',
     color: randomColor(),

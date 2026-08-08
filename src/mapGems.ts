@@ -1,5 +1,5 @@
 import { getSupabase, getSupabaseConfig, hasSupabaseConfig } from './lib/supabase';
-import { getOrCreateIdentity } from './identity';
+import { getOrCreateIdentity, isValidUuid } from './identity';
 import { ensureProfileRow } from './profile';
 
 export const MAP_GEMS_TABLE = 'map_gems';
@@ -43,14 +43,13 @@ function mapRow(row: Record<string, unknown>): MapGem {
   };
 }
 
-/** ID автора капсулы = локальная личность (profiles.id). */
+/** ID автора капсулы = локальная личность (profiles.id, UUID v4). */
 export function resolveGemAuthorId(fallbackId?: string): string {
   const identity = getOrCreateIdentity();
-  const authorId = (fallbackId?.trim() || identity.id || '').trim();
-  if (!authorId) {
-    throw new Error('Нет ID пользователя. Откройте профиль и сохранитесь.');
-  }
-  return authorId;
+  const fallback = fallbackId?.trim() || '';
+  if (fallback && isValidUuid(fallback)) return fallback;
+  if (isValidUuid(identity.id)) return identity.id;
+  throw new Error('Нет валидного UUID пользователя. Обновите страницу.');
 }
 
 /**
