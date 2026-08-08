@@ -14,6 +14,11 @@ export type P2PStatus =
 
 export type CallState = 'idle' | 'ringing' | 'calling' | 'in-call' | 'ending';
 
+/** Оценка канала по RTP-статистике (packet loss / RTT). */
+export type NetworkQuality = 'good' | 'fair' | 'poor' | 'critical';
+
+type VideoAdaptLevel = 'high' | 'medium' | 'low' | 'audio-only';
+
 export type MediaFileMeta = {
   id: string;
   name: string;
@@ -46,6 +51,10 @@ export type P2PHandlers = {
   onRemoteStream?: (stream: MediaStream | null) => void;
   onLocalStream?: (stream: MediaStream | null) => void;
   onCallState?: (state: CallState) => void;
+  /** Качество сети во время звонка. */
+  onNetworkQuality?: (quality: NetworkQuality) => void;
+  /** Демонстрация экрана вкл/выкл. */
+  onScreenShare?: (active: boolean) => void;
   /** Входящий медиазвонок — ждём Accept. */
   onIncomingCall?: () => void;
   /** Входящее P2P-подключение по магической ссылке — ждём Accept. */
@@ -119,14 +128,40 @@ const MAX_BUFFERED_AMOUNT = 256 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const FILE_CHUNK_MARKER = 0x01;
 const ICE_CONNECT_TIMEOUT_MS = 25_000;
-const ICE_SOFT_RESTART_DELAY_MS = 1_600;
+/** Быстрее мягкий ICE при кратком обрыве / смене IP. */
+const ICE_SOFT_RESTART_DELAY_MS = 700;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
-const MEDIA_WATCH_MS = 3_500;
+const MEDIA_WATCH_MS = 2_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
+const NETWORK_WATCH_MS = 2_000;
 const BROADCAST_RETRIES = 4;
 const JOIN_RETRY_MS = 1_200;
 const CALL_INVITE_RETRY_MS = 1_400;
+
+const VIDEO_LEVEL_CONSTRAINTS: Record<
+  Exclude<VideoAdaptLevel, 'audio-only'>,
+  MediaTrackConstraints
+> = {
+  high: {
+    facingMode: 'user',
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 24, max: 30 },
+  },
+  medium: {
+    facingMode: 'user',
+    width: { ideal: 480 },
+    height: { ideal: 360 },
+    frameRate: { ideal: 18, max: 24 },
+  },
+  low: {
+    facingMode: 'user',
+    width: { ideal: 320 },
+    height: { ideal: 240 },
+    frameRate: { ideal: 12, max: 15 },
+  },
+};
 
 type ControlPacket =
   | { t: 'call-invite'; msgId?: string }
@@ -252,12 +287,7 @@ const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
     echoCancellation: true,
     noiseSuppression: true,
   },
-  video: {
-    facingMode: 'user',
-    width: { ideal: 640 },
-    height: { ideal: 480 },
-    frameRate: { ideal: 24, max: 30 },
-  },
+  video: VIDEO_LEVEL_CONSTRAINTS.high,
 };
 
 export class P2PConnection {
@@ -302,6 +332,19 @@ export class P2PConnection {
   private callAcceptedPendingOffer = false;
   private handledCtrlIds = new Set<string>();
 
+  private networkWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private networkQuality: NetworkQuality = 'good';
+  private videoAdaptLevel: VideoAdaptLevel = 'high';
+  private adaptCooldownUntil = 0;
+  private goodNetworkStreak = 0;
+  private lastOutboundPacketsLost = 0;
+  private lastOutboundPacketsSent = 0;
+  private iceRestartAttempts = 0;
+  private screenStream: MediaStream | null = null;
+  private cameraVideoTrack: MediaStreamTrack | null = null;
+  private sharingScreen = false;
+  private netInfoHandler: (() => void) | null = null;
+
   constructor(handlers: P2PHandlers = {}) {
     this.handlers = handlers;
   }
@@ -334,6 +377,14 @@ export class P2PConnection {
 
   getLocalStream(): MediaStream | null {
     return this.localStream;
+  }
+
+  get isSharingScreen(): boolean {
+    return this.sharingScreen;
+  }
+
+  get currentNetworkQuality(): NetworkQuality {
+    return this.networkQuality;
   }
 
   private setSignalingStatus(status: SignalingDebugStatus): void {
@@ -559,6 +610,8 @@ export class P2PConnection {
     this.pendingCallOffer = null;
     this.setCallState('ending');
     this.stopMediaWatchdog();
+    this.stopNetworkWatch();
+    await this.stopScreenShareInternal(false);
     try {
       this.sendCallControl({ t: 'call-hangup', msgId: crypto.randomUUID() });
     } catch {
@@ -567,17 +620,19 @@ export class P2PConnection {
     this.stopLocalMedia();
     this.handlers.onLocalStream?.(null);
     this.clearRemoteStream();
+    this.resetAdaptState();
     this.setCallState('idle');
   }
 
   async refreshLocalTracks(): Promise<MediaStream | null> {
     if (!this.pc || this.callState !== 'in-call') return this.localStream;
-    if (this.refreshingMedia) return this.localStream;
+    if (this.refreshingMedia || this.sharingScreen) return this.localStream;
 
     this.refreshingMedia = true;
     try {
       const stream = await this.acquireLocalMedia();
       await this.attachLocalTracks(stream);
+      this.handlers.onLocalStream?.(stream);
       this.handlers.onRemoteStream?.(this.remoteStream);
       return stream;
     } catch (e) {
@@ -586,6 +641,123 @@ export class P2PConnection {
     } finally {
       this.refreshingMedia = false;
     }
+  }
+
+  /** Демонстрация экрана через replaceTrack (без разрыва PC). */
+  async startScreenShare(): Promise<void> {
+    if (!this.pc || this.callState !== 'in-call') {
+      throw new Error('Сначала начните звонок');
+    }
+    if (this.sharingScreen) return;
+
+    const display = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 15, max: 30 },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    });
+    const screenTrack = display.getVideoTracks()[0];
+    if (!screenTrack) {
+      display.getTracks().forEach((t) => t.stop());
+      throw new Error('Не удалось получить поток экрана');
+    }
+
+    const videoSender =
+      this.pc.getSenders().find((s) => s.track?.kind === 'video') ??
+      this.pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'video')?.sender;
+
+    if (!videoSender) {
+      display.getTracks().forEach((t) => t.stop());
+      throw new Error('Нет видео-отправителя для replaceTrack');
+    }
+
+    // Сохраняем камеру (не стопаем — вернёмся через replaceTrack).
+    const currentCam = this.localStream?.getVideoTracks()[0] ?? null;
+    if (currentCam && currentCam !== screenTrack) {
+      this.cameraVideoTrack = currentCam;
+      currentCam.enabled = false;
+    }
+
+    await videoSender.replaceTrack(screenTrack);
+    await this.applySenderDegradation(videoSender, 'balanced');
+
+    this.screenStream = display;
+    this.sharingScreen = true;
+
+    const audioTracks = this.localStream?.getAudioTracks() ?? [];
+    const preview = new MediaStream([...audioTracks, screenTrack]);
+    this.handlers.onLocalStream?.(preview);
+    this.handlers.onScreenShare?.(true);
+
+    screenTrack.addEventListener('ended', () => {
+      void this.stopScreenShare();
+    });
+  }
+
+  async stopScreenShare(): Promise<void> {
+    await this.stopScreenShareInternal(true);
+  }
+
+  async toggleScreenShare(): Promise<boolean> {
+    if (this.sharingScreen) {
+      await this.stopScreenShare();
+      return false;
+    }
+    await this.startScreenShare();
+    return true;
+  }
+
+  private async stopScreenShareInternal(restoreCamera: boolean): Promise<void> {
+    const wasSharing = this.sharingScreen;
+    this.screenStream?.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        /* */
+      }
+    });
+    this.screenStream = null;
+    this.sharingScreen = false;
+    if (wasSharing) this.handlers.onScreenShare?.(false);
+
+    if (!restoreCamera || !this.pc || this.callState !== 'in-call') {
+      this.cameraVideoTrack = null;
+      return;
+    }
+
+    const videoSender =
+      this.pc.getSenders().find((s) => s.track?.kind === 'video') ??
+      this.pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'video')?.sender;
+
+    let cam = this.cameraVideoTrack;
+    if (!cam || cam.readyState === 'ended') {
+      try {
+        const stream = await this.acquireLocalMedia(this.videoAdaptLevel === 'audio-only' ? 'low' : this.videoAdaptLevel);
+        cam = stream.getVideoTracks()[0] ?? null;
+        this.cameraVideoTrack = cam;
+      } catch (e) {
+        this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось вернуть камеру'));
+        return;
+      }
+    } else {
+      cam.enabled = true;
+      if (this.localStream && !this.localStream.getVideoTracks().includes(cam)) {
+        this.localStream.getVideoTracks().forEach((t) => this.localStream?.removeTrack(t));
+        this.localStream.addTrack(cam);
+      }
+    }
+
+    if (videoSender && cam) {
+      await videoSender.replaceTrack(this.videoAdaptLevel === 'audio-only' ? null : cam);
+      await this.applySenderDegradation(videoSender, 'balanced');
+    }
+
+    if (this.localStream) {
+      this.handlers.onLocalStream?.(this.localStream);
+    }
+    this.cameraVideoTrack = cam;
   }
 
   async sendFile(
@@ -628,8 +800,10 @@ export class P2PConnection {
   close(): void {
     this.detachSignal();
     this.stopMediaWatchdog();
+    this.stopNetworkWatch();
     this.stopLocalMedia();
     this.clearRemoteStream();
+    this.resetAdaptState();
     this.reset();
     this.setCallState('idle');
     this.setStatus('disconnected');
@@ -911,15 +1085,23 @@ export class P2PConnection {
     }
   }
 
-  private async acquireLocalMedia(): Promise<MediaStream> {
+  private async acquireLocalMedia(
+    level: Exclude<VideoAdaptLevel, 'audio-only'> = 'high'
+  ): Promise<MediaStream> {
     const prev = this.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: MEDIA_CONSTRAINTS.audio,
+      video: VIDEO_LEVEL_CONSTRAINTS[level],
+    });
     this.localStream = stream;
-    prev?.getTracks().forEach((t) => t.stop());
+    this.cameraVideoTrack = stream.getVideoTracks()[0] ?? null;
+    prev?.getTracks().forEach((t) => {
+      if (t !== this.cameraVideoTrack) t.stop();
+    });
 
     for (const track of stream.getTracks()) {
       track.addEventListener('ended', () => {
-        if (this.callState === 'in-call') {
+        if (this.callState === 'in-call' && !this.sharingScreen) {
           void this.refreshLocalTracks();
         }
       });
@@ -938,12 +1120,40 @@ export class P2PConnection {
 
       if (sender) await sender.replaceTrack(track);
       else this.pc.addTrack(track, stream);
+
+      if (track.kind === 'video') {
+        const videoSender =
+          this.pc.getSenders().find((s) => s.track?.kind === 'video') ?? sender;
+        if (videoSender) await this.applySenderDegradation(videoSender, 'balanced');
+      }
     }
 
     for (const t of this.pc.getTransceivers()) {
       if (t.receiver.track.kind === 'audio' || t.receiver.track.kind === 'video') {
         t.direction = 'sendrecv';
       }
+    }
+  }
+
+  private async applySenderDegradation(
+    sender: RTCRtpSender,
+    preference: 'balanced' | 'maintain-framerate' | 'maintain-resolution'
+  ): Promise<void> {
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+        preference;
+      // При слабой сети сильнее режем maxBitrate на нижних уровнях.
+      const enc = params.encodings[0]!;
+      if (this.videoAdaptLevel === 'medium') enc.maxBitrate = 450_000;
+      else if (this.videoAdaptLevel === 'low') enc.maxBitrate = 180_000;
+      else if (this.videoAdaptLevel === 'high') enc.maxBitrate = 900_000;
+      await sender.setParameters(params);
+    } catch (e) {
+      console.warn('[paranoic] setParameters/degradationPreference failed', e);
     }
   }
 
@@ -989,13 +1199,14 @@ export class P2PConnection {
     });
     this.setCallState('in-call');
     this.startMediaWatchdog();
+    this.startNetworkWatch();
   }
 
   private async beginCallAsOffererAfterAccept(): Promise<void> {
     if (!this.pc || this.callState !== 'calling') return;
     this.clearCallInviteRetry();
     try {
-      const stream = await this.acquireLocalMedia();
+      const stream = await this.acquireLocalMedia('high');
       await this.attachLocalTracks(stream);
       this.handlers.onLocalStream?.(stream);
       await this.renegotiateAsOfferer();
@@ -1086,6 +1297,7 @@ export class P2PConnection {
       await this.pc.setRemoteDescription(packet.sdp);
       this.setCallState('in-call');
       this.startMediaWatchdog();
+      this.startNetworkWatch();
       return;
     }
 
@@ -1094,9 +1306,12 @@ export class P2PConnection {
       this.pendingCallOffer = null;
       this.callAcceptedPendingOffer = false;
       this.stopMediaWatchdog();
+      this.stopNetworkWatch();
+      void this.stopScreenShareInternal(false);
       this.stopLocalMedia();
       this.handlers.onLocalStream?.(null);
       this.clearRemoteStream();
+      this.resetAdaptState();
       this.setCallState('idle');
       this.handlers.onCallDeclined?.();
       return;
@@ -1136,9 +1351,12 @@ export class P2PConnection {
       this.pendingCallOffer = null;
       this.callAcceptedPendingOffer = false;
       this.stopMediaWatchdog();
+      this.stopNetworkWatch();
+      void this.stopScreenShareInternal(false);
       this.stopLocalMedia();
       this.handlers.onLocalStream?.(null);
       this.clearRemoteStream();
+      this.resetAdaptState();
       this.setCallState('idle');
       return;
     }
@@ -1184,9 +1402,10 @@ export class P2PConnection {
     this.cachedIceServers = iceServers;
     const pc = new RTCPeerConnection({
       iceServers,
-      iceCandidatePoolSize: 8,
+      iceCandidatePoolSize: 16,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
+      iceTransportPolicy: 'all',
     });
 
     // Trickle ICE — кандидаты сразу в Supabase, без ожидания complete
@@ -1196,6 +1415,10 @@ export class P2PConnection {
         peerId: this.peerId,
         candidate: event.candidate.toJSON(),
       });
+    };
+
+    pc.onicecandidateerror = (event) => {
+      console.warn('[paranoic ICE] candidate error', event.errorCode, event.errorText);
     };
 
     pc.ontrack = (event) => {
@@ -1230,11 +1453,12 @@ export class P2PConnection {
       switch (pc.connectionState) {
         case 'connected':
           this.iceRestarting = false;
+          this.iceRestartAttempts = 0;
           this.clearIceCheckTimeout();
           this.clearIceSoftRestartTimer();
           break;
         case 'disconnected':
-          // Краткий просад — не роняем UI звонка, мягкий ICE через debounce.
+          // Краткий просад / смена IP — агрессивный мягкий ICE.
           this.scheduleIceSoftRestart();
           break;
         case 'failed':
@@ -1243,6 +1467,9 @@ export class P2PConnection {
               this.clearIceCheckTimeout();
               this.setStatus('failed');
               this.handlers.onError?.(new Error('Не удалось связаться'));
+            } else if (!ok && (this.callState === 'in-call' || this.callState === 'calling')) {
+              // Повторная попытка через короткую паузу.
+              window.setTimeout(() => void this.tryIceRestart(), 900);
             }
           });
           break;
@@ -1261,6 +1488,7 @@ export class P2PConnection {
         this.clearIceCheckTimeout();
         this.clearIceSoftRestartTimer();
         this.iceRestarting = false;
+        this.iceRestartAttempts = 0;
       } else if (state === 'disconnected') {
         this.scheduleIceSoftRestart();
       } else if (state === 'failed') {
@@ -1323,8 +1551,10 @@ export class P2PConnection {
     if (!this.pc || this.iceRestarting) return false;
     if (this.pc.signalingState === 'closed') return false;
     if (!this.isReady && this.status !== 'connected') return false;
+    if (this.iceRestartAttempts >= 5) return false;
 
     this.iceRestarting = true;
+    this.iceRestartAttempts += 1;
     const preservedCall = this.callState;
     try {
       if (typeof this.pc.restartIce === 'function') {
@@ -1359,6 +1589,8 @@ export class P2PConnection {
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
     this.stopMediaWatchdog();
+    this.stopNetworkWatch();
+    void this.stopScreenShareInternal(false);
     this.incomingFiles.clear();
     this.makingOffer = false;
     this.ignoreOffer = false;
@@ -1373,6 +1605,7 @@ export class P2PConnection {
     this.callAcceptedPendingOffer = false;
     this.remotePeerId = null;
     this.handledCtrlIds.clear();
+    this.resetAdaptState();
     this.setCallState('idle');
     this.handlers.onLocalStream?.(null);
 
@@ -1430,13 +1663,203 @@ export class P2PConnection {
     }
   }
 
+  private startNetworkWatch(): void {
+    this.stopNetworkWatch();
+    this.networkWatchTimer = setInterval(() => {
+      void this.checkNetworkQuality();
+    }, NETWORK_WATCH_MS);
+
+    // Network Information API (если есть) — доп. сигнал о слабом канале.
+    const conn = (navigator as Navigator & { connection?: EventTarget }).connection;
+    if (conn && 'addEventListener' in conn) {
+      this.netInfoHandler = () => {
+        const c = conn as { downlink?: number; effectiveType?: string; saveData?: boolean };
+        if (c.saveData || c.effectiveType === '2g' || (c.downlink != null && c.downlink < 0.5)) {
+          void this.applyVideoAdaptLevel('low');
+          this.setNetworkQuality('poor');
+        }
+      };
+      conn.addEventListener('change', this.netInfoHandler);
+    }
+  }
+
+  private stopNetworkWatch(): void {
+    if (this.networkWatchTimer) {
+      clearInterval(this.networkWatchTimer);
+      this.networkWatchTimer = null;
+    }
+    const conn = (navigator as Navigator & { connection?: EventTarget }).connection;
+    if (conn && this.netInfoHandler) {
+      conn.removeEventListener('change', this.netInfoHandler);
+      this.netInfoHandler = null;
+    }
+  }
+
+  private resetAdaptState(): void {
+    this.networkQuality = 'good';
+    this.videoAdaptLevel = 'high';
+    this.adaptCooldownUntil = 0;
+    this.goodNetworkStreak = 0;
+    this.lastOutboundPacketsLost = 0;
+    this.lastOutboundPacketsSent = 0;
+    this.iceRestartAttempts = 0;
+  }
+
+  private setNetworkQuality(quality: NetworkQuality): void {
+    if (this.networkQuality === quality) return;
+    this.networkQuality = quality;
+    this.handlers.onNetworkQuality?.(quality);
+  }
+
+  private async checkNetworkQuality(): Promise<void> {
+    if (!this.pc || this.callState !== 'in-call' || this.sharingScreen) return;
+
+    try {
+      const stats = await this.pc.getStats();
+      let rtt = 0;
+      let packetsLost = 0;
+      let packetsSent = 0;
+      let sawOutbound = false;
+
+      stats.forEach((report) => {
+        if (report.type === 'candidate-pair') {
+          const pair = report as RTCIceCandidatePairStats;
+          if (pair.state === 'succeeded' && typeof pair.currentRoundTripTime === 'number') {
+            rtt = Math.max(rtt, pair.currentRoundTripTime);
+          }
+        }
+        if (report.type === 'outbound-rtp') {
+          const out = report as RTCOutboundRtpStreamStats & { packetsLost?: number };
+          if (out.kind === 'video' || (out as { mediaType?: string }).mediaType === 'video') {
+            sawOutbound = true;
+            packetsLost = Math.max(packetsLost, out.packetsLost ?? 0);
+            packetsSent = Math.max(packetsSent, out.packetsSent ?? 0);
+          }
+        }
+        if (report.type === 'remote-inbound-rtp') {
+          const remote = report as { kind?: string; packetsLost?: number; roundTripTime?: number };
+          if (remote.kind === 'video') {
+            packetsLost = Math.max(packetsLost, remote.packetsLost ?? 0);
+            if (typeof remote.roundTripTime === 'number') {
+              rtt = Math.max(rtt, remote.roundTripTime);
+            }
+          }
+        }
+        if (report.type === 'inbound-rtp') {
+          const inn = report as RTCInboundRtpStreamStats;
+          if (inn.kind === 'video') {
+            const loss = inn.packetsLost ?? 0;
+            const received = inn.packetsReceived ?? 0;
+            if (received + loss > 0) {
+              const ratio = loss / (received + loss);
+              if (ratio > 0.15) this.goodNetworkStreak = 0;
+            }
+          }
+        }
+      });
+
+      let lossRatio = 0;
+      if (sawOutbound && packetsSent > this.lastOutboundPacketsSent) {
+        const dLost = Math.max(0, packetsLost - this.lastOutboundPacketsLost);
+        const dSent = Math.max(1, packetsSent - this.lastOutboundPacketsSent);
+        lossRatio = dLost / dSent;
+      }
+      this.lastOutboundPacketsLost = packetsLost;
+      this.lastOutboundPacketsSent = packetsSent;
+
+      let quality: NetworkQuality = 'good';
+      if (rtt > 0.8 || lossRatio > 0.18) quality = 'critical';
+      else if (rtt > 0.45 || lossRatio > 0.1) quality = 'poor';
+      else if (rtt > 0.25 || lossRatio > 0.04) quality = 'fair';
+
+      this.setNetworkQuality(quality);
+
+      if (Date.now() < this.adaptCooldownUntil) return;
+
+      if (quality === 'critical') {
+        this.goodNetworkStreak = 0;
+        await this.applyVideoAdaptLevel('audio-only');
+      } else if (quality === 'poor') {
+        this.goodNetworkStreak = 0;
+        await this.applyVideoAdaptLevel('low');
+      } else if (quality === 'fair') {
+        this.goodNetworkStreak = 0;
+        if (this.videoAdaptLevel === 'high') await this.applyVideoAdaptLevel('medium');
+      } else {
+        this.goodNetworkStreak += 1;
+        if (this.goodNetworkStreak >= 3) {
+          if (this.videoAdaptLevel === 'audio-only') await this.applyVideoAdaptLevel('low');
+          else if (this.videoAdaptLevel === 'low') await this.applyVideoAdaptLevel('medium');
+          else if (this.videoAdaptLevel === 'medium') await this.applyVideoAdaptLevel('high');
+          this.goodNetworkStreak = 0;
+        }
+      }
+    } catch {
+      /* */
+    }
+  }
+
+  private async applyVideoAdaptLevel(level: VideoAdaptLevel): Promise<void> {
+    if (!this.pc || this.callState !== 'in-call' || this.sharingScreen) return;
+    if (this.videoAdaptLevel === level) return;
+
+    this.videoAdaptLevel = level;
+    this.adaptCooldownUntil = Date.now() + 4_500;
+
+    const videoSender =
+      this.pc.getSenders().find((s) => s.track?.kind === 'video') ??
+      this.pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'video')?.sender;
+
+    if (level === 'audio-only') {
+      const cam = this.localStream?.getVideoTracks()[0];
+      if (cam) cam.enabled = false;
+      if (videoSender) {
+        await videoSender.replaceTrack(null);
+        await this.applySenderDegradation(videoSender, 'maintain-framerate');
+      }
+      console.info('[paranoic] adaptive: audio-only (weak network)');
+      return;
+    }
+
+    let cam = this.cameraVideoTrack ?? this.localStream?.getVideoTracks()[0] ?? null;
+    if (!cam || cam.readyState === 'ended') {
+      try {
+        const stream = await this.acquireLocalMedia(level);
+        await this.attachLocalTracks(stream);
+        this.handlers.onLocalStream?.(stream);
+        cam = stream.getVideoTracks()[0] ?? null;
+      } catch {
+        return;
+      }
+    } else {
+      cam.enabled = true;
+      try {
+        await cam.applyConstraints(VIDEO_LEVEL_CONSTRAINTS[level]);
+      } catch {
+        /* constraints may be unsupported */
+      }
+      if (videoSender) {
+        await videoSender.replaceTrack(cam);
+        await this.applySenderDegradation(
+          videoSender,
+          level === 'high' ? 'balanced' : 'maintain-framerate'
+        );
+      }
+      if (this.localStream) this.handlers.onLocalStream?.(this.localStream);
+    }
+
+    console.info('[paranoic] adaptive video level:', level);
+  }
+
   private async checkMediaHealth(): Promise<void> {
-    if (!this.pc || this.callState !== 'in-call' || this.refreshingMedia) return;
+    if (!this.pc || this.callState !== 'in-call' || this.refreshingMedia || this.sharingScreen) return;
 
     const localVideo = this.localStream?.getVideoTracks()[0];
-    if (!localVideo || localVideo.readyState === 'ended' || localVideo.muted) {
-      await this.refreshLocalTracks();
-      return;
+    if (this.videoAdaptLevel !== 'audio-only') {
+      if (!localVideo || localVideo.readyState === 'ended') {
+        await this.refreshLocalTracks();
+        return;
+      }
     }
 
     try {
@@ -1560,8 +1983,10 @@ export class P2PConnection {
   }
 
   private stopLocalMedia(): void {
+    void this.stopScreenShareInternal(false);
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
+    this.cameraVideoTrack = null;
     if (this.pc) {
       for (const sender of this.pc.getSenders()) {
         if (sender.track) void sender.replaceTrack(null);
@@ -1588,6 +2013,8 @@ export class P2PConnection {
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
     this.stopMediaWatchdog();
+    this.stopNetworkWatch();
+    void this.stopScreenShareInternal(false);
     this.incomingFiles.clear();
     this.makingOffer = false;
     this.ignoreOffer = false;
@@ -1604,6 +2031,7 @@ export class P2PConnection {
     this.remotePeerId = null;
     this.cachedIceServers = null;
     this.isHost = false;
+    this.resetAdaptState();
     this.setSignalingStatus('');
     this.handlers.onLocalStream?.(null);
 

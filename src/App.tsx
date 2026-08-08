@@ -16,6 +16,8 @@ import {
   Pencil,
   PhoneIncoming,
   Settings2,
+  Monitor,
+  MonitorOff,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -29,7 +31,7 @@ import {
   encryptBytes,
   decryptBytes,
 } from './crypto';
-import { P2PConnection, type CallState, type P2PStatus, type SignalingDebugStatus } from './p2p';
+import { P2PConnection, type CallState, type NetworkQuality, type P2PStatus, type SignalingDebugStatus } from './p2p';
 import {
   buildRoomShareUrl,
   clearRoomParamFromUrl,
@@ -98,6 +100,8 @@ export default function App() {
   const [keyString, setKeyString] = useState('');
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('idle');
   const [callState, setCallState] = useState<CallState>('idle');
+  const [screenSharing, setScreenSharing] = useState(false);
+  const [networkQuality, setNetworkQuality] = useState<NetworkQuality>('good');
   const [screen, setScreen] = useState<Screen>('home');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -401,9 +405,13 @@ export default function App() {
           }
           if (state === 'idle') {
             attachLocalVideo(null);
+            setScreenSharing(false);
+            setNetworkQuality('good');
             setScreen((s) => (s === 'call' ? 'home' : s));
           }
         },
+        onNetworkQuality: (quality) => setNetworkQuality(quality),
+        onScreenShare: (active) => setScreenSharing(active),
         onIncomingConnection: () => {
           setIncomingConnection(true);
           setError('');
@@ -705,7 +713,19 @@ export default function App() {
   const hangUp = async () => {
     await p2pRef.current?.hangUp();
     attachLocalVideo(null);
+    setScreenSharing(false);
+    setNetworkQuality('good');
     setScreen('home');
+  };
+
+  const toggleScreenShare = async () => {
+    setError('');
+    try {
+      const active = await ensureP2P().toggleScreenShare();
+      setScreenSharing(active);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось переключить демонстрацию экрана');
+    }
   };
 
   const sendText = async (e: React.FormEvent) => {
@@ -1265,17 +1285,36 @@ export default function App() {
                   {callState === 'calling'
                     ? 'Ожидаем ответа… Камера откроется после «Принять»'
                     : callState === 'in-call'
-                      ? 'Разговор идёт'
+                      ? screenSharing
+                        ? 'Демонстрация экрана'
+                        : networkQuality === 'critical'
+                          ? 'Слабая сеть — только аудио'
+                          : networkQuality === 'poor'
+                            ? 'Слабая сеть — понижено качество видео'
+                            : 'Разговор идёт'
                       : 'Звонок'}
                 </p>
-                <button
-                  type="button"
-                  className="mega-btn hangup"
-                  onClick={() => void (callState === 'calling' ? hangUp() : hangUp())}
-                >
-                  <PhoneOff size={32} />
-                  {callState === 'calling' ? 'Отменить' : 'Завершить'}
-                </button>
+                <div className="call-actions">
+                  {callState === 'in-call' && (
+                    <button
+                      type="button"
+                      className={`call-glass-btn ${screenSharing ? 'active' : ''}`}
+                      onClick={() => void toggleScreenShare()}
+                      aria-pressed={screenSharing}
+                    >
+                      {screenSharing ? <MonitorOff size={22} /> : <Monitor size={22} />}
+                      {screenSharing ? 'Камера' : 'Показать экран'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="mega-btn hangup"
+                    onClick={() => void hangUp()}
+                  >
+                    <PhoneOff size={32} />
+                    {callState === 'calling' ? 'Отменить' : 'Завершить'}
+                  </button>
+                </div>
               </>
             )}
           </section>
