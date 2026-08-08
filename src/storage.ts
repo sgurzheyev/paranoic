@@ -1,5 +1,8 @@
 import localforage from 'localforage';
 
+/** Статус доставки исходящего сообщения. */
+export type DeliveryStatus = 'sending' | 'delivered' | 'read';
+
 /** Сообщение в IndexedDB (без object URL — создаётся при загрузке). */
 export type StoredMessage = {
   id: string;
@@ -13,6 +16,8 @@ export type StoredMessage = {
   mediaSize?: number;
   /** Ключ blob в mediaStore после принятия файла. */
   mediaKey?: string;
+  /** Только для своих текстовых сообщений. */
+  deliveryStatus?: DeliveryStatus;
 };
 
 const messagesDb = localforage.createInstance({

@@ -669,6 +669,33 @@ textarea {
   text-align: right;
 }
 
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bubble-meta time {
+  margin-top: 0;
+}
+
+.msg-delivery {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.msg-delivery.delivered {
+  color: rgba(155, 184, 232, 0.95);
+}
+
+.msg-delivery.read {
+  color: rgba(94, 234, 212, 0.95);
+}
+
 .media-preview {
   display: block;
   max-width: 100%;

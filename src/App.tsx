@@ -6,6 +6,8 @@ import {
   Shield,
   Copy,
   Check,
+  CheckCheck,
+  Clock,
   X,
   PhoneOff,
   Unplug,
@@ -50,8 +52,15 @@ import {
   mediaStorageKey,
   purgeLegacyGlobalHistory,
   saveMediaBlob,
+  updateStoredMessage,
+  type DeliveryStatus,
   type StoredMessage,
 } from './storage';
+import {
+  enqueueOutbox,
+  listOutbox,
+  removeOutboxMany,
+} from './outbox';
 import {
   buildMagicLink,
   clearMagicParamFromUrl,
@@ -153,6 +162,9 @@ export default function App() {
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
   const pendingStartCallRef = useRef(false);
+  const screenRef = useRef<Screen>(screen);
+  const pendingReadAckRef = useRef<Set<string>>(new Set());
+  const flushOutboxRef = useRef<() => Promise<void>>(async () => undefined);
   const ensureP2PRef = useRef<() => P2PConnection>(() => {
     throw new Error('P2P not ready');
   });
@@ -160,6 +172,10 @@ export default function App() {
   useEffect(() => {
     guestPeerIdRef.current = guestPeerId;
   }, [guestPeerId]);
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
 
   const onlineIds = useMemo(() => new Set(presenceUsers.map((u) => u.userId)), [presenceUsers]);
 
@@ -245,12 +261,77 @@ export default function App() {
   );
 
   const addMessage = useCallback(async (message: ChatMessage, persist = true) => {
-    setMessages((prev) => [...prev, message]);
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === message.id)) {
+        return prev.map((m) => (m.id === message.id ? { ...m, ...message } : m));
+      }
+      return [...prev, message];
+    });
     const conv = conversationIdRef.current;
-    if (persist && conv && message.kind !== 'file-pending') {
+    if (
+      persist &&
+      conv &&
+      message.kind !== 'file-pending' &&
+      message.kind !== 'file-transfer'
+    ) {
       await appendStoredMessage(conv, toStored(message));
     }
   }, []);
+
+  const patchDeliveryStatus = useCallback(async (ids: string[], status: DeliveryStatus) => {
+    if (ids.length === 0) return;
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (!m.mine || !ids.includes(m.id)) return m;
+        if (m.deliveryStatus === 'read') return m;
+        if (m.deliveryStatus === 'delivered' && status === 'delivered') return m;
+        return { ...m, deliveryStatus: status };
+      })
+    );
+    const conv = conversationIdRef.current;
+    if (conv) {
+      for (const id of ids) {
+        await updateStoredMessage(conv, id, { deliveryStatus: status });
+      }
+    }
+    if (status === 'delivered' || status === 'read') {
+      await removeOutboxMany(ids);
+    }
+  }, []);
+
+  const flushOutbox = useCallback(async () => {
+    const p2p = p2pRef.current;
+    const peer = peerIdRef.current;
+    if (!p2p?.isReady || !peer) return;
+    const pending = await listOutbox(peer);
+    for (const item of pending) {
+      try {
+        p2p.send(item.packet);
+      } catch (e) {
+        console.warn('[paranoic outbox] flush failed', e);
+        break;
+      }
+    }
+  }, []);
+
+  flushOutboxRef.current = flushOutbox;
+
+  useEffect(() => {
+    const onOnline = () => {
+      void flushOutboxRef.current();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
+
+  /** Когда открыт чат — шлём read-ack по накопленным входящим. */
+  useEffect(() => {
+    if (screen !== 'chat' || p2pStatus !== 'connected') return;
+    const ids = [...pendingReadAckRef.current];
+    if (ids.length === 0) return;
+    pendingReadAckRef.current.clear();
+    p2pRef.current?.sendMessageAck(ids, 'read');
+  }, [screen, p2pStatus, messages.length]);
 
   const acceptFile = useCallback(async (messageId: string) => {
     const blob = pendingFilesRef.current.get(messageId);
@@ -386,6 +467,7 @@ export default function App() {
             if (guestPeerIdRef.current) {
               setScreen('chat');
             }
+            void flushOutboxRef.current();
             if (pendingStartCallRef.current) {
               pendingStartCallRef.current = false;
               void (async () => {
@@ -457,10 +539,16 @@ export default function App() {
           const key = secretKeyRef.current;
           if (!key) return;
           try {
-            const packet = JSON.parse(payload) as { cipher: string; iv: string; sender: string };
+            const packet = JSON.parse(payload) as {
+              cipher: string;
+              iv: string;
+              sender: string;
+              id?: string;
+            };
             const text = await decryptMessage(packet.cipher, packet.iv, key);
+            const id = packet.id || `m-${Date.now()}`;
             await addMessage({
-              id: `m-${Date.now()}`,
+              id,
               sender: packet.sender || 'Близкий',
               text,
               time: nowTime(),
@@ -468,9 +556,18 @@ export default function App() {
               kind: 'text',
             });
             if (packet.sender) setPeerLabel(packet.sender);
+            p2pRef.current?.sendMessageAck([id], 'delivered');
+            if (screenRef.current === 'chat') {
+              p2pRef.current?.sendMessageAck([id], 'read');
+            } else {
+              pendingReadAckRef.current.add(id);
+            }
           } catch {
             setError('Сообщение не удалось прочитать.');
           }
+        },
+        onMessageDelivery: (ids, status) => {
+          void patchDeliveryStatus(ids, status);
         },
         onFileIncoming: (meta) => {
           setMessages((prev) => {
@@ -566,7 +663,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, attachLocalVideo, peerLabel, setActivePeer]);
+  }, [addMessage, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -793,29 +890,60 @@ export default function App() {
 
   const sendText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !secretKey || !p2pRef.current?.isReady) return;
+    const text = inputText.trim();
+    if (!text || !secretKey) return;
 
-    const encrypted = await encryptMessage(inputText, secretKey);
+    const peer = peerIdRef.current;
+    const conv = conversationIdRef.current;
+    if (!peer || !conv) {
+      setError('Сначала выберите собеседника');
+      return;
+    }
+
+    const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const encrypted = await encryptMessage(text, secretKey);
     const packet = JSON.stringify({
       cipher: encrypted.cipher,
       iv: encrypted.iv,
       sender: identityRef.current.name,
+      id,
     });
 
+    await addMessage({
+      id,
+      sender: 'Я',
+      text,
+      time: nowTime(),
+      mine: true,
+      kind: 'text',
+      deliveryStatus: 'sending',
+    });
+    setInputText('');
+    setError('');
+    setScreen('chat');
+
     try {
-      p2pRef.current.send(packet);
-      await addMessage({
-        id: `m-${Date.now()}`,
-        sender: 'Я',
-        text: inputText,
-        time: nowTime(),
-        mine: true,
-        kind: 'text',
+      if (p2pRef.current?.isReady) {
+        p2pRef.current.send(packet);
+      } else {
+        await enqueueOutbox({
+          id,
+          conversationId: conv,
+          peerUserId: peer,
+          createdAt: Date.now(),
+          text,
+          packet,
+        });
+      }
+    } catch {
+      await enqueueOutbox({
+        id,
+        conversationId: conv,
+        peerUserId: peer,
+        createdAt: Date.now(),
+        text,
+        packet,
       });
-      setInputText('');
-      setError('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не отправилось');
     }
   };
 
@@ -1367,7 +1495,36 @@ export default function App() {
                           </a>
                         </div>
                       )}
-                      <time>{m.time}</time>
+                      <div className="bubble-meta">
+                        <time>{m.time}</time>
+                        {m.mine && m.kind === 'text' && (
+                          <span
+                            className={`msg-delivery ${m.deliveryStatus ?? 'sending'}`}
+                            title={
+                              m.deliveryStatus === 'read'
+                                ? 'Прочитано'
+                                : m.deliveryStatus === 'delivered'
+                                  ? 'Доставлено'
+                                  : 'Отправляется'
+                            }
+                            aria-label={
+                              m.deliveryStatus === 'read'
+                                ? 'Прочитано'
+                                : m.deliveryStatus === 'delivered'
+                                  ? 'Доставлено'
+                                  : 'Отправляется'
+                            }
+                          >
+                            {m.deliveryStatus === 'read' ? (
+                              <CheckCheck size={14} />
+                            ) : m.deliveryStatus === 'delivered' ? (
+                              <Check size={14} />
+                            ) : (
+                              <Clock size={13} />
+                            )}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {m.mine && (
                       <Avatar
@@ -1389,17 +1546,27 @@ export default function App() {
                 className="chat-attach-btn"
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Прикрепить файл"
-                disabled={!connected}
+                disabled={!peerId}
               >
                 <Paperclip size={20} />
               </button>
               <input
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Ваше сообщение…"
-                disabled={!connected}
+                placeholder={
+                  peerId
+                    ? connected
+                      ? 'Ваше сообщение…'
+                      : 'Офлайн — сообщение уйдёт из очереди'
+                    : 'Выберите собеседника…'
+                }
+                disabled={!peerId || !secretKey}
               />
-              <button type="submit" disabled={!connected || !inputText.trim()} aria-label="Отправить">
+              <button
+                type="submit"
+                disabled={!peerId || !secretKey || !inputText.trim()}
+                aria-label="Отправить"
+              >
                 <Send size={22} />
               </button>
             </form>

@@ -66,6 +66,8 @@ export type P2PHandlers = {
   onFileIncoming?: (meta: MediaFileMeta) => void;
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
   onPeerHello?: (peer: PeerIdentity) => void;
+  /** ACK доставки/прочтения от пира. */
+  onMessageDelivery?: (ids: string[], status: 'delivered' | 'read') => void;
 };
 
 type SignalJoin = { type: 'join'; peerId: string };
@@ -177,7 +179,9 @@ type ControlPacket =
   | { t: 'media-refresh'; msgId?: string }
   | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string; msgId?: string }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number; msgId?: string }
-  | { t: 'file-done'; id: string; msgId?: string };
+  | { t: 'file-done'; id: string; msgId?: string }
+  | { t: 'msg-delivered'; ids: string[]; msgId?: string }
+  | { t: 'msg-read'; ids: string[]; msgId?: string };
 
 /** Звонок через Realtime как запасной канал к DataChannel. */
 type SignalCtrl = { peerId: string; packet: ControlPacket; msgId: string };
@@ -517,6 +521,17 @@ export class P2PConnection {
       throw new Error('Соединение ещё не готово');
     }
     this.channel.send(payload);
+  }
+
+  /** Подтверждение доставки / прочтения текстовых сообщений. */
+  sendMessageAck(ids: string[], status: 'delivered' | 'read'): void {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0 || !this.isReady) return;
+    this.sendControl({
+      t: status === 'delivered' ? 'msg-delivered' : 'msg-read',
+      ids: unique,
+      msgId: this.newMsgId(),
+    });
   }
 
   /**
@@ -1450,6 +1465,17 @@ export class P2PConnection {
       }
       const cipherBase64 = btoa(binary);
       this.handlers.onEncryptedFile?.(file.meta, cipherBase64, file.iv);
+      return;
+    }
+
+    if (packet.t === 'msg-delivered' || packet.t === 'msg-read') {
+      const ids = packet.ids?.filter(Boolean) ?? [];
+      if (ids.length === 0) return;
+      this.handlers.onMessageDelivery?.(
+        ids,
+        packet.t === 'msg-delivered' ? 'delivered' : 'read'
+      );
+      return;
     }
   }
 
