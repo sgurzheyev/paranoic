@@ -6,7 +6,7 @@ export type StoredMessage = {
   sender: string;
   time: string;
   mine: boolean;
-  kind: 'text' | 'media' | 'file-pending';
+  kind: 'text' | 'media' | 'file-pending' | 'file-transfer';
   text?: string;
   mediaMime?: string;
   mediaName?: string;

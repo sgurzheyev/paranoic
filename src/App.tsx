@@ -16,6 +16,7 @@ import {
   Pencil,
   PhoneIncoming,
   Settings2,
+  Paperclip,
   Monitor,
   MonitorOff,
 } from 'lucide-react';
@@ -70,10 +71,12 @@ type Screen = 'home' | 'chat' | 'call';
 
 type ChatMessage = StoredMessage & {
   mediaUrl?: string;
+  /** 0..1 для file-transfer / исходящей отправки. */
+  transferProgress?: number;
 };
 
 function toStored(message: ChatMessage): StoredMessage {
-  const { mediaUrl: _url, ...stored } = message;
+  const { mediaUrl: _url, transferProgress: _p, ...stored } = message;
   return stored;
 }
 
@@ -110,6 +113,8 @@ export default function App() {
   const [magicLink, setMagicLink] = useState(() => buildMagicLink(getOrCreateIdentity().id));
   const [copied, setCopied] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  /** id → прогресс исходящей/входящей передачи для баблов. */
+  const [transferProgressMap, setTransferProgressMap] = useState<Record<string, number>>({});
   const [peerLabel, setPeerLabel] = useState('Близкий');
   const [peerId, setPeerId] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
@@ -467,32 +472,90 @@ export default function App() {
             setError('Сообщение не удалось прочитать.');
           }
         },
-        onEncryptedFile: async (meta, cipher, iv) => {
-          const key = secretKeyRef.current;
-          if (!key) return;
-          try {
-            const plain = await decryptBytes(cipher, iv, key);
-            const blob = new Blob([plain], { type: meta.mime });
-            pendingFilesRef.current.set(meta.id, blob);
-            setMessages((prev) => [
+        onFileIncoming: (meta) => {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === meta.id)) return prev;
+            return [
               ...prev,
               {
                 id: meta.id,
                 sender: peerLabel,
                 time: nowTime(),
                 mine: false,
-                kind: 'file-pending',
+                kind: 'file-transfer',
                 mediaMime: meta.mime,
                 mediaName: meta.name,
                 mediaSize: meta.size,
+                transferProgress: 0,
               },
-            ]);
+            ];
+          });
+          setScreen('chat');
+        },
+        onEncryptedFile: async (meta, cipher, iv) => {
+          const key = secretKeyRef.current;
+          if (!key) return;
+          try {
+            const plain = await decryptBytes(cipher, iv, key);
+            const blob = new Blob([plain], { type: meta.mime });
+            const mediaKey = mediaStorageKey(meta.id);
+            const mediaUrl = URL.createObjectURL(blob);
+            mediaUrlsRef.current.add(mediaUrl);
+            await saveMediaBlob(mediaKey, blob);
+
+            setMessages((prev) => {
+              const updated: ChatMessage = {
+                id: meta.id,
+                sender: peerLabel,
+                time: nowTime(),
+                mine: false,
+                kind: 'media',
+                mediaMime: meta.mime,
+                mediaName: meta.name,
+                mediaSize: meta.size,
+                mediaKey,
+                mediaUrl,
+                transferProgress: 1,
+              };
+              return prev.some((m) => m.id === meta.id)
+                ? prev.map((m) => (m.id === meta.id ? { ...m, ...updated } : m))
+                : [...prev, updated];
+            });
+
+            const conv = conversationIdRef.current;
+            if (conv) {
+              await appendStoredMessage(conv, {
+                id: meta.id,
+                sender: peerLabel,
+                time: nowTime(),
+                mine: false,
+                kind: 'media',
+                mediaMime: meta.mime,
+                mediaName: meta.name,
+                mediaSize: meta.size,
+                mediaKey,
+              });
+            }
+            setTransferProgressMap((p) => {
+              const { [meta.id]: _drop, ...rest } = p;
+              return rest;
+            });
             setScreen('chat');
           } catch {
             setError('Не удалось расшифровать файл');
           }
         },
-        onFileProgress: (_id, progress) => setUploadProgress(progress),
+        onFileProgress: (id, progress) => {
+          setUploadProgress(progress < 1 ? progress : null);
+          setTransferProgressMap((prev) => ({ ...prev, [id]: progress }));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === id && (m.kind === 'file-transfer' || m.kind === 'file-pending')
+                ? { ...m, transferProgress: progress, kind: 'file-transfer' }
+                : m
+            )
+          );
+        },
         onError: (err) => setError(err.message),
       });
     }
@@ -759,31 +822,72 @@ export default function App() {
   const sendMedia = async (file: File) => {
     if (!secretKey || !p2pRef.current?.isReady) return;
     setError('');
+    const transferId = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     setUploadProgress(0);
-    const messageId = `local-${Date.now()}`;
-    const mediaKey = mediaStorageKey(messageId);
-    try {
-      await p2pRef.current.sendFile(file, (data) => encryptBytes(data, secretKey));
-      const mediaUrl = URL.createObjectURL(file);
-      mediaUrlsRef.current.add(mediaUrl);
-      await saveMediaBlob(mediaKey, file);
-      await addMessage({
-        id: messageId,
+    setTransferProgressMap((p) => ({ ...p, [transferId]: 0 }));
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: transferId,
         sender: 'Я',
         time: nowTime(),
         mine: true,
-        kind: 'media',
-        mediaUrl,
-        mediaMime: file.type,
+        kind: 'file-transfer',
+        mediaMime: file.type || 'application/octet-stream',
         mediaName: file.name,
         mediaSize: file.size,
-        mediaKey,
-      });
-      setScreen('chat');
+        transferProgress: 0,
+      },
+    ]);
+    setScreen('chat');
+
+    const mediaKey = mediaStorageKey(transferId);
+    try {
+      await p2pRef.current.sendFile(
+        file,
+        (data) => encryptBytes(data, secretKey),
+        { transferId }
+      );
+
+      const mediaUrl = URL.createObjectURL(file);
+      mediaUrlsRef.current.add(mediaUrl);
+      await saveMediaBlob(mediaKey, file);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === transferId
+            ? {
+                ...m,
+                kind: 'media' as const,
+                mediaUrl,
+                mediaKey,
+                transferProgress: 1,
+              }
+            : m
+        )
+      );
+      const conv = conversationIdRef.current;
+      if (conv) {
+        await appendStoredMessage(conv, {
+          id: transferId,
+          sender: 'Я',
+          time: nowTime(),
+          mine: true,
+          kind: 'media',
+          mediaMime: file.type,
+          mediaName: file.name,
+          mediaSize: file.size,
+          mediaKey,
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Файл не отправился');
+      setMessages((prev) => prev.filter((m) => m.id !== transferId));
     } finally {
       setUploadProgress(null);
+      setTransferProgressMap((p) => {
+        const { [transferId]: _drop, ...rest } = p;
+        return rest;
+      });
     }
   };
 
@@ -1169,9 +1273,10 @@ export default function App() {
                 type="button"
                 className="icon-btn"
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="Отправить фото"
+                aria-label="Прикрепить файл"
+                disabled={!connected}
               >
-                <ImagePlus size={22} />
+                <Paperclip size={22} />
               </button>
             </div>
 
@@ -1179,7 +1284,23 @@ export default function App() {
               {messages.length === 0 ? (
                 <p className="empty">Пока тихо. Напишите первое сообщение.</p>
               ) : (
-                messages.map((m) => (
+                messages.map((m) => {
+                  const progress =
+                    m.transferProgress ?? transferProgressMap[m.id] ?? null;
+                  const isMediaPreview =
+                    m.kind === 'media' &&
+                    m.mediaUrl &&
+                    (m.mediaMime?.startsWith('image/') ||
+                      m.mediaMime?.startsWith('video/') ||
+                      !m.mediaMime);
+                  const isGenericFile =
+                    m.kind === 'media' &&
+                    m.mediaUrl &&
+                    m.mediaMime &&
+                    !m.mediaMime.startsWith('image/') &&
+                    !m.mediaMime.startsWith('video/');
+
+                  return (
                   <div key={m.id} className={`bubble-wrap ${m.mine ? 'mine' : 'theirs'}`}>
                     {!m.mine && (
                       <Avatar
@@ -1191,11 +1312,30 @@ export default function App() {
                     )}
                     <div className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>
                       {m.kind === 'text' && <p>{m.text}</p>}
-                      {m.kind === 'file-pending' && (
-                        <div className="file-pending-card">
+                      {(m.kind === 'file-transfer' || m.kind === 'file-pending') && (
+                        <div className="file-transfer-card">
                           <p className="file-pending-name">{m.mediaName ?? 'Файл'}</p>
-                          <p className="file-pending-size">{formatFileSize(m.mediaSize ?? 0)}</p>
-                          {!m.mine && (
+                          <p className="file-pending-size">
+                            {formatFileSize(m.mediaSize ?? 0)}
+                            {progress != null
+                              ? ` · ${Math.round(progress * 100)}%`
+                              : m.mine
+                                ? ' · отправка…'
+                                : ' · загрузка…'}
+                          </p>
+                          <div
+                            className="file-progress-track"
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={Math.round((progress ?? 0) * 100)}
+                          >
+                            <div
+                              className="file-progress-fill"
+                              style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
+                            />
+                          </div>
+                          {m.kind === 'file-pending' && !m.mine && (
                             <button
                               type="button"
                               className="accept-file-btn"
@@ -1207,13 +1347,26 @@ export default function App() {
                           )}
                         </div>
                       )}
-                      {m.kind === 'media' &&
-                        m.mediaUrl &&
+                      {isMediaPreview &&
                         (m.mediaMime?.startsWith('video/') ? (
                           <video src={m.mediaUrl} controls className="media-preview" />
                         ) : (
                           <img src={m.mediaUrl} alt={m.mediaName || 'фото'} className="media-preview" />
                         ))}
+                      {isGenericFile && (
+                        <div className="file-transfer-card">
+                          <p className="file-pending-name">{m.mediaName ?? 'Файл'}</p>
+                          <p className="file-pending-size">{formatFileSize(m.mediaSize ?? 0)}</p>
+                          <a
+                            className="accept-file-btn"
+                            href={m.mediaUrl}
+                            download={m.mediaName || 'file'}
+                          >
+                            <FileDown size={16} />
+                            Скачать
+                          </a>
+                        </div>
+                      )}
                       <time>{m.time}</time>
                     </div>
                     {m.mine && (
@@ -1225,11 +1378,21 @@ export default function App() {
                       />
                     )}
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
 
             <form className="chat-compose" onSubmit={sendText}>
+              <button
+                type="button"
+                className="chat-attach-btn"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Прикрепить файл"
+                disabled={!connected}
+              >
+                <Paperclip size={20} />
+              </button>
               <input
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
@@ -1324,7 +1487,7 @@ export default function App() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="*/*"
         hidden
         onChange={(e) => {
           const file = e.target.files?.[0];

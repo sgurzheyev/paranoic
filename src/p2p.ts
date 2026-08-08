@@ -62,6 +62,8 @@ export type P2PHandlers = {
   onConnectionDeclined?: () => void;
   onCallDeclined?: () => void;
   onFileProgress?: (id: string, progress: number) => void;
+  /** Метаданные входящего файла до прихода чанков (для прогресса в UI). */
+  onFileIncoming?: (meta: MediaFileMeta) => void;
   onEncryptedFile?: (meta: MediaFileMeta, cipher: string, iv: string) => void;
   onPeerHello?: (peer: PeerIdentity) => void;
 };
@@ -292,8 +294,10 @@ const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
 
 export class P2PConnection {
   private pc: RTCPeerConnection | null = null;
-  /** DataChannel для чата/файлов/звонков. */
+  /** DataChannel для чата / control / signaling-звонков. */
   private channel: RTCDataChannel | null = null;
+  /** Отдельный DataChannel только для бинарных чанков файлов. */
+  private fileChannel: RTCDataChannel | null = null;
   /** Supabase Realtime — signaling. */
   private signal: RealtimeChannel | null = null;
   private handlers: P2PHandlers;
@@ -365,6 +369,10 @@ export class P2PConnection {
 
   get isReady(): boolean {
     return this.channel?.readyState === 'open';
+  }
+
+  get isFileChannelReady(): boolean {
+    return this.fileChannel?.readyState === 'open' || this.channel?.readyState === 'open';
   }
 
   get currentCallState(): CallState {
@@ -762,17 +770,22 @@ export class P2PConnection {
 
   async sendFile(
     file: File,
-    encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>
-  ): Promise<void> {
+    encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>,
+    options?: { transferId?: string }
+  ): Promise<string> {
     if (!this.isReady || !this.channel) throw new Error('Соединение ещё не готово');
     if (file.size > MAX_FILE_BYTES) {
       throw new Error('Файл слишком большой (макс. 16 МБ)');
     }
 
+    await this.ensureFileChannel();
+    const pipe = this.filePipe();
+    if (!pipe) throw new Error('Файловый канал ещё не готов');
+
     const buffer = await file.arrayBuffer();
     const { cipher, iv } = await encrypt(buffer);
     const cipherBytes = Uint8Array.from(atob(cipher), (c) => c.charCodeAt(0));
-    const id = `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = options?.transferId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const chunkCount = Math.ceil(cipherBytes.length / FILE_CHUNK_BYTES) || 1;
 
     this.sendControl({
@@ -784,17 +797,45 @@ export class P2PConnection {
       iv,
       chunks: chunkCount,
     });
+    this.handlers.onFileProgress?.(id, 0);
 
     for (let i = 0; i < chunkCount; i++) {
       const start = i * FILE_CHUNK_BYTES;
       const slice = cipherBytes.subarray(start, start + FILE_CHUNK_BYTES);
-      await waitForBufferDrain(this.channel);
-      this.channel.send(encodeFileChunk(id, i, slice));
+      await waitForBufferDrain(pipe);
+      pipe.send(encodeFileChunk(id, i, slice));
       this.handlers.onFileProgress?.(id, (i + 1) / chunkCount);
     }
 
-    await waitForBufferDrain(this.channel);
+    await waitForBufferDrain(pipe);
     this.sendControl({ t: 'file-done', id });
+    this.handlers.onFileProgress?.(id, 1);
+    return id;
+  }
+
+  /** Канал для бинарных чанков: отдельный files DC, иначе fallback на chat. */
+  private filePipe(): RTCDataChannel | null {
+    if (this.fileChannel?.readyState === 'open') return this.fileChannel;
+    if (this.channel?.readyState === 'open') return this.channel;
+    return null;
+  }
+
+  private ensureFileChannel(): Promise<void> {
+    if (this.fileChannel?.readyState === 'open' || this.channel?.readyState === 'open') {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (this.fileChannel?.readyState === 'open' || this.channel?.readyState === 'open') {
+          clearInterval(timer);
+          resolve();
+        } else if (Date.now() - started > 8_000) {
+          clearInterval(timer);
+          reject(new Error('Файловый DataChannel не открылся'));
+        }
+      }, 80);
+    });
   }
 
   close(): void {
@@ -987,6 +1028,11 @@ export class P2PConnection {
       this.pc = pc;
       const dc = pc.createDataChannel('paranoic', { ordered: true });
       this.bindChannel(dc);
+      const files = pc.createDataChannel('paranoic-files', {
+        ordered: true,
+        // Надёжная доставка чанков (без partial reliability).
+      });
+      this.bindFileChannel(files);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -1022,7 +1068,10 @@ export class P2PConnection {
       if (!this.pc) {
         const pc = await this.createPeerConnection();
         this.pc = pc;
-        pc.ondatachannel = (event) => this.bindChannel(event.channel);
+        pc.ondatachannel = (event) => {
+          if (event.channel.label === 'paranoic-files') this.bindFileChannel(event.channel);
+          else this.bindChannel(event.channel);
+        };
       }
 
       const offer = parseSessionDescription(payload.sdp, 'offer');
@@ -1373,6 +1422,13 @@ export class P2PConnection {
         chunks: new Array(packet.chunks).fill(null),
         expected: packet.chunks,
       });
+      this.handlers.onFileIncoming?.({
+        id: packet.id,
+        name: packet.name,
+        mime: packet.mime,
+        size: Number(packet.size),
+      });
+      this.handlers.onFileProgress?.(packet.id, 0);
       return;
     }
 
@@ -1609,18 +1665,7 @@ export class P2PConnection {
     this.setCallState('idle');
     this.handlers.onLocalStream?.(null);
 
-    if (this.channel) {
-      this.channel.onopen = null;
-      this.channel.onclose = null;
-      this.channel.onerror = null;
-      this.channel.onmessage = null;
-      try {
-        this.channel.close();
-      } catch {
-        /* */
-      }
-      this.channel = null;
-    }
+    this.teardownDataChannels();
 
     if (this.pc) {
       this.pc.onicecandidate = null;
@@ -1645,6 +1690,23 @@ export class P2PConnection {
       void this.sendJoin();
       this.startJoinRetry();
     }
+  }
+
+  private teardownDataChannels(): void {
+    for (const ch of [this.fileChannel, this.channel]) {
+      if (!ch) continue;
+      ch.onopen = null;
+      ch.onclose = null;
+      ch.onerror = null;
+      ch.onmessage = null;
+      try {
+        ch.close();
+      } catch {
+        /* */
+      }
+    }
+    this.fileChannel = null;
+    this.channel = null;
   }
 
   private startMediaWatchdog(): void {
@@ -1904,6 +1966,38 @@ export class P2PConnection {
     }
   }
 
+  private bindFileChannel(channel: RTCDataChannel): void {
+    this.fileChannel = channel;
+    channel.binaryType = 'arraybuffer';
+
+    channel.onopen = () => {
+      console.info('[paranoic] file DataChannel open');
+    };
+
+    channel.onerror = () => {
+      console.warn('[paranoic] file DataChannel error (soft)');
+    };
+
+    channel.onclose = () => {
+      if (this.fileChannel === channel) this.fileChannel = null;
+    };
+
+    channel.onmessage = (event) => {
+      if (!(event.data instanceof ArrayBuffer)) return;
+      this.ingestFileChunk(event.data);
+    };
+  }
+
+  private ingestFileChunk(data: ArrayBuffer): void {
+    const chunk = decodeFileChunk(data);
+    if (!chunk) return;
+    const file = this.incomingFiles.get(chunk.id);
+    if (!file || chunk.index >= file.expected) return;
+    file.chunks[chunk.index] = chunk.payload;
+    const got = file.chunks.filter(Boolean).length;
+    this.handlers.onFileProgress?.(chunk.id, got / file.expected);
+  }
+
   private bindChannel(channel: RTCDataChannel): void {
     this.channel = channel;
     channel.binaryType = 'arraybuffer';
@@ -1940,17 +2034,10 @@ export class P2PConnection {
     };
 
     channel.onmessage = (event) => {
+      // Fallback: чанки могут прийти по chat-каналу (старые клиенты).
       if (event.data instanceof ArrayBuffer) {
-        const chunk = decodeFileChunk(event.data);
-        if (chunk) {
-          const file = this.incomingFiles.get(chunk.id);
-          if (file && chunk.index < file.expected) {
-            file.chunks[chunk.index] = chunk.payload;
-            const got = file.chunks.filter(Boolean).length;
-            this.handlers.onFileProgress?.(chunk.id, got / file.expected);
-          }
-          return;
-        }
+        this.ingestFileChunk(event.data);
+        return;
       }
 
       const data =
@@ -2035,18 +2122,7 @@ export class P2PConnection {
     this.setSignalingStatus('');
     this.handlers.onLocalStream?.(null);
 
-    if (this.channel) {
-      this.channel.onopen = null;
-      this.channel.onclose = null;
-      this.channel.onerror = null;
-      this.channel.onmessage = null;
-      try {
-        this.channel.close();
-      } catch {
-        /* */
-      }
-      this.channel = null;
-    }
+    this.teardownDataChannels();
 
     if (this.pc) {
       this.pc.onicecandidate = null;
