@@ -25,11 +25,13 @@ import {
   Mic,
   Video,
   Camera,
+  ShieldCheck,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
+import AdminDashboard from './AdminDashboard';
 import CallOverlay from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import MediaNoteOverlay from './MediaNoteOverlay';
@@ -40,6 +42,7 @@ import {
   newCallId,
   type CallerInfo,
 } from './callSignaling';
+import { fetchMyAccessFlags } from './admin';
 import {
   bindAudioUnlock,
   closeActiveNotification,
@@ -183,6 +186,9 @@ export default function App() {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(identity.name);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isBanned, setIsBanned] = useState(false);
   const [peerAvatarUrl, setPeerAvatarUrl] = useState('');
   const [peerColor, setPeerColor] = useState('#60a5fa');
   const [sessionEpoch, setSessionEpoch] = useState(0);
@@ -244,6 +250,7 @@ export default function App() {
   const pendingAcceptCallerRef = useRef<CallerInfo | null>(null);
   const outboundCallIdRef = useRef<string | null>(null);
   const callInboxRef = useRef<CallInbox | null>(null);
+  const isBannedRef = useRef(false);
   const peerMetaRef = useRef({
     id: '',
     label: 'Близкий',
@@ -649,6 +656,35 @@ export default function App() {
   /** Разблокировка автоплея рингтона после первого жеста. */
   useEffect(() => bindAudioUnlock(), []);
 
+  /** Роль admin / бан из profiles. */
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      if (!hasSupabaseConfig()) return;
+      const flags = await fetchMyAccessFlags(identity.id);
+      if (cancelled) return;
+      setIsAdmin(flags.role === 'admin');
+      const wasBanned = isBannedRef.current;
+      setIsBanned(flags.isBanned);
+      isBannedRef.current = flags.isBanned;
+      if (flags.isBanned && !wasBanned) {
+        pendingStartCallRef.current = false;
+        stopRingtone();
+        p2pRef.current?.close();
+        p2pRef.current = null;
+        setCallState('idle');
+        setP2pStatus('idle');
+        setSessionEpoch((n) => n + 1);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 45_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [identity.id]);
+
   /** Постоянный слушатель call_offer на calls:{myId}. */
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
@@ -656,6 +692,7 @@ export default function App() {
     const inbox = new CallInbox({
       onOffer: (offer) => {
         if (cancelled) return;
+        if (isBannedRef.current) return;
         setIncomingRing({ callId: offer.callId, from: offer.from });
         setPeerLabel(offer.from.name || callerDisplayName(offer.from));
         setPeerAvatarUrl(offer.from.avatarUrl || '');
@@ -820,6 +857,9 @@ export default function App() {
             void syncPendingRef.current();
             if (pendingStartCallRef.current) {
               pendingStartCallRef.current = false;
+              if (isBannedRef.current) {
+                setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+              } else {
               void (async () => {
                 try {
                   const me = identityRef.current;
@@ -847,6 +887,7 @@ export default function App() {
                   setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
                 }
               })();
+              }
             } else if (pendingRingAcceptRef.current) {
               pendingRingAcceptRef.current = false;
               // Ждём call-invite — auto-accept в onCallState/onIncomingCall.
@@ -1213,6 +1254,10 @@ export default function App() {
           );
         }
 
+        if (isBannedRef.current) {
+          throw new Error('Ваш аккаунт заблокирован. Связь недоступна.');
+        }
+
         const me = identityRef.current;
         const urlHandle = getMagicTargetFromUrl();
         const legacyRoom = getRoomIdFromUrl();
@@ -1339,6 +1384,10 @@ export default function App() {
     opts?: { openChat?: boolean }
   ) => {
     if (targetUserId === identity.id) return;
+    if (isBannedRef.current) {
+      setError('Ваш аккаунт заблокирован. Связь недоступна.');
+      return;
+    }
     setError('');
     setAppMode('paranoic');
     setScreen(opts?.openChat ? 'chat' : 'home');
@@ -1379,6 +1428,10 @@ export default function App() {
   const startCall = async () => {
     setError('');
     void ensureNotifyPermission();
+    if (isBannedRef.current) {
+      setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+      return;
+    }
     try {
       const me = identityRef.current;
       const target = peerIdRef.current || guestPeerIdRef.current;
@@ -1933,29 +1986,46 @@ export default function App() {
 
   if (appMode === 'family') {
     return (
-      <GlobeLobby
-        onBack={() => setAppMode('select')}
-        people={mapPeople}
-        geoSource={
-          settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
-        }
-        onChatUser={(user) => {
-          void connectToUser(
-            user.userId,
-            user.isContact ? user.name : 'Незнакомец',
-            { openChat: true }
-          );
-        }}
-        onCallUser={(user) => {
-          // Мгновенный видеовызов без промежуточных меню.
-          pendingStartCallRef.current = true;
-          void connectToUser(
-            user.userId,
-            user.isContact ? user.name : 'Незнакомец',
-            { openChat: true }
-          );
-        }}
-      />
+      <>
+        {adminOpen && (
+          <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
+        )}
+        <GlobeLobby
+          onBack={() => setAppMode('select')}
+          people={mapPeople}
+          geoSource={
+            settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
+          }
+          isAdmin={isAdmin}
+          onOpenAdmin={() => setAdminOpen(true)}
+          banned={isBanned}
+          onChatUser={(user) => {
+            if (isBannedRef.current) {
+              setError('Ваш аккаунт заблокирован. Связь недоступна.');
+              setAppMode('paranoic');
+              return;
+            }
+            void connectToUser(
+              user.userId,
+              user.isContact ? user.name : 'Незнакомец',
+              { openChat: true }
+            );
+          }}
+          onCallUser={(user) => {
+            if (isBannedRef.current) {
+              setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+              setAppMode('paranoic');
+              return;
+            }
+            pendingStartCallRef.current = true;
+            void connectToUser(
+              user.userId,
+              user.isContact ? user.name : 'Незнакомец',
+              { openChat: true }
+            );
+          }}
+        />
+      </>
     );
   }
 
@@ -1973,6 +2043,9 @@ export default function App() {
           onSettingsChange={setSettings}
         />
       )}
+      {adminOpen && (
+        <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
+      )}
       <header className="app-header">
         <div className="brand">
           <button
@@ -1989,16 +2062,34 @@ export default function App() {
             <p className="brand-sub">Семейная связь без чужих серверов</p>
           </div>
         </div>
-        <div className={`status-pill ${connected ? 'ok' : ''}`}>
-          <span className="status-dot" />
-          <span className="status-pill-text">
-            <span>{FRIENDLY_STATUS[p2pStatus]}</span>
-            {signalingStatus && !connected && (
-              <span className="signaling-debug">{signalingStatus}</span>
-            )}
-          </span>
+        <div className="app-header-right">
+          {isAdmin && (
+            <button
+              type="button"
+              className="admin-panel-btn"
+              onClick={() => setAdminOpen(true)}
+            >
+              <ShieldCheck size={16} />
+              Admin Panel
+            </button>
+          )}
+          <div className={`status-pill ${connected ? 'ok' : ''}`}>
+            <span className="status-dot" />
+            <span className="status-pill-text">
+              <span>{FRIENDLY_STATUS[p2pStatus]}</span>
+              {signalingStatus && !connected && (
+                <span className="signaling-debug">{signalingStatus}</span>
+              )}
+            </span>
+          </div>
         </div>
       </header>
+
+      {isBanned && (
+        <div className="banner banned" role="alert">
+          Ваш аккаунт заблокирован. Звонки и P2P-соединения недоступны.
+        </div>
+      )}
 
       {error && (
         <div className="banner error" role="alert">

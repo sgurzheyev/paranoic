@@ -12,7 +12,13 @@ export type RemoteProfile = {
   theme_fon: string | null;
   username: string | null;
   updated_at?: string;
+  role?: string | null;
+  is_banned?: boolean | null;
+  created_at?: string | null;
 };
+
+const PROFILE_SELECT =
+  'id,name,color,avatar_url,theme_fon,username,updated_at,role,is_banned,created_at';
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_EDGE = 512;
@@ -140,7 +146,8 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
     }
 
     const sb = getSupabase();
-    const row: RemoteProfile = {
+    // Не трогаем role / is_banned / created_at — ими управляет админка.
+    const row = {
       id: identity.id,
       name: identity.name,
       color: identity.color,
@@ -168,7 +175,7 @@ export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile 
     const sb = getSupabase();
     const { data, error } = await sb
       .from(PROFILES_TABLE)
-      .select('id,name,color,avatar_url,theme_fon,username,updated_at')
+      .select(PROFILE_SELECT)
       .eq('id', userId)
       .maybeSingle();
     if (error) {
@@ -192,7 +199,7 @@ export async function fetchProfileByUsername(
     const sb = getSupabase();
     const { data, error } = await sb
       .from(PROFILES_TABLE)
-      .select('id,name,color,avatar_url,theme_fon,username,updated_at')
+      .select(PROFILE_SELECT)
       .ilike('username', handle)
       .maybeSingle();
     if (error) {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { ArrowLeft, MapPin, MessageCircle, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, MapPin, MessageCircle, Phone, ShieldCheck, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { initials } from './identity';
 import {
   applyMapboxAccessToken,
@@ -22,6 +22,9 @@ type GlobeLobbyProps = {
   geoSource: 'gps' | 'antarctica' | 'pending';
   onCallUser: (user: MapPerson) => void;
   onChatUser: (user: MapPerson) => void;
+  isAdmin?: boolean;
+  onOpenAdmin?: () => void;
+  banned?: boolean;
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -157,6 +160,9 @@ export default function GlobeLobby({
   geoSource,
   onCallUser,
   onChatUser,
+  isAdmin = false,
+  onOpenAdmin,
+  banned = false,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -443,7 +449,7 @@ export default function GlobeLobby({
       )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="pointer-events-auto flex items-center justify-between px-4 py-4 sm:px-6">
+        <header className="pointer-events-auto flex items-center justify-between gap-3 px-4 py-4 sm:px-6">
           <button
             type="button"
             onClick={onBack}
@@ -451,10 +457,27 @@ export default function GlobeLobby({
           >
             <ArrowLeft size={16} /> Назад
           </button>
-          <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
-            Family Mode
+          <div className="flex items-center gap-2">
+            {isAdmin && onOpenAdmin && (
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-2 text-xs font-extrabold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
+              >
+                <ShieldCheck size={14} /> Admin Panel
+              </button>
+            )}
+            <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
+              Family Mode
+            </div>
           </div>
         </header>
+
+        {banned && (
+          <div className="pointer-events-auto mx-4 mt-1 rounded-2xl border border-rose-400/40 bg-rose-500/15 px-4 py-3 text-center text-sm font-bold text-rose-100 sm:mx-6">
+            Аккаунт заблокирован — звонки и чат с карты недоступны.
+          </div>
+        )}
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">

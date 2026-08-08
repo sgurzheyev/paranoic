@@ -169,6 +169,7 @@ export class CallInbox {
   /** Инициатор → получателю: Caller ID до WebRTC. */
   async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<void> {
     if (!toUserId || toUserId === from.id) return;
+    // Клиентская защита: бан проверяется в App до вызова; дубль на всякий случай.
     const payload: CallOfferEvent = {
       type: 'call_offer',
       callId,

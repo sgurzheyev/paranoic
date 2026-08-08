@@ -13,6 +13,9 @@ create table if not exists public.profiles (
   avatar_url text,
   theme_fon text,
   username text,
+  role text not null default 'user',
+  is_banned boolean not null default false,
+  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
@@ -41,6 +44,12 @@ create policy "profiles_update_anon"
   to anon
   using (true)
   with check (true);
+
+drop policy if exists "profiles_delete_anon" on public.profiles;
+create policy "profiles_delete_anon"
+  on public.profiles for delete
+  to anon
+  using (true);
 
 -- Storage bucket
 insert into storage.buckets (id, name, public)
