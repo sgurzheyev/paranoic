@@ -3379,6 +3379,97 @@ textarea {
   cursor: not-allowed;
 }
 
+/* Targeting Mode — прицел в центре карты */
+.gem-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 15;
+  width: 72px;
+  height: 72px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.gem-crosshair-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 215, 0, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow:
+    0 0 24px rgba(255, 215, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+}
+
+.gem-crosshair-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: rgba(255, 215, 0, 0.92);
+  box-shadow: 0 0 14px rgba(255, 215, 0, 0.75);
+}
+
+.gem-crosshair-h,
+.gem-crosshair-v {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(255, 248, 200, 0.75);
+}
+
+.gem-crosshair-h {
+  width: 28px;
+  height: 1.5px;
+  margin: -0.75px 0 0 -14px;
+}
+
+.gem-crosshair-v {
+  width: 1.5px;
+  height: 28px;
+  margin: -14px 0 0 -0.75px;
+}
+
+.gem-target-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: min(100%, 340px);
+  padding: 16px 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 215, 0, 0.45);
+  background:
+    linear-gradient(160deg, rgba(255, 215, 0, 0.28), rgba(245, 158, 11, 0.16)),
+    rgba(255, 255, 255, 0.08);
+  color: #fff8dc;
+  font: inherit;
+  font-size: 1.02rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow:
+    0 14px 36px rgba(0, 0, 0, 0.4),
+    0 0 28px rgba(255, 215, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(18px);
+}
+
+.gem-target-cancel {
+  border: none;
+  background: transparent;
+  color: rgba(200, 205, 214, 0.85);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 6px 12px;
+}
+
 /* ── Map layers menu + AR FAB ── */
 .map-layers-btn {
   display: inline-flex;

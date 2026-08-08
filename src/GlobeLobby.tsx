@@ -216,6 +216,7 @@ export default function GlobeLobby({
   const [openedGem, setOpenedGem] = useState<MapGem | null>(null);
   /** Точка long-press / Drop a Gem. */
   const [dropPoint, setDropPoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [isTargetingMode, setIsTargetingMode] = useState(false);
   const [showContacts, setShowContacts] = useState(true);
   const [showGems, setShowGems] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
@@ -564,6 +565,7 @@ export default function GlobeLobby({
     const openDrop = (lng: number, lat: number) => {
       if (banned) return;
       clearPress();
+      setIsTargetingMode(false);
       setOpenedGem(null);
       setSelected(null);
       setDropPoint({ lat, lng });
@@ -628,6 +630,18 @@ export default function GlobeLobby({
     setDropPoint(null);
     ghostMarkerRef.current?.remove();
     ghostMarkerRef.current = null;
+  };
+
+  const exitTargetingMode = () => setIsTargetingMode(false);
+
+  const confirmTargetDrop = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const center = map.getCenter();
+    setIsTargetingMode(false);
+    setOpenedGem(null);
+    setSelected(null);
+    setDropPoint({ lat: center.lat, lng: center.lng });
   };
 
   const nudgeZoom = (delta: number) => {
@@ -751,19 +765,42 @@ export default function GlobeLobby({
 
         <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
-            Чистая карта · контакты Family Mode
-            {showGems ? ' · капсулы включены' : ''}
+            {isTargetingMode
+              ? 'Двигайте карту — прицел в центре покажет место капсулы'
+              : `Чистая карта · контакты Family Mode${showGems ? ' · капсулы включены' : ''}`}
           </p>
-          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
-            <MapPin size={12} /> {geoHint}
-            {showGems && gems.length > 0 && (
-              <span className="ml-1 text-amber-200/90">· {gems.length} капсул</span>
-            )}
-          </p>
+          {!isTargetingMode && (
+            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
+              <MapPin size={12} /> {geoHint}
+              {showGems && gems.length > 0 && (
+                <span className="ml-1 text-amber-200/90">· {gems.length} капсул</span>
+              )}
+            </p>
+          )}
         </div>
 
         <div className="pointer-events-auto mt-auto flex flex-col gap-3 px-4 pb-6 sm:px-6">
-          {contacts.length > 0 && (
+          {isTargetingMode ? (
+            <div className="flex flex-col items-center gap-3">
+              <button
+                type="button"
+                className="gem-target-confirm"
+                onClick={confirmTargetDrop}
+              >
+                <Gem size={18} />
+                Поставить метку здесь
+              </button>
+              <button
+                type="button"
+                className="gem-target-cancel"
+                onClick={exitTargetingMode}
+              >
+                Отмена
+              </button>
+            </div>
+          ) : (
+            <>
+          {contacts.length > 0 && showContacts && (
             <div className="overflow-x-auto rounded-2xl border border-white/15 bg-white/[0.07] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-[18px]">
               <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
                 Близкие
@@ -815,12 +852,12 @@ export default function GlobeLobby({
             <button
               type="button"
               className="memory-gem-fab pointer-events-auto"
-              disabled={banned || !me}
+              disabled={banned}
               onClick={() => {
-                if (!me) return;
-                setDropPoint({ lat: me.lat, lng: me.lng });
+                setLayersOpen(false);
+                setIsTargetingMode(true);
               }}
-              title="Оставить капсулу здесь"
+              title="Выбрать место для капсулы"
             >
               <Gem size={16} />
               Капсула
@@ -858,8 +895,19 @@ export default function GlobeLobby({
               </div>
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
+
+      {isTargetingMode && (
+        <div className="gem-crosshair" aria-hidden>
+          <span className="gem-crosshair-ring" />
+          <span className="gem-crosshair-core" />
+          <span className="gem-crosshair-h" />
+          <span className="gem-crosshair-v" />
+        </div>
+      )}
 
       {arOpen && (
         <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
