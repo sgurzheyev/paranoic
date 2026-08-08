@@ -14,6 +14,7 @@ import {
   FileDown,
   Link2,
   Pencil,
+  PhoneIncoming,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -112,6 +113,7 @@ export default function App() {
   const [nameDraft, setNameDraft] = useState(identity.name);
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [hostingSelf, setHostingSelf] = useState(true);
+  const [incomingConnection, setIncomingConnection] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -319,18 +321,40 @@ export default function App() {
       p2pRef.current = new P2PConnection({
         onStatus: (status) => {
           setP2pStatus(status);
-          if (status === 'connected') setError('');
+          if (status === 'connected') {
+            setError('');
+            setIncomingConnection(false);
+          }
+          if (status === 'waiting-answer') {
+            setIncomingConnection(false);
+          }
         },
         onSignalingStatus: (status) => setSignalingStatus(status),
         onCallState: (state) => {
           setCallState(state);
-          if (state === 'in-call' || state === 'calling') setScreen('call');
+          if (state === 'in-call' || state === 'calling' || state === 'ringing') {
+            setScreen('call');
+          }
           if (state === 'idle') {
             attachLocalVideo(null);
             setScreen((s) => (s === 'call' ? 'home' : s));
           }
         },
-        onIncomingCall: () => setScreen('call'),
+        onIncomingConnection: () => {
+          setIncomingConnection(true);
+          setError('');
+        },
+        onConnectionDeclined: () => {
+          setIncomingConnection(false);
+          setError('Вызов отклонён');
+        },
+        onIncomingCall: () => {
+          setScreen('call');
+        },
+        onCallDeclined: () => {
+          setError('Звонок отклонён');
+          setScreen('home');
+        },
         onRemoteStream: (stream) => {
           if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
         },
@@ -540,6 +564,38 @@ export default function App() {
     }
   };
 
+  const acceptIncomingConnection = async () => {
+    setError('');
+    try {
+      await ensureP2P().acceptIncomingConnection();
+      setIncomingConnection(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось принять вызов');
+    }
+  };
+
+  const declineIncomingConnection = async () => {
+    await ensureP2P().declineIncomingConnection();
+    setIncomingConnection(false);
+  };
+
+  const acceptMediaCall = async () => {
+    setError('');
+    try {
+      const stream = await ensureP2P().acceptCall();
+      attachLocalVideo(stream);
+      setScreen('call');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+      setScreen('home');
+    }
+  };
+
+  const declineMediaCall = async () => {
+    await ensureP2P().declineCall();
+    setScreen('home');
+  };
+
   const hangUp = async () => {
     await p2pRef.current?.hangUp();
     attachLocalVideo(null);
@@ -676,6 +732,34 @@ export default function App() {
 
       {uploadProgress !== null && (
         <div className="banner info">Отправка… {Math.round(uploadProgress * 100)}%</div>
+      )}
+
+      {incomingConnection && screen === 'home' && (
+        <div className="banner incoming-call" role="dialog" aria-label="Входящий вызов">
+          <div className="incoming-call-body">
+            <PhoneIncoming size={22} />
+            <div>
+              <p className="incoming-call-title">Входящий вызов</p>
+              <p className="incoming-call-sub">Кто-то открыл вашу магическую ссылку</p>
+            </div>
+          </div>
+          <div className="incoming-call-actions">
+            <button
+              type="button"
+              className="accept-file-btn"
+              onClick={() => void acceptIncomingConnection()}
+            >
+              Принять
+            </button>
+            <button
+              type="button"
+              className="decline-call-btn"
+              onClick={() => void declineIncomingConnection()}
+            >
+              Отклонить
+            </button>
+          </div>
+        </div>
       )}
 
       <main className="app-main">
@@ -897,27 +981,59 @@ export default function App() {
 
         {screen === 'call' && (
           <section className="call">
-            <div className="call-stage">
-              <div className="video-circle remote">
-                <video ref={remoteVideoRef} autoPlay playsInline />
-                <span className="video-label">{peerLabel}</span>
+            {callState === 'ringing' ? (
+              <div className="incoming-media-card">
+                <div className="avatar lg" style={{ background: 'var(--call)' }}>
+                  <PhoneIncoming size={28} />
+                </div>
+                <h2 className="incoming-media-title">Входящий звонок</h2>
+                <p className="incoming-media-sub">{peerLabel}</p>
+                <div className="incoming-call-actions row">
+                  <button
+                    type="button"
+                    className="accept-file-btn large"
+                    onClick={() => void acceptMediaCall()}
+                  >
+                    Принять
+                  </button>
+                  <button
+                    type="button"
+                    className="decline-call-btn large"
+                    onClick={() => void declineMediaCall()}
+                  >
+                    Отклонить
+                  </button>
+                </div>
               </div>
-              <div className="video-circle local">
-                <video ref={localVideoRef} autoPlay playsInline muted />
-                <span className="video-label">Вы</span>
-              </div>
-            </div>
-            <p className="call-status">
-              {callState === 'calling'
-                ? 'Соединяем…'
-                : callState === 'in-call'
-                  ? 'Разговор идёт'
-                  : 'Звонок'}
-            </p>
-            <button type="button" className="mega-btn hangup" onClick={() => void hangUp()}>
-              <PhoneOff size={32} />
-              Завершить
-            </button>
+            ) : (
+              <>
+                <div className="call-stage">
+                  <div className="video-circle remote">
+                    <video ref={remoteVideoRef} autoPlay playsInline />
+                    <span className="video-label">{peerLabel}</span>
+                  </div>
+                  <div className="video-circle local">
+                    <video ref={localVideoRef} autoPlay playsInline muted />
+                    <span className="video-label">Вы</span>
+                  </div>
+                </div>
+                <p className="call-status">
+                  {callState === 'calling'
+                    ? 'Ожидаем ответа…'
+                    : callState === 'in-call'
+                      ? 'Разговор идёт'
+                      : 'Звонок'}
+                </p>
+                <button
+                  type="button"
+                  className="mega-btn hangup"
+                  onClick={() => void (callState === 'calling' ? hangUp() : hangUp())}
+                >
+                  <PhoneOff size={32} />
+                  {callState === 'calling' ? 'Отменить' : 'Завершить'}
+                </button>
+              </>
+            )}
           </section>
         )}
       </main>

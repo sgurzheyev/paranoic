@@ -563,6 +563,105 @@ textarea {
   filter: brightness(1.08);
 }
 
+.accept-file-btn.large {
+  padding: 14px 22px;
+  font-size: 1rem;
+  min-width: 140px;
+}
+
+.banner.incoming-call {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  color: var(--text-strong);
+}
+
+.incoming-call-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--call);
+}
+
+.incoming-call-title {
+  margin: 0;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
+.incoming-call-sub {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.incoming-call-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.incoming-call-actions.row {
+  justify-content: center;
+  width: 100%;
+}
+
+.decline-call-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(251, 113, 133, 0.4);
+  background: rgba(251, 113, 133, 0.12);
+  color: #fecdd3;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.decline-call-btn.large {
+  padding: 14px 22px;
+  font-size: 1rem;
+  min-width: 140px;
+}
+
+.decline-call-btn:hover {
+  filter: brightness(1.08);
+}
+
+.incoming-media-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  padding: 24px 12px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.avatar.lg {
+  width: 72px;
+  height: 72px;
+  color: #0b1220;
+}
+
+.incoming-media-title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
+.incoming-media-sub {
+  margin: 0;
+  color: var(--muted);
+}
+
 .chat-compose {
   display: flex;
   gap: 10px;

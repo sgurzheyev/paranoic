@@ -1,8 +1,8 @@
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { Canvas, useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { ArrowLeft, MapPin, Phone, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Phone, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { initials } from './identity';
 import type { PresenceUser } from './presence';
 
@@ -21,6 +21,9 @@ type GlobeLobbyProps = {
 const SPHERE_RADIUS = 8;
 const EARTH_TEX =
   'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg';
+const FOV_DEFAULT = 75;
+const FOV_MIN = 32;
+const FOV_MAX = 100;
 
 /** lat/lng → точка на внутренней поверхности сферы (вид из центра). */
 export function latLngToPosition(
@@ -36,7 +39,15 @@ export function latLngToPosition(
   return [x, y, z];
 }
 
-function LookAroundControls({ enabled }: { enabled: boolean }) {
+function LookAroundControls({
+  enabled,
+  fovRef,
+  onFovChange,
+}: {
+  enabled: boolean;
+  fovRef: MutableRefObject<number>;
+  onFovChange: (fov: number) => void;
+}) {
   const { camera, gl } = useThree();
   const yaw = useRef(0.4);
   const pitch = useRef(-0.08);
@@ -46,13 +57,26 @@ function LookAroundControls({ enabled }: { enabled: boolean }) {
   useMemo(() => {
     camera.rotation.order = 'YXZ';
     camera.position.set(0, 0, 0);
-  }, [camera]);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = fovRef.current;
+      camera.updateProjectionMatrix();
+    }
+  }, [camera, fovRef]);
 
   useFrame(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    if (Math.abs(camera.fov - fovRef.current) > 0.01) {
+      camera.fov = fovRef.current;
+      camera.updateProjectionMatrix();
+    }
     if (!enabled) return;
-    camera.position.set(0, 0, 0);
     camera.rotation.y = yaw.current;
     camera.rotation.x = pitch.current;
+    // Чем ближе зум (меньше FOV), тем сильнее выезд к поверхности.
+    const zoomT = (FOV_MAX - fovRef.current) / (FOV_MAX - FOV_MIN);
+    const dolly = zoomT * SPHERE_RADIUS * 0.72;
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    camera.position.copy(forward.multiplyScalar(dolly));
   });
 
   useMemo(() => {
@@ -69,8 +93,9 @@ function LookAroundControls({ enabled }: { enabled: boolean }) {
       const dx = e.clientX - last.current.x;
       const dy = e.clientY - last.current.y;
       last.current = { x: e.clientX, y: e.clientY };
-      yaw.current -= dx * 0.005;
-      pitch.current -= dy * 0.004;
+      const sens = 0.0035 + (fovRef.current / FOV_MAX) * 0.002;
+      yaw.current -= dx * sens;
+      pitch.current -= dy * sens;
       pitch.current = Math.max(-1.35, Math.min(1.35, pitch.current));
     };
     const onUp = (e: PointerEvent) => {
@@ -81,12 +106,20 @@ function LookAroundControls({ enabled }: { enabled: boolean }) {
         /* */
       }
     };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 4 : -4;
+      const next = Math.min(FOV_MAX, Math.max(FOV_MIN, fovRef.current + delta));
+      fovRef.current = next;
+      onFovChange(next);
+    };
 
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerup', onUp);
     el.addEventListener('pointercancel', onUp);
     el.addEventListener('pointerleave', onUp);
+    el.addEventListener('wheel', onWheel, { passive: false });
 
     return () => {
       el.removeEventListener('pointerdown', onDown);
@@ -94,8 +127,9 @@ function LookAroundControls({ enabled }: { enabled: boolean }) {
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('pointercancel', onUp);
       el.removeEventListener('pointerleave', onUp);
+      el.removeEventListener('wheel', onWheel);
     };
-  }, [enabled, gl]);
+  }, [enabled, gl, fovRef, onFovChange]);
 
   return null;
 }
@@ -272,17 +306,21 @@ function MapScene({
   selectedId,
   onSelect,
   flying,
+  fovRef,
+  onFovChange,
 }: {
   people: MapPerson[];
   selectedId: string | null;
   onSelect: (person: MapPerson, pos: [number, number, number]) => void;
   flying: boolean;
+  fovRef: MutableRefObject<number>;
+  onFovChange: (fov: number) => void;
 }) {
   return (
     <>
       <color attach="background" args={['#02040a']} />
       <ambientLight intensity={0.55} />
-      <LookAroundControls enabled={!flying} />
+      <LookAroundControls enabled={!flying} fovRef={fovRef} onFovChange={onFovChange} />
       <Suspense fallback={null}>
         <EarthShell />
       </Suspense>
@@ -337,7 +375,15 @@ export default function GlobeLobby({
 }: GlobeLobbyProps) {
   const [selected, setSelected] = useState<MapPerson | null>(null);
   const [selectedPos, setSelectedPos] = useState<[number, number, number] | null>(null);
+  const [fov, setFov] = useState(FOV_DEFAULT);
+  const fovRef = useRef(FOV_DEFAULT);
   const flying = selected !== null && selectedPos !== null;
+
+  const applyFov = (next: number) => {
+    const clamped = Math.min(FOV_MAX, Math.max(FOV_MIN, next));
+    fovRef.current = clamped;
+    setFov(clamped);
+  };
 
   const geoHint =
     geoSource === 'gps'
@@ -349,7 +395,7 @@ export default function GlobeLobby({
   return (
     <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
       <Canvas
-        camera={{ position: [0, 0, 0], fov: 75, near: 0.05, far: 100 }}
+        camera={{ position: [0, 0, 0], fov: FOV_DEFAULT, near: 0.05, far: 100 }}
         gl={{ antialias: true, alpha: false }}
         onCreated={({ camera }) => {
           camera.rotation.order = 'YXZ';
@@ -362,6 +408,8 @@ export default function GlobeLobby({
             people={people}
             selectedId={selected?.userId ?? null}
             flying={flying}
+            fovRef={fovRef}
+            onFovChange={setFov}
             onSelect={(person, pos) => {
               setSelected(person);
               setSelectedPos(pos);
@@ -392,6 +440,29 @@ export default function GlobeLobby({
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs text-slate-300">
             <MapPin size={12} /> {geoHint}
           </p>
+        </div>
+
+        <div className="pointer-events-auto mt-auto flex justify-end px-4 pb-8 sm:px-6">
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              aria-label="Приблизить"
+              onClick={() => applyFov(fovRef.current - 8)}
+              disabled={fov <= FOV_MIN}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/45 text-slate-100 backdrop-blur-md transition hover:bg-black/60 disabled:opacity-35"
+            >
+              <ZoomIn size={18} />
+            </button>
+            <button
+              type="button"
+              aria-label="Отдалить"
+              onClick={() => applyFov(fovRef.current + 8)}
+              disabled={fov >= FOV_MAX}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/45 text-slate-100 backdrop-blur-md transition hover:bg-black/60 disabled:opacity-35"
+            >
+              <ZoomOut size={18} />
+            </button>
+          </div>
         </div>
       </div>
 
