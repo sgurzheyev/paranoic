@@ -34,6 +34,7 @@ import ProfileModal from './ProfileModal';
 import AdminDashboard from './AdminDashboard';
 import CallOverlay from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
+import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
@@ -1974,6 +1975,15 @@ export default function App() {
   };
 
   const connected = p2pStatus === 'connected';
+  const isActiveSession =
+    connected ||
+    callState === 'calling' ||
+    callState === 'in-call' ||
+    callState === 'ringing';
+  const liquidNavActive: LiquidNavTab =
+    callState === 'calling' || callState === 'in-call' || callState === 'ringing'
+      ? 'camera'
+      : 'chat';
 
   const shellStyle =
     appMode === 'paranoic'
@@ -2036,7 +2046,9 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}`}
+      className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}${
+        isActiveSession ? ' has-liquid-nav' : ''
+      }`}
       style={shellStyle}
     >
       {profileOpen && (
@@ -2204,7 +2216,7 @@ export default function App() {
             </div>
 
             {guestPeerId ? (
-              <div className="room-card guest-peer-card">
+              <div className="room-card guest-peer-card liquid-glass-card">
                 <Avatar
                   name={peerLabel}
                   color={peerColor}
@@ -2261,7 +2273,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                <div className="room-card magic-card">
+                <div className="room-card magic-card liquid-glass-card">
                   <Link2 size={28} className="room-card-icon" />
                   <p className="room-id-label">Ваша магическая ссылка</p>
                   <p className="mono-box magic-url">{magicLink}</p>
@@ -2322,7 +2334,7 @@ export default function App() {
             )}
 
             {!guestPeerId && (
-            <div className="contacts-panel">
+            <div className="contacts-panel liquid-glass-card">
               <div className="contacts-head">
                 <h2>Контакты</h2>
                 <span className="contacts-count">{contacts.length}</span>
@@ -2833,6 +2845,28 @@ export default function App() {
         onHangUp={() => void hangUp()}
         onToggleScreenShare={() => void toggleScreenShare()}
       />
+
+      {isActiveSession && (
+        <LiquidNavigationBar
+          active={liquidNavActive}
+          onChat={() => {
+            setCallExpanded(false);
+            setScreen('chat');
+          }}
+          onCamera={() => {
+            if (callState === 'in-call' || callState === 'calling') {
+              setCallExpanded(true);
+              return;
+            }
+            void startCall();
+            setCallExpanded(true);
+          }}
+          onMap={() => {
+            setCallExpanded(false);
+            setAppMode('family');
+          }}
+        />
+      )}
 
       <input
         ref={fileInputRef}
