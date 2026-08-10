@@ -42,8 +42,8 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: 'Method not allowed' }, 405);
   }
 
-  const apiKey = Deno.env.get('OPENAI_API_KEY');
-  if (!apiKey) {
+  const openAiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!openAiKey) {
     return jsonResponse({ error: 'OPENAI_API_KEY is not configured' }, 500);
   }
 
@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
     const openaiRes = await fetch(OPENAI_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${openAiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

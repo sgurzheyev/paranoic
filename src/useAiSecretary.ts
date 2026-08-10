@@ -8,6 +8,8 @@ type OpenAiCompletion = {
 };
 
 function parseReply(data: unknown): string {
+  if (!data) throw new Error('Пустой ответ от сервера');
+
   const payload = data as OpenAiCompletion;
   if (typeof payload?.error === 'string') {
     throw new Error(payload.error);
@@ -20,18 +22,27 @@ function parseReply(data: unknown): string {
   return reply;
 }
 
-function friendlyInvokeError(err: unknown): string {
+function isNetworkError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
   if (err instanceof Error) {
-    if (/failed to fetch|network|load failed/i.test(err.message)) {
-      return 'Облако недоступно. Проверьте сеть и что функция ai-secretary задеплоена.';
-    }
-    return err.message;
+    return /failed to fetch|network|load failed|fetch error/i.test(err.message);
   }
-  return 'Не удалось связаться с ИИ-секретарём';
+  return false;
+}
+
+/** Сообщение для UI чата (с префиксом «Канал оборван»). */
+export function formatAiChannelError(err: unknown): string {
+  if (isNetworkError(err)) {
+    return 'Канал оборван: Нет связи с сервером';
+  }
+  const detail =
+    err instanceof Error ? err.message : 'Не удалось связаться с ИИ-секретарём';
+  return `Канал оборван: ${detail}`;
 }
 
 /**
  * ИИ-телохранитель через Supabase Edge Function → OpenAI gpt-4o-mini.
+ * Прямых запросов к OpenAI / Ollama с клиента нет.
  */
 export function useAiSecretary() {
   const [loading, setLoading] = useState(false);
@@ -63,13 +74,13 @@ export function useAiSecretary() {
           ? `${trimmed}\n\n[Контекст обстановки]\n${situationContext.trim()}`
           : trimmed;
 
+        const messages = [
+          { role: 'system' as const, content: BODYGUARD_SYSTEM_PROMPT },
+          { role: 'user' as const, content: userContent },
+        ];
+
         const { data, error: invokeError } = await sb.functions.invoke(AI_SECRETARY_FUNCTION, {
-          body: {
-            messages: [
-              { role: 'system', content: BODYGUARD_SYSTEM_PROMPT },
-              { role: 'user', content: userContent },
-            ],
-          },
+          body: { messages },
         });
 
         if (cancelledRef.current) {
@@ -77,7 +88,12 @@ export function useAiSecretary() {
         }
 
         if (invokeError) {
-          throw new Error(invokeError.message || 'Edge Function недоступна');
+          // Тело ошибки иногда приходит в data (non-2xx от Edge Function).
+          if (data && typeof data === 'object' && 'error' in data) {
+            const bodyErr = (data as { error?: string }).error;
+            if (bodyErr) throw new Error(bodyErr);
+          }
+          throw invokeError;
         }
 
         return parseReply(data);
@@ -85,7 +101,7 @@ export function useAiSecretary() {
         if (cancelledRef.current) {
           throw new Error('Запрос отменён');
         }
-        const msg = friendlyInvokeError(e);
+        const msg = formatAiChannelError(e);
         setError(msg);
         throw new Error(msg);
       } finally {

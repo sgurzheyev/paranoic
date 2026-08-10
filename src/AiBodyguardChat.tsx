@@ -55,14 +55,15 @@ export default function AiBodyguardChat({
       const reply = await generate(text, situation);
       setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: reply }]);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Облако недоступно';
+      const msg =
+        e instanceof Error ? e.message : 'Канал оборван: Нет связи с сервером';
       setMessages((prev) => [
         ...prev,
         {
           id: uid(),
           role: 'assistant',
           isError: true,
-          content: msg,
+          content: msg.startsWith('Канал оборван:') ? msg : `Канал оборван: ${msg}`,
         },
       ]);
     }
