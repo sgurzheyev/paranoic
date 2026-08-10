@@ -15,7 +15,6 @@ import {
   FileDown,
   Link2,
   Pencil,
-  PhoneIncoming,
   Settings2,
   Paperclip,
   Ghost,
@@ -35,6 +34,7 @@ import AdminDashboard from './AdminDashboard';
 import CallOverlay from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
+import GuestDirectCall from './GuestDirectCall';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
@@ -44,6 +44,7 @@ import {
   type CallerInfo,
 } from './callSignaling';
 import { fetchMyAccessFlags } from './admin';
+import { resolveCallerInfo } from './callers';
 import {
   bindAudioUnlock,
   closeActiveNotification,
@@ -270,10 +271,20 @@ export default function App() {
   const typingSentRef = useRef(false);
   const peerTypingClearRef = useRef<number | null>(null);
   const lastBubbleTapRef = useRef<{ id: string; at: number } | null>(null);
+  const contactsRef = useRef(contacts);
+  const presenceUsersRef = useRef(presenceUsers);
 
   useEffect(() => {
     guestPeerIdRef.current = guestPeerId;
   }, [guestPeerId]);
+
+  useEffect(() => {
+    contactsRef.current = contacts;
+  }, [contacts]);
+
+  useEffect(() => {
+    presenceUsersRef.current = presenceUsers;
+  }, [presenceUsers]);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -694,10 +705,18 @@ export default function App() {
       onOffer: (offer) => {
         if (cancelled) return;
         if (isBannedRef.current) return;
-        setIncomingRing({ callId: offer.callId, from: offer.from });
+        setIncomingConnection(false);
         setPeerLabel(offer.from.name || callerDisplayName(offer.from));
         setPeerAvatarUrl(offer.from.avatarUrl || '');
         setPeerColor(offer.from.color || '#60a5fa');
+        peerMetaRef.current = {
+          id: offer.from.id,
+          label: offer.from.name || callerDisplayName(offer.from),
+          avatarUrl: offer.from.avatarUrl || '',
+          color: offer.from.color || '#60a5fa',
+        };
+        setIncomingRing({ callId: offer.callId, from: offer.from });
+        setCallExpanded(true);
         startRingtone();
         notifyIfHidden('Входящий звонок', {
           body: `Вам звонит ${callerDisplayName(offer.from)}`,
@@ -850,6 +869,9 @@ export default function App() {
           if (status === 'connected') {
             setError('');
             setIncomingConnection(false);
+            setIncomingRing(null);
+            stopRingtone();
+            closeActiveNotification();
             // Гость по магической ссылке — сразу в диалог с этим peer.
             if (guestPeerIdRef.current) {
               setScreen('chat');
@@ -957,7 +979,7 @@ export default function App() {
             setCallExpanded(false);
             stopRingtone();
             closeActiveNotification();
-            if (!pendingRingAcceptRef.current) {
+            if (!pendingRingAcceptRef.current && !incomingConnection) {
               setIncomingRing(null);
             }
             setScreen((s) => (s === 'call' ? 'chat' : s));
@@ -965,14 +987,48 @@ export default function App() {
         },
         onNetworkQuality: (quality) => setNetworkQuality(quality),
         onScreenShare: (active) => setScreenSharing(active),
-        onIncomingConnection: () => {
+        onIncomingConnection: (info) => {
           setIncomingConnection(true);
           setError('');
           playReceiveSound();
+          startRingtone();
+          setCallExpanded(true);
           notifyIfHidden('Входящий вызов', {
             body: 'Кто-то открыл вашу магическую ссылку',
             tag: 'paranoic-link',
           });
+          void (async () => {
+            try {
+              const caller = await resolveCallerInfo(
+                info.peerId,
+                contactsRef.current,
+                presenceUsersRef.current
+              );
+              setPeerLabel(caller.name);
+              setPeerAvatarUrl(caller.avatarUrl);
+              setPeerColor(caller.color);
+              peerMetaRef.current = {
+                id: caller.id,
+                label: caller.name,
+                avatarUrl: caller.avatarUrl,
+                color: caller.color,
+              };
+              await setActivePeer(caller.id, caller.name);
+              setIncomingRing({ callId: newCallId(), from: caller });
+            } catch (e) {
+              console.warn('[paranoic] resolve incoming caller', e);
+              setIncomingRing({
+                callId: newCallId(),
+                from: {
+                  id: info.peerId,
+                  name: 'Гость',
+                  username: '',
+                  avatarUrl: '',
+                  color: '#60a5fa',
+                },
+              });
+            }
+          })();
           if (pendingRingAcceptRef.current) {
             void (async () => {
               try {
@@ -986,8 +1042,10 @@ export default function App() {
         },
         onConnectionDeclined: () => {
           setIncomingConnection(false);
+          setIncomingRing(null);
           setError('Вызов отклонён');
           stopRingtone();
+          closeActiveNotification();
         },
         onIncomingCall: () => {
           const meta = peerMetaRef.current;
@@ -1426,6 +1484,19 @@ export default function App() {
     returnToOwnInbox();
   };
 
+  const guestCallHost = async () => {
+    setError('');
+    void ensureNotifyPermission();
+    if (isBannedRef.current) {
+      setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+      return;
+    }
+    pendingStartCallRef.current = true;
+    if (connected) {
+      await startCall();
+    }
+  };
+
   const startCall = async () => {
     setError('');
     void ensureNotifyPermission();
@@ -1460,19 +1531,12 @@ export default function App() {
     }
   };
 
-  const acceptIncomingConnection = async () => {
-    setError('');
-    try {
-      await ensureP2P().acceptIncomingConnection();
-      setIncomingConnection(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось принять вызов');
-    }
-  };
-
   const declineIncomingConnection = async () => {
     await ensureP2P().declineIncomingConnection();
     setIncomingConnection(false);
+    setIncomingRing(null);
+    stopRingtone();
+    closeActiveNotification();
   };
 
   const acceptMediaCall = async () => {
@@ -1485,6 +1549,18 @@ export default function App() {
       if (p2pRef.current?.currentCallState === 'ringing') {
         const stream = await ensureP2P().acceptCall();
         attachLocalVideo(stream);
+        setIncomingRing(null);
+        setIncomingConnection(false);
+        pendingRingAcceptRef.current = false;
+        pendingAcceptCallerRef.current = null;
+        setCallExpanded(false);
+        setScreen('chat');
+        return;
+      }
+
+      if (incomingConnection) {
+        await ensureP2P().acceptIncomingConnection();
+        setIncomingConnection(false);
         setIncomingRing(null);
         pendingRingAcceptRef.current = false;
         pendingAcceptCallerRef.current = null;
@@ -1499,16 +1575,13 @@ export default function App() {
         pendingAcceptCallerRef.current = ring.from;
         setIncomingRing(null);
         setScreen('chat');
-        if (incomingConnection) {
-          await ensureP2P().acceptIncomingConnection();
-          setIncomingConnection(false);
-        }
         return;
       }
 
       const stream = await ensureP2P().acceptCall();
       attachLocalVideo(stream);
       setIncomingRing(null);
+      setIncomingConnection(false);
       setCallExpanded(false);
       setScreen('chat');
     } catch (e) {
@@ -1527,6 +1600,10 @@ export default function App() {
     setIncomingRing(null);
     pendingRingAcceptRef.current = false;
     pendingAcceptCallerRef.current = null;
+    if (incomingConnection) {
+      await declineIncomingConnection();
+      return;
+    }
     if (ring?.from.id) {
       void callInboxRef.current?.sendReject(
         ring.from.id,
@@ -2121,37 +2198,24 @@ export default function App() {
         <div className="banner info">Отправка… {Math.round(uploadProgress * 100)}%</div>
       )}
 
-      {incomingConnection && screen === 'home' && (
-        <div className="banner incoming-call" role="dialog" aria-label="Входящий вызов">
-          <div className="incoming-call-body">
-            <PhoneIncoming size={22} />
-            <div>
-              <p className="incoming-call-title">Входящий вызов</p>
-              <p className="incoming-call-sub">Кто-то открыл вашу магическую ссылку</p>
-            </div>
-          </div>
-          <div className="incoming-call-actions">
-            <button
-              type="button"
-              className="accept-file-btn"
-              onClick={() => void acceptIncomingConnection()}
-            >
-              Принять
-            </button>
-            <button
-              type="button"
-              className="decline-call-btn"
-              onClick={() => void declineIncomingConnection()}
-            >
-              Отклонить
-            </button>
-          </div>
-        </div>
-      )}
-
       <main className="app-main">
         {screen === 'home' && (
           <section className="home">
+            {guestPeerId ? (
+              <GuestDirectCall
+                hostName={peerLabel}
+                hostColor={peerColor}
+                hostAvatarUrl={peerAvatarUrl}
+                hostOnline={onlineIds.has(guestPeerId)}
+                connected={connected}
+                joining={joining}
+                signalingStatus={signalingStatus}
+                callState={callState}
+                onCall={() => void guestCallHost()}
+                onBack={returnToOwnInbox}
+              />
+            ) : (
+              <>
             <div className="identity-card">
               <button
                 type="button"
@@ -2214,64 +2278,6 @@ export default function App() {
               </button>
             </div>
 
-            {guestPeerId ? (
-              <div className="room-card guest-peer-card liquid-glass-card">
-                <Avatar
-                  name={peerLabel}
-                  color={peerColor}
-                  avatarUrl={peerAvatarUrl}
-                  size="lg"
-                  online={onlineIds.has(guestPeerId) ? true : 'off'}
-                />
-                <p className="room-id-label">Магическая ссылка</p>
-                <h2 className="guest-peer-title">{peerLabel}</h2>
-                <p className="mono-id">ID · {guestPeerId}</p>
-                {!connected ? (
-                  <>
-                    <p className="lead">
-                      {joining || signalingStatus
-                        ? signalingStatus || 'Подключаемся к этому пользователю…'
-                        : 'Ожидаем, пока собеседник примет вызов…'}
-                    </p>
-                    <button type="button" className="text-link" onClick={returnToOwnInbox}>
-                      Вернуться к своему профилю
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p className="lead">
-                      На связи: <strong>{peerLabel}</strong>
-                    </p>
-                    <div className="mega-grid">
-                      <button type="button" className="mega-btn call" onClick={() => void startCall()}>
-                        <Phone size={36} />
-                        Позвонить
-                      </button>
-                      <button
-                        type="button"
-                        className="mega-btn chat"
-                        onClick={() => setScreen('chat')}
-                      >
-                        <MessageCircle size={36} />
-                        Написать
-                      </button>
-                      <button
-                        type="button"
-                        className="mega-btn media"
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <ImagePlus size={36} />
-                        Отправить фото / видео
-                      </button>
-                    </div>
-                    <button type="button" className="text-link danger" onClick={disconnect}>
-                      <Unplug size={16} /> Разорвать связь
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : (
-              <>
                 <div className="room-card magic-card liquid-glass-card">
                   <Link2 size={28} className="room-card-icon" />
                   <p className="room-id-label">Ваша магическая ссылка</p>
@@ -2329,10 +2335,7 @@ export default function App() {
                     </button>
                   </>
                 )}
-              </>
-            )}
 
-            {!guestPeerId && (
             <div className="contacts-panel liquid-glass-card">
               <div className="contacts-head">
                 <h2>Контакты</h2>
@@ -2379,7 +2382,6 @@ export default function App() {
                 </ul>
               )}
             </div>
-            )}
 
             {getRoomIdFromUrl() && (
               <p className="hint muted-sep">
@@ -2388,8 +2390,10 @@ export default function App() {
             )}
             {keyString && (
               <p className="hint muted-sep">
-                E2EE активен · {guestPeerId ? `гость → ${guestPeerId}` : hostingSelf ? 'свой инбокс' : 'гостевой'}
+                E2EE активен · {hostingSelf ? 'свой инбокс' : 'гостевой'}
               </p>
+            )}
+              </>
             )}
           </section>
         )}
@@ -2830,6 +2834,7 @@ export default function App() {
         />
       )}
 
+      {!incomingRing && (
       <CallOverlay
         callState={callState === 'ringing' ? 'idle' : callState}
         peerLabel={peerLabel}
@@ -2844,8 +2849,9 @@ export default function App() {
         onHangUp={() => void hangUp()}
         onToggleScreenShare={() => void toggleScreenShare()}
       />
+      )}
 
-      {isActiveSession && (
+      {isActiveSession && !incomingRing && (
         <LiquidNavigationBar
           active={liquidNavActive}
           onChat={() => {

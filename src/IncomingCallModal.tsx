@@ -48,7 +48,7 @@ export default function IncomingCallModal({
             aria-label="Отклонить"
           >
             <PhoneOff size={28} />
-            <span>Отклонить</span>
+            <span>Сбросить</span>
           </button>
           <button
             type="button"

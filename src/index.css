@@ -4190,3 +4190,124 @@ textarea {
 .app-shell.messenger-shell.has-liquid-nav {
   padding-bottom: 88px;
 }
+
+/* ——— Guest Direct Call Mode ——— */
+.guest-direct-call {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  justify-content: center;
+  padding: 8px 0 24px;
+}
+
+.guest-direct-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.guest-direct-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 36px 24px 32px;
+  text-align: center;
+}
+
+.guest-direct-eyebrow {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(200, 205, 214, 0.7);
+}
+
+.guest-direct-name {
+  margin: 0;
+  font-size: clamp(1.6rem, 6vw, 2rem);
+  font-weight: 900;
+  color: var(--text-strong);
+}
+
+.guest-direct-hint {
+  margin: 0;
+  max-width: 280px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.guest-direct-call-btn {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: min(100%, 320px);
+  min-height: 120px;
+  margin-top: 12px;
+  padding: 20px 24px;
+  border: 1px solid rgba(125, 222, 168, 0.45);
+  border-radius: 28px;
+  background:
+    linear-gradient(165deg, rgba(125, 222, 168, 0.35), rgba(52, 211, 153, 0.15)),
+    rgba(255, 255, 255, 0.06);
+  color: #ecfdf5;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  box-shadow:
+    0 20px 48px rgba(52, 211, 153, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.guest-direct-call-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow:
+    0 24px 56px rgba(52, 211, 153, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.guest-direct-call-btn.is-waiting {
+  border-color: rgba(255, 255, 255, 0.2);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+    rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  animation: guest-call-pulse 2s ease-in-out infinite;
+}
+
+.guest-direct-call-btn.is-active {
+  opacity: 0.85;
+  cursor: default;
+}
+
+.guest-direct-call-pulse {
+  position: absolute;
+  inset: -40%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(125, 222, 168, 0.35), transparent 62%);
+  animation: guest-call-pulse 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes guest-call-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
