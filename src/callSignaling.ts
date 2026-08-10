@@ -47,8 +47,8 @@ function channelName(userId: string): string {
 }
 
 function audit(stage: string, detail?: unknown): void {
-  if (detail !== undefined) console.log('[P2P Audit]', stage, detail);
-  else console.log('[P2P Audit]', stage);
+  if (detail !== undefined) console.log('[P2P_DEBUG]', stage, detail);
+  else console.log('[P2P_DEBUG]', stage);
 }
 
 /**

@@ -267,11 +267,12 @@ export async function fetchProfileByUsername(
 
 /**
  * ?u=handle → реальный user id.
- * UUID → сразу id. Иначе — lookup `profiles.username`, затем короткий/legacy id.
+ * UUID → сразу id. Иначе — lookup `profiles.username`.
+ * Не найден → null (не подставляем сырой ник как room id).
  */
-export async function resolveHandleToUserId(handle: string): Promise<string> {
+export async function resolveHandleToUserId(handle: string): Promise<string | null> {
   const raw = handle.trim();
-  if (!raw) return raw;
+  if (!raw) return null;
 
   if (looksLikeUuid(raw)) {
     return raw;
@@ -279,10 +280,18 @@ export async function resolveHandleToUserId(handle: string): Promise<string> {
 
   // Не UUID → ищем по никнейму в profiles.
   const byUsername = await fetchProfileByUsername(raw);
-  if (byUsername?.id) return byUsername.id;
+  if (byUsername?.id) {
+    console.log('[P2P_DEBUG] resolve username', { handle: raw, userId: byUsername.id });
+    return byUsername.id;
+  }
 
   // Короткие id приложения / прямой id в profiles.
   const byId = await fetchRemoteProfile(raw);
-  if (byId?.id) return byId.id;
-  return raw;
+  if (byId?.id) {
+    console.log('[P2P_DEBUG] resolve id', { handle: raw, userId: byId.id });
+    return byId.id;
+  }
+
+  console.warn('[P2P_DEBUG] resolve failed — user not found', { handle: raw });
+  return null;
 }

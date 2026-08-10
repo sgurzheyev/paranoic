@@ -1057,19 +1057,30 @@ export default function App() {
         onNetworkQuality: (quality) => setNetworkQuality(quality),
         onScreenShare: (active) => setScreenSharing(active),
         onIncomingConnection: (info) => {
-          setIncomingConnection(true);
           setError('');
-          playReceiveSound();
-          startRingtone();
-          setCallExpanded(true);
-          notifyIfHidden('Входящий вызов', {
-            body: 'Кто-то открыл вашу магическую ссылку',
+          console.log('[P2P_DEBUG] onIncomingConnection — auto-accept P2P link', info);
+          // Магическая ссылка: сразу устанавливаем DataChannel.
+          // Медиазвонок по-прежнему требует Accept через CallInbox / call-invite.
+          void (async () => {
+            try {
+              await p2pRef.current?.acceptIncomingConnection();
+              setIncomingConnection(false);
+            } catch (e) {
+              console.warn('[P2P_DEBUG] auto-accept join failed', e);
+              setIncomingConnection(true);
+              setCallExpanded(true);
+              startRingtone();
+            }
+          })();
+          notifyIfHidden('Входящее подключение', {
+            body: 'Кто-то открыл вашу магическую ссылку — соединяем…',
             tag: 'paranoic-link',
           });
           void (async () => {
             try {
+              const resolveId = info.userId || info.peerId;
               const caller = await resolveCallerInfo(
-                info.peerId,
+                resolveId,
                 contactsRef.current,
                 presenceUsersRef.current
               );
@@ -1083,31 +1094,10 @@ export default function App() {
                 color: caller.color,
               };
               await setActivePeer(caller.id, caller.name);
-              setIncomingRing({ callId: newCallId(), from: caller });
             } catch (e) {
-              console.warn('[paranoic] resolve incoming caller', e);
-              setIncomingRing({
-                callId: newCallId(),
-                from: {
-                  id: info.peerId,
-                  name: 'Гость',
-                  username: '',
-                  avatarUrl: '',
-                  color: '#60a5fa',
-                },
-              });
+              console.warn('[P2P_DEBUG] resolve incoming caller', e);
             }
           })();
-          if (pendingRingAcceptRef.current) {
-            void (async () => {
-              try {
-                await p2pRef.current?.acceptIncomingConnection();
-                setIncomingConnection(false);
-              } catch (e) {
-                console.warn('[paranoic] auto-accept join failed', e);
-              }
-            })();
-          }
         },
         onConnectionDeclined: () => {
           setIncomingConnection(false);
@@ -1366,9 +1356,16 @@ export default function App() {
 
   ensureP2PRef.current = ensureP2P;
 
-  /** Вход в персональный инбокс / magic link / legacy room. */
+  /** Вход в персональный инбокс / magic link / legacy room.
+   * Инбокс держим и в Family (карта), иначе гости по магической ссылке вечно ждут. */
   useEffect(() => {
-    if (appMode !== 'paranoic') return;
+    if (appMode === 'select') {
+      p2pRef.current?.close();
+      p2pRef.current = null;
+      setSignalingStatus('');
+      setJoining(false);
+      return;
+    }
 
     let cancelled = false;
 
@@ -1387,47 +1384,59 @@ export default function App() {
         }
 
         const me = identityRef.current;
-        const urlHandle = getMagicTargetFromUrl();
-        const legacyRoom = getRoomIdFromUrl();
+        const urlHandle = appMode === 'paranoic' ? getMagicTargetFromUrl() : null;
+        const legacyRoom = appMode === 'paranoic' ? getRoomIdFromUrl() : null;
 
         // Резолв ?u=username|id → реальный peer id.
         let urlRoute = resolveMagicRoute(me.id, me.username);
-        if (urlRoute.kind === 'guest' && urlHandle) {
+        if (appMode === 'family') {
+          urlRoute = { kind: 'self' };
+        } else if (urlRoute.kind === 'guest' && urlHandle) {
           const resolvedId = await resolveHandleToUserId(urlHandle);
           if (cancelled) return;
+          if (!resolvedId) {
+            throw new Error(
+              `Пользователь «${urlHandle}» не найден. Проверьте никнейм или попросите ссылку с ID.`
+            );
+          }
           if (resolvedId === me.id) {
             urlRoute = { kind: 'self' };
           } else {
             urlRoute = { kind: 'guest', peerId: resolvedId };
           }
+          console.log('[P2P_DEBUG] magic route resolved', {
+            handle: urlHandle,
+            peerId: resolvedId,
+            kind: urlRoute.kind,
+          });
         }
 
-        // Явный гость из state (после connectToUser) или из ?u= в URL.
+        // В Family всегда свой инбокс (хост).
         const guestId =
-          (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
-          (guestPeerIdRef.current && guestPeerIdRef.current !== me.id
-            ? guestPeerIdRef.current
-            : null);
+          appMode === 'family'
+            ? null
+            : (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
+              (guestPeerIdRef.current && guestPeerIdRef.current !== me.id
+                ? guestPeerIdRef.current
+                : null);
 
         let room: string;
         let isHost: boolean;
         let provisionalPeer: string | null = null;
 
         if (guestId) {
-          // Гость: чат/звонок с конкретным пользователем — inbox по реальному id.
           room = personalInboxRoom(guestId);
           isHost = false;
           provisionalPeer = guestId;
           setGuestPeerId(guestId);
           guestPeerIdRef.current = guestId;
           setHostingSelf(false);
-          // В URL оставляем красивый username, если он был в ссылке.
           if (urlHandle && looksLikeUsername(urlHandle)) {
             setMagicUserInUrl(urlHandle);
           } else {
             setMagicUserInUrl(guestId);
           }
-        } else if (legacyRoom) {
+        } else if (legacyRoom && appMode === 'paranoic') {
           const resolved = resolveRoom();
           room = resolved.roomId;
           isHost = resolved.isHost;
@@ -1435,21 +1444,40 @@ export default function App() {
           setGuestPeerId(null);
           guestPeerIdRef.current = null;
         } else {
-          // Свой инбокс / свой профиль (?u=me или без ?u).
           room = personalInboxRoom(me.id);
           isHost = true;
           setHostingSelf(true);
-          setGuestPeerId(null);
-          guestPeerIdRef.current = null;
-          if (urlRoute.kind === 'self') {
-            setMagicUserInUrl(me.username || me.id);
-          } else {
-            clearMagicParamFromUrl();
+          if (appMode === 'paranoic') {
+            setGuestPeerId(null);
+            guestPeerIdRef.current = null;
+            if (urlRoute.kind === 'self') {
+              setMagicUserInUrl(me.username || me.id);
+            } else {
+              clearMagicParamFromUrl();
+            }
+            clearRoomParamFromUrl();
           }
-          clearRoomParamFromUrl();
         }
 
         if (cancelled) return;
+
+        if (
+          p2pRef.current?.currentRoomId === room &&
+          (p2pRef.current.currentStatus === 'waiting-answer' ||
+            p2pRef.current.currentStatus === 'connecting' ||
+            p2pRef.current.currentStatus === 'connected' ||
+            p2pRef.current.currentStatus === 'creating-offer')
+        ) {
+          console.log('[P2P_DEBUG] skip rejoin — already in room', {
+            room,
+            status: p2pRef.current.currentStatus,
+            appMode,
+          });
+          setRoomId(room);
+          setJoining(false);
+          return;
+        }
+
         setRoomId(room);
         setMagicLink(buildMagicLink(me));
 
@@ -1460,7 +1488,7 @@ export default function App() {
           setPeerColor(presence?.color || known?.color || '#60a5fa');
           setPeerLabel(known?.name || presence?.name || 'Близкий');
           await setActivePeer(provisionalPeer, known?.name || presence?.name || 'Близкий');
-        } else if (isHost) {
+        } else if (isHost && appMode === 'paranoic') {
           await setActivePeer(null);
         }
 
@@ -1472,6 +1500,7 @@ export default function App() {
         setKeyString(exported);
 
         const p2p = ensureP2PRef.current();
+        console.log('[P2P_DEBUG] joinRoom', { room, isHost, appMode, me: me.id });
         await p2p.joinRoom(room, { isHost });
       } catch (e) {
         if (!cancelled) {
@@ -1486,9 +1515,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      p2pRef.current?.close();
-      p2pRef.current = null;
-      setSignalingStatus('');
+      // Не закрываем P2P при family↔paranoic — переиспользуем ту же комнату.
     };
     // ensureP2P через ref — иначе смена peerLabel рвёт гостевую сессию и «сбрасывает» роутинг
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2169,8 +2196,19 @@ export default function App() {
   if (appMode === 'family') {
     return (
       <>
+        {error && <div className="banner error">{error}</div>}
         {adminOpen && (
           <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
+        )}
+        {incomingRing && (
+          <IncomingCallModal
+            caller={incomingRing.from}
+            onAccept={() => {
+              setAppMode('paranoic');
+              void acceptMediaCall();
+            }}
+            onReject={() => void declineMediaCall()}
+          />
         )}
         <GlobeLobby
           onBack={() => setAppMode('select')}

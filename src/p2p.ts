@@ -58,7 +58,7 @@ export type P2PHandlers = {
   /** Входящий медиазвонок — ждём Accept. */
   onIncomingCall?: () => void;
   /** Входящее P2P-подключение по магической ссылке — ждём Accept. */
-  onIncomingConnection?: (info: { peerId: string }) => void;
+  onIncomingConnection?: (info: { peerId: string; userId?: string }) => void;
   onConnectionDeclined?: () => void;
   onCallDeclined?: () => void;
   onFileProgress?: (id: string, progress: number) => void;
@@ -76,7 +76,7 @@ export type P2PHandlers = {
   onMessageReaction?: (id: string, emoji: string) => void;
 };
 
-type SignalJoin = { type: 'join'; peerId: string };
+type SignalJoin = { type: 'join'; peerId: string; userId?: string };
 type SignalJoinAck = { type: 'join-ack'; peerId: string; targetPeerId: string };
 type SignalOffer = { peerId: string; sdp: RTCSessionDescriptionInit };
 type SignalAnswer = { peerId: string; sdp: RTCSessionDescriptionInit };
@@ -111,9 +111,14 @@ const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
+function p2pDebug(stage: string, detail?: unknown): void {
+  if (detail !== undefined) console.log('[P2P_DEBUG]', stage, detail);
+  else console.log('[P2P_DEBUG]', stage);
+}
+
+/** @deprecated use p2pDebug — kept as alias for older call sites */
 function p2pAudit(stage: string, detail?: unknown): void {
-  if (detail !== undefined) console.log('[P2P Audit]', stage, detail);
-  else console.log('[P2P Audit]', stage);
+  p2pDebug(stage, detail);
 }
 
 function iceUrlList(server: RTCIceServer): string[] {
@@ -160,8 +165,12 @@ const FILE_TRANSFER_LOST = 'Связь потеряна';
 const ICE_CONNECT_TIMEOUT_MS = 25_000;
 /** Быстрее мягкий ICE при кратком обрыве / смене IP. */
 const ICE_SOFT_RESTART_DELAY_MS = 700;
+/** Гость ждёт offer от хоста; хост ждёт join. */
+const WAIT_FOR_PEER_TIMEOUT_MS = 45_000;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
+const WAIT_FOR_PEER_TIMEOUT_ERROR =
+  'Собеседник не ответил. Убедитесь, что он онлайн и открыл приложение.';
 const MEDIA_WATCH_MS = 2_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
 const NETWORK_WATCH_MS = 2_000;
@@ -421,6 +430,7 @@ export class P2PConnection {
   private iceRestarting = false;
   private iceCheckTimer: ReturnType<typeof setTimeout> | null = null;
   private iceSoftRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private waitPeerTimer: ReturnType<typeof setTimeout> | null = null;
 
   private peerId = '';
   private remotePeerId: string | null = null;
@@ -590,20 +600,33 @@ export class P2PConnection {
     if (this.isHost) {
       this.setSignalingStatus('Ожидаем собеседника...');
       this.setStatus('waiting-answer');
+      this.armWaitForPeerTimeout('host');
     } else {
       // Гость: join после SUBSCRIBED
       await this.sendJoin();
       this.startJoinRetry();
       this.setSignalingStatus('Ожидаем собеседника...');
+      this.armWaitForPeerTimeout('guest');
     }
   }
 
   private async sendJoin(): Promise<void> {
     if (!this.cachedIceServers) {
-      console.warn('[paranoic signal] join blocked: no ICE servers');
+      console.warn('[P2P_DEBUG] join blocked: no ICE servers');
       return;
     }
-    await this.broadcastReliable('join', { type: 'join', peerId: this.peerId });
+    // Identity могла ещё не успеть — подтянем из замыкания перед join.
+    const payload: SignalJoin = {
+      type: 'join',
+      peerId: this.peerId,
+      userId: this.localIdentity?.userId,
+    };
+    p2pDebug('send join', {
+      roomId: this.roomId,
+      peerId: this.peerId,
+      userId: payload.userId,
+    });
+    await this.broadcastReliable('join', payload);
   }
 
   private startJoinRetry(): void {
@@ -611,10 +634,12 @@ export class P2PConnection {
     // Сразу ещё раз + короткий интервал — меньше потерь первого join на Realtime.
     void this.sendJoin();
     this.joinRetryTimer = setInterval(() => {
+      // Не останавливаем на join-ack — только когда получили offer / PC / connected.
       if (this.handshakeStarted || this.pc || this.status === 'connected') {
         this.clearJoinRetry();
         return;
       }
+      p2pDebug('join retry', { roomId: this.roomId, peerId: this.peerId });
       void this.sendJoin();
     }, JOIN_RETRY_MS);
   }
@@ -624,6 +649,38 @@ export class P2PConnection {
       clearInterval(this.joinRetryTimer);
       this.joinRetryTimer = null;
     }
+  }
+
+  private clearWaitForPeerTimeout(): void {
+    if (this.waitPeerTimer) {
+      clearTimeout(this.waitPeerTimer);
+      this.waitPeerTimer = null;
+    }
+  }
+
+  private armWaitForPeerTimeout(role: 'host' | 'guest'): void {
+    this.clearWaitForPeerTimeout();
+    p2pDebug('arm wait-for-peer timeout', { role, ms: WAIT_FOR_PEER_TIMEOUT_MS });
+    this.waitPeerTimer = setTimeout(() => {
+      this.waitPeerTimer = null;
+      if (this.status === 'connected' || this.handshakeStarted || this.pc) return;
+      if (this.callState === 'in-call' || this.callState === 'calling') return;
+      p2pDebug('wait-for-peer timeout fired', {
+        role,
+        status: this.status,
+        callState: this.callState,
+        roomId: this.roomId,
+      });
+      this.clearJoinRetry();
+      this.clearCallInviteRetry();
+      this.pendingJoinPeerId = null;
+      this.handshakeStarted = false;
+      this.setSignalingStatus('');
+      this.setStatus('failed');
+      this.handlers.onError?.(new Error(WAIT_FOR_PEER_TIMEOUT_ERROR));
+      // PC ещё нет (ждём offer/join) — только стопаем ретраи и каналы.
+      this.teardownDataChannels();
+    }, WAIT_FOR_PEER_TIMEOUT_MS);
   }
 
   private clearCallInviteRetry(): void {
@@ -701,10 +758,18 @@ export class P2PConnection {
 
   /** Хост принимает входящее подключение по магической ссылке. */
   async acceptIncomingConnection(): Promise<void> {
-    if (!this.isHost || !this.pendingJoinPeerId) return;
+    if (!this.isHost || !this.pendingJoinPeerId) {
+      p2pDebug('acceptIncomingConnection skipped', {
+        isHost: this.isHost,
+        pending: this.pendingJoinPeerId,
+      });
+      return;
+    }
     this.remotePeerId = this.pendingJoinPeerId;
     this.pendingJoinPeerId = null;
+    this.clearWaitForPeerTimeout();
     this.setSignalingStatus('Собеседник найден, генерируем ключи...');
+    p2pDebug('acceptIncomingConnection → offer', { remotePeerId: this.remotePeerId });
     await this.startAsOfferer();
   }
 
@@ -1206,7 +1271,11 @@ export class P2PConnection {
 
   private onSignalJoinAck(payload: SignalJoinAck): void {
     if (!payload?.targetPeerId || payload.targetPeerId !== this.peerId) return;
-    this.clearJoinRetry();
+    // Не останавливаем join-retry здесь: ack ≠ offer. Хост мог ещё не принять.
+    p2pDebug('join-ack received (keep retrying until offer)', {
+      from: payload.peerId,
+      peerId: this.peerId,
+    });
   }
 
   private detachSignal(): void {
@@ -1226,6 +1295,13 @@ export class P2PConnection {
     if (!payload?.peerId || payload.peerId === this.peerId) return;
     // Только хост отвечает на join оффером — исключаем glare.
     if (!this.isHost) return;
+
+    p2pDebug('incoming join', {
+      fromPeerId: payload.peerId,
+      fromUserId: payload.userId,
+      status: this.status,
+      pending: this.pendingJoinPeerId,
+    });
 
     // Уже на связи — занято.
     if (this.status === 'connected') {
@@ -1277,15 +1353,17 @@ export class P2PConnection {
 
     this.pendingJoinPeerId = payload.peerId;
     this.remotePeerId = payload.peerId;
-    console.log('[paranoic signal] incoming join, awaiting accept', payload.peerId);
+    this.clearWaitForPeerTimeout();
     this.setSignalingStatus('Входящий вызов...');
-    // ACK сразу — гость перестаёт спамить join, пока ждём Accept.
     void this.broadcastReliable('join-ack', {
       type: 'join-ack',
       peerId: this.peerId,
       targetPeerId: payload.peerId,
     });
-    this.handlers.onIncomingConnection?.({ peerId: payload.peerId });
+    this.handlers.onIncomingConnection?.({
+      peerId: payload.peerId,
+      userId: payload.userId,
+    });
   }
 
   private onSignalReject(payload: SignalReject): void {
@@ -1306,9 +1384,14 @@ export class P2PConnection {
       return;
     }
     this.handshakeStarted = true;
+    this.clearWaitForPeerTimeout();
     this.polite = false;
     this.setStatus('creating-offer');
     this.setSignalingStatus('Собеседник найден, генерируем ключи...');
+    p2pDebug('create offer (startAsOfferer)', {
+      roomId: this.roomId,
+      remotePeerId: this.remotePeerId,
+    });
 
     try {
       const pc = await this.createPeerConnection();
@@ -1325,6 +1408,7 @@ export class P2PConnection {
       await pc.setLocalDescription(offer);
       this.setStatus('connecting');
       this.setSignalingStatus('Обмен маршрутами (ICE)...');
+      p2pDebug('broadcast offer', { peerId: this.peerId, sdpType: pc.localDescription?.type });
       await this.broadcastReliable('offer', {
         peerId: this.peerId,
         sdp: pc.localDescription!,
@@ -1332,6 +1416,7 @@ export class P2PConnection {
     } catch (e) {
       this.handshakeStarted = false;
       this.setStatus('failed');
+      p2pDebug('offer failed', e);
       this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось создать offer'));
     }
   }
@@ -1341,7 +1426,9 @@ export class P2PConnection {
     // Хост не принимает чужой offer (он сам инициатор).
     if (this.isHost) return;
 
+    p2pDebug('offer received', { from: payload.peerId });
     this.clearJoinRetry();
+    this.clearWaitForPeerTimeout();
     this.remotePeerId = payload.peerId;
     this.polite = true;
     this.handshakeStarted = true;
@@ -1368,13 +1455,16 @@ export class P2PConnection {
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
       this.setSignalingStatus('Обмен маршрутами (ICE)...');
+      p2pDebug('broadcast answer', { peerId: this.peerId });
       await this.broadcastReliable('answer', {
         peerId: this.peerId,
         sdp: this.pc.localDescription!,
       });
     } catch (e) {
+      this.handshakeStarted = false;
       this.setStatus('failed');
-      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось ответить на offer'));
+      p2pDebug('answer failed', e);
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось принять offer'));
     }
   }
 
@@ -1383,6 +1473,7 @@ export class P2PConnection {
     if (payload.peerId === this.peerId) return;
     try {
       if (!this.pc.currentRemoteDescription) {
+        p2pDebug('answer received', { from: payload.peerId });
         const answer = parseSessionDescription(payload.sdp, 'answer');
         await this.pc.setRemoteDescription(answer);
         await this.flushPendingCandidates();
@@ -2026,6 +2117,7 @@ export class P2PConnection {
     this.clearCallInviteRetry();
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
+    this.clearWaitForPeerTimeout();
     this.stopMediaWatchdog();
     this.stopNetworkWatch();
     void this.stopScreenShareInternal(false);
@@ -2528,6 +2620,7 @@ export class P2PConnection {
     this.clearCallInviteRetry();
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
+    this.clearWaitForPeerTimeout();
     this.stopMediaWatchdog();
     this.stopNetworkWatch();
     void this.stopScreenShareInternal(false);
