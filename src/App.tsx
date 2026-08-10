@@ -155,9 +155,16 @@ function nowTime() {
 export default function App() {
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const [appMode, setAppMode] = useState<AppMode>(() =>
-    getMagicTargetFromUrl() || getRoomIdFromUrl() ? 'paranoic' : 'select'
-  );
+  const [appMode, setAppMode] = useState<AppMode>(() => {
+    if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return 'paranoic';
+    try {
+      const start = new URLSearchParams(window.location.search).get('start');
+      if (start === 'paranoic' || start === 'family') return start;
+    } catch {
+      /* */
+    }
+    return 'select';
+  });
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
   const [keyString, setKeyString] = useState('');
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('idle');
