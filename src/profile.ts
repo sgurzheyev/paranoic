@@ -2,6 +2,7 @@ import { getSupabase, hasSupabaseConfig } from './lib/supabase';
 import {
   getOrCreateIdentity,
   isValidUuid,
+  looksLikeUsername,
   normalizeUsername,
   type UserIdentity,
 } from './identity';
@@ -267,14 +268,16 @@ export async function fetchProfileByUsername(
 
 /**
  * ?u=handle → реальный user id.
- * UUID → сразу id. Иначе — lookup `profiles.username`.
- * Не найден → null (не подставляем сырой ник как room id).
+ * UUID / legacy id → id (даже без строки в profiles).
+ * Username → lookup в profiles; не найден → null (нельзя угадать inbox).
  */
 export async function resolveHandleToUserId(handle: string): Promise<string | null> {
   const raw = handle.trim();
   if (!raw) return null;
 
-  if (looksLikeUuid(raw)) {
+  // UUID — всегда валидный peer id (профиль в Supabase не обязателен).
+  if (looksLikeUuid(raw) || isValidUuid(raw)) {
+    console.log('[P2P_DEBUG] resolve uuid', { handle: raw });
     return raw;
   }
 
@@ -285,11 +288,17 @@ export async function resolveHandleToUserId(handle: string): Promise<string | nu
     return byUsername.id;
   }
 
-  // Короткие id приложения / прямой id в profiles.
+  // Прямой id в profiles (короткий/legacy).
   const byId = await fetchRemoteProfile(raw);
   if (byId?.id) {
     console.log('[P2P_DEBUG] resolve id', { handle: raw, userId: byId.id });
     return byId.id;
+  }
+
+  // Не похоже на username — это peer id без строки profiles (офлайн-гость / legacy).
+  if (!looksLikeUsername(raw) && raw.length >= 8) {
+    console.log('[P2P_DEBUG] resolve legacy peer id', { handle: raw });
+    return raw;
   }
 
   console.warn('[P2P_DEBUG] resolve failed — user not found', { handle: raw });

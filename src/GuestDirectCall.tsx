@@ -1,6 +1,6 @@
 import { ArrowLeft, Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
-import type { CallState } from './p2p';
+import type { CallState, P2PStatus } from './p2p';
 
 type GuestDirectCallProps = {
   hostName: string;
@@ -11,6 +11,8 @@ type GuestDirectCallProps = {
   joining: boolean;
   signalingStatus: string;
   callState: CallState;
+  /** P2P status — чтобы не крутить «Подключаемся» после failed. */
+  connectionStatus?: P2PStatus;
   onCall: () => void;
   onCancel: () => void;
   onBack: () => void;
@@ -26,25 +28,34 @@ export default function GuestDirectCall({
   joining,
   signalingStatus,
   callState,
+  connectionStatus = 'idle',
   onCall,
   onCancel,
   onBack,
 }: GuestDirectCallProps) {
   const inCall = callState === 'in-call';
   const calling = callState === 'calling';
+  const failed = connectionStatus === 'failed' || connectionStatus === 'disconnected';
   const waiting =
-    joining || Boolean(signalingStatus) || (!connected && !calling && !inCall);
-  const isCancellable = !inCall && (waiting || calling);
+    !failed &&
+    (joining || Boolean(signalingStatus) || (!connected && !calling && !inCall));
+  const isCancellable = !inCall && !failed && (waiting || calling);
 
-  const label = inCall
-    ? 'Разговор идёт…'
-    : calling
-      ? 'Звоним…'
-      : waiting
-        ? signalingStatus || 'Подключаемся…'
-        : `ПОЗВОНИТЬ ${hostName.toUpperCase()}`;
+  const label = failed
+    ? 'Не удалось связаться'
+    : inCall
+      ? 'Разговор идёт…'
+      : calling
+        ? 'Звоним…'
+        : waiting
+          ? signalingStatus || 'Подключаемся…'
+          : `ПОЗВОНИТЬ ${hostName.toUpperCase()}`;
 
   const handleMainClick = () => {
+    if (failed) {
+      onBack();
+      return;
+    }
     if (isCancellable) onCancel();
     else if (!inCall) onCall();
   };
@@ -66,25 +77,33 @@ export default function GuestDirectCall({
         <p className="guest-direct-eyebrow">Прямой звонок</p>
         <h1 className="guest-direct-name">{hostName}</h1>
         <p className="guest-direct-hint">
-          {connected
-            ? 'Связь установлена. Нажмите, чтобы позвонить.'
-            : isCancellable
-              ? 'Нажмите кнопку, чтобы отменить ожидание.'
-              : 'Хост должен быть онлайн. Соединяем…'}
+          {failed
+            ? 'Хост офлайн или ссылка неверна. Вернитесь и проверьте никнейм / ID.'
+            : connected
+              ? 'Связь установлена. Нажмите, чтобы позвонить.'
+              : isCancellable
+                ? 'Нажмите кнопку, чтобы отменить ожидание.'
+                : 'Хост должен быть онлайн. Соединяем…'}
         </p>
 
         <button
           type="button"
           className={`guest-direct-call-btn${waiting && !connected ? ' is-waiting' : ''}${
             calling ? ' is-active' : ''
-          }${isCancellable ? ' is-cancellable' : ''}`}
+          }${isCancellable ? ' is-cancellable' : ''}${failed ? ' is-failed' : ''}`}
           onClick={handleMainClick}
           disabled={inCall}
-          title={isCancellable ? 'Повесить трубку / Cancel' : undefined}
-          aria-label={isCancellable ? 'Отменить звонок' : label}
+          title={
+            failed
+              ? 'Назад'
+              : isCancellable
+                ? 'Повесить трубку / Cancel'
+                : undefined
+          }
+          aria-label={failed ? 'Назад' : isCancellable ? 'Отменить звонок' : label}
         >
           <span className="guest-direct-call-pulse" aria-hidden />
-          {isCancellable ? <PhoneOff size={32} /> : <Phone size={32} />}
+          {isCancellable || failed ? <PhoneOff size={32} /> : <Phone size={32} />}
           <span>{label}</span>
         </button>
       </div>

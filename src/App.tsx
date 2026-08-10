@@ -713,6 +713,7 @@ export default function App() {
       onOffer: (offer) => {
         if (cancelled) return;
         if (isBannedRef.current) return;
+        setAppMode((m) => (m === 'select' ? 'paranoic' : m));
         setIncomingConnection(false);
         setPeerLabel(offer.from.name || callerDisplayName(offer.from));
         setPeerAvatarUrl(offer.from.avatarUrl || '');
@@ -1065,6 +1066,8 @@ export default function App() {
         onScreenShare: (active) => setScreenSharing(active),
         onIncomingConnection: (info) => {
           setError('');
+          // Хост на стартовом экране — сразу в Paranoic, чтобы handshake был виден.
+          setAppMode((m) => (m === 'select' ? 'paranoic' : m));
           console.log('[P2P_DEBUG] onIncomingConnection — auto-accept P2P link', info);
           // Магическая ссылка: сразу устанавливаем DataChannel.
           // Медиазвонок по-прежнему требует Accept через CallInbox / call-invite.
@@ -1364,16 +1367,9 @@ export default function App() {
   ensureP2PRef.current = ensureP2P;
 
   /** Вход в персональный инбокс / magic link / legacy room.
-   * Инбокс держим и в Family (карта), иначе гости по магической ссылке вечно ждут. */
+   * Инбокс держим и на стартовом экране (select), и на карте (family),
+   * иначе гости по магической ссылке не достучатся до хоста. */
   useEffect(() => {
-    if (appMode === 'select') {
-      p2pRef.current?.close();
-      p2pRef.current = null;
-      setSignalingStatus('');
-      setJoining(false);
-      return;
-    }
-
     let cancelled = false;
 
     void (async () => {
@@ -1396,15 +1392,25 @@ export default function App() {
 
         // Резолв ?u=username|id → реальный peer id.
         let urlRoute = resolveMagicRoute(me.id, me.username);
-        if (appMode === 'family') {
+        if (appMode === 'family' || appMode === 'select') {
+          // Фон: всегда свой инбокс-хост, чтобы принимать join/звонки.
           urlRoute = { kind: 'self' };
         } else if (urlRoute.kind === 'guest' && urlHandle) {
           const resolvedId = await resolveHandleToUserId(urlHandle);
           if (cancelled) return;
           if (!resolvedId) {
-            throw new Error(
-              `Пользователь «${urlHandle}» не найден. Проверьте никнейм или попросите ссылку с ID.`
+            // Жёсткий стоп: не уходим в «Подключаемся» с битым peer id.
+            setGuestPeerId(null);
+            guestPeerIdRef.current = null;
+            setHostingSelf(true);
+            setP2pStatus('failed');
+            setSignalingStatus('');
+            setJoining(false);
+            setError(
+              `Пользователь «${urlHandle}» не найден. Проверьте никнейм или откройте ссылку с ID.`
             );
+            console.warn('[P2P_DEBUG] abort join — peer unresolved', { urlHandle });
+            return;
           }
           if (resolvedId === me.id) {
             urlRoute = { kind: 'self' };
@@ -1418,9 +1424,9 @@ export default function App() {
           });
         }
 
-        // В Family всегда свой инбокс (хост).
+        // В Family/Select всегда свой инбокс (хост).
         const guestId =
-          appMode === 'family'
+          appMode === 'family' || appMode === 'select'
             ? null
             : (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
               (guestPeerIdRef.current && guestPeerIdRef.current !== me.id
@@ -1468,16 +1474,21 @@ export default function App() {
 
         if (cancelled) return;
 
+        const liveStatus = p2pRef.current?.currentStatus;
         if (
           p2pRef.current?.currentRoomId === room &&
-          (p2pRef.current.currentStatus === 'waiting-answer' ||
-            p2pRef.current.currentStatus === 'connecting' ||
-            p2pRef.current.currentStatus === 'connected' ||
-            p2pRef.current.currentStatus === 'creating-offer')
+          liveStatus &&
+          liveStatus !== 'failed' &&
+          liveStatus !== 'disconnected' &&
+          liveStatus !== 'idle' &&
+          (liveStatus === 'waiting-answer' ||
+            liveStatus === 'connecting' ||
+            liveStatus === 'connected' ||
+            liveStatus === 'creating-offer')
         ) {
           console.log('[P2P_DEBUG] skip rejoin — already in room', {
             room,
-            status: p2pRef.current.currentStatus,
+            status: liveStatus,
             appMode,
           });
           setRoomId(room);
@@ -1514,6 +1525,7 @@ export default function App() {
           setError(e instanceof Error ? e.message : 'Не удалось войти');
           setP2pStatus('failed');
           setSignalingStatus('');
+          setJoining(false);
         }
       } finally {
         if (!cancelled) setJoining(false);
@@ -1522,7 +1534,6 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      // Не закрываем P2P при family↔paranoic — переиспользуем ту же комнату.
     };
     // ensureP2P через ref — иначе смена peerLabel рвёт гостевую сессию и «сбрасывает» роутинг
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2197,7 +2208,29 @@ export default function App() {
       : undefined;
 
   if (appMode === 'select') {
-    return <ModeSelector onSelect={(mode) => setAppMode(mode)} />;
+    return (
+      <>
+        {error && (
+          <div className="banner error" role="alert" style={{ position: 'relative', zIndex: 50 }}>
+            {error}
+            <button type="button" className="icon-btn" onClick={() => setError('')} aria-label="Закрыть">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        {incomingRing && (
+          <IncomingCallModal
+            caller={incomingRing.from}
+            onAccept={() => {
+              setAppMode('paranoic');
+              void acceptMediaCall();
+            }}
+            onReject={() => void declineMediaCall()}
+          />
+        )}
+        <ModeSelector onSelect={(mode) => setAppMode(mode)} />
+      </>
+    );
   }
 
   if (appMode === 'family') {
@@ -2351,6 +2384,7 @@ export default function App() {
                 joining={joining}
                 signalingStatus={signalingStatus}
                 callState={callState}
+                connectionStatus={p2pStatus}
                 onCall={() => void guestCallHost()}
                 onCancel={() => void cancelCall()}
                 onBack={returnToOwnInbox}
