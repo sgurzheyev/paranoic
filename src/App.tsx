@@ -118,7 +118,19 @@ import {
   looksLikeUsername,
   type UserIdentity,
 } from './identity';
-import { loadContacts, upsertContact, type Contact } from './contacts';
+import {
+  loadContacts,
+  removeContact,
+  upsertContact,
+  validateContactForCall,
+  type Contact,
+} from './contacts';
+import {
+  clearCallResidueState,
+  clearCallSessionResidue,
+  clearEphemeralGuestId,
+  saveCallResidue,
+} from './callSessionCleanup';
 import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
 import { syncProfileToSupabase, resolveHandleToUserId } from './profile';
 
@@ -657,6 +669,18 @@ export default function App() {
   useEffect(() => {
     void purgeLegacyGlobalHistory(identityRef.current.id);
     void loadContacts().then(setContacts);
+    // Снос только residue прошлой сессии (host-флаги legacy ?room= оставляем для F5).
+    clearCallResidueState();
+  }, []);
+
+  useEffect(() => {
+    const onLeave = () => {
+      if (p2pRef.current?.currentStatus === 'failed' || p2pRef.current?.currentStatus === 'disconnected') {
+        clearCallSessionResidue();
+      }
+    };
+    window.addEventListener('pagehide', onLeave);
+    return () => window.removeEventListener('pagehide', onLeave);
   }, []);
 
   useEffect(() => {
@@ -965,6 +989,14 @@ export default function App() {
                   const me = identityRef.current;
                   const target =
                     guestPeerIdRef.current || peerIdRef.current || peerMetaRef.current.id;
+                  if (target && target === me.id) {
+                    setError(
+                      'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+                    );
+                    pendingStartCallRef.current = false;
+                    clearCallSessionResidue();
+                    return;
+                  }
                   if (target) {
                     const callId = newCallId();
                     outboundCallIdRef.current = callId;
@@ -984,6 +1016,7 @@ export default function App() {
                   setCallExpanded(false);
                   setScreen('chat');
                 } catch (e) {
+                  clearCallSessionResidue();
                   setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
                 }
               })();
@@ -998,6 +1031,9 @@ export default function App() {
           }
           if (status === 'waiting-answer') {
             setIncomingConnection(false);
+          }
+          if (status === 'failed' || status === 'disconnected') {
+            clearCallSessionResidue();
           }
         },
         onSignalingStatus: (status) => setSignalingStatus(status),
@@ -1180,6 +1216,7 @@ export default function App() {
               name: peer.name,
               color: peer.color,
               avatarUrl: peer.avatarUrl || '',
+              username: looksLikeUsername(peer.name) ? peer.name : undefined,
             });
             setContacts(next);
           })();
@@ -1406,6 +1443,7 @@ export default function App() {
             setP2pStatus('failed');
             setSignalingStatus('');
             setJoining(false);
+            clearCallSessionResidue();
             setError(
               `Пользователь «${urlHandle}» не найден. Проверьте никнейм или откройте ссылку с ID.`
             );
@@ -1413,6 +1451,8 @@ export default function App() {
             return;
           }
           if (resolvedId === me.id) {
+            // Свой же аккаунт (второе устройство / своя ссылка) — остаёмся хостом своего инбокса.
+            clearCallSessionResidue();
             urlRoute = { kind: 'self' };
           } else {
             urlRoute = { kind: 'guest', peerId: resolvedId };
@@ -1522,6 +1562,7 @@ export default function App() {
         await p2p.joinRoom(room, { isHost });
       } catch (e) {
         if (!cancelled) {
+          clearCallSessionResidue();
           setError(e instanceof Error ? e.message : 'Не удалось войти');
           setP2pStatus('failed');
           setSignalingStatus('');
@@ -1556,24 +1597,81 @@ export default function App() {
     label?: string,
     opts?: { openChat?: boolean }
   ) => {
-    if (targetUserId === identity.id) return;
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Связь недоступна.');
       return;
     }
+
+    const me = identityRef.current;
+    const known = contacts.find((c) => c.id === targetUserId);
+
+    if (targetUserId === me.id) {
+      setError(
+        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+      );
+      return;
+    }
+
     setError('');
+    const validation = await validateContactForCall(targetUserId, me.id, {
+      name: label || known?.name,
+      username: known?.username || (label && looksLikeUsername(label) ? label : undefined),
+      color: known?.color,
+      avatarUrl: known?.avatarUrl,
+    });
+
+    if (!validation.ok) {
+      if (validation.reason === 'self') {
+        setError(
+          'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+        );
+        return;
+      }
+      const title = label || known?.name || targetUserId;
+      const shouldRemove = window.confirm(
+        `Контакт «${title}» больше не найден (профиль удалён или ID изменился).\n\nУдалить его из записной книжки?`
+      );
+      if (shouldRemove) {
+        const next = await removeContact(targetUserId);
+        setContacts(next);
+        setError(`Контакт «${title}» удалён из записной книжки.`);
+      } else {
+        setError(
+          `Контакт «${title}» неактуален. Удалите его из списка или обновите ссылку собеседника.`
+        );
+      }
+      return;
+    }
+
+    const resolvedId = validation.contact.id;
+    const resolvedLabel = validation.contact.name || label || 'Близкий';
+
+    if (validation.idChanged) {
+      const next = await loadContacts();
+      setContacts(next);
+    } else if (!validation.skipped) {
+      setContacts(await loadContacts());
+    }
+
+    if (resolvedId === me.id) {
+      setError(
+        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+      );
+      return;
+    }
+
     setAppMode('paranoic');
     setScreen(opts?.openChat ? 'chat' : 'home');
     setMessengerSidebarOpen(false);
     setHostingSelf(false);
-    setGuestPeerId(targetUserId);
-    guestPeerIdRef.current = targetUserId;
-    setMagicUserInUrl(targetUserId);
-    const known = contacts.find((c) => c.id === targetUserId);
-    const presence = presenceUsers.find((u) => u.userId === targetUserId);
-    setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
-    setPeerColor(presence?.color || known?.color || '#60a5fa');
-    await setActivePeer(targetUserId, label || known?.name || 'Близкий');
+    setGuestPeerId(resolvedId);
+    guestPeerIdRef.current = resolvedId;
+    saveCallResidue({ peerId: resolvedId, guestPeerId: resolvedId });
+    setMagicUserInUrl(validation.contact.username || resolvedId);
+    const presence = presenceUsers.find((u) => u.userId === resolvedId);
+    setPeerAvatarUrl(presence?.avatarUrl || validation.contact.avatarUrl || '');
+    setPeerColor(presence?.color || validation.contact.color || '#60a5fa');
+    await setActivePeer(resolvedId, resolvedLabel);
     p2pRef.current?.close();
     p2pRef.current = null;
     setSessionEpoch((n) => n + 1);
@@ -1582,6 +1680,8 @@ export default function App() {
   const returnToOwnInbox = () => {
     clearMagicParamFromUrl();
     clearRoomParamFromUrl();
+    clearCallSessionResidue();
+    clearEphemeralGuestId();
     setGuestPeerId(null);
     guestPeerIdRef.current = null;
     setHostingSelf(true);
@@ -1605,6 +1705,14 @@ export default function App() {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
       return;
     }
+    const me = identityRef.current;
+    const target = peerIdRef.current || guestPeerIdRef.current;
+    if (target && target === me.id) {
+      setError(
+        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+      );
+      return;
+    }
     pendingStartCallRef.current = true;
     if (connected) {
       await startCall();
@@ -1622,17 +1730,60 @@ export default function App() {
       const me = getOrCreateIdentity();
       identityRef.current = me;
       const target = peerIdRef.current || guestPeerIdRef.current;
+      if (target && target === me.id) {
+        setError(
+          'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+        );
+        clearCallSessionResidue();
+        return;
+      }
       if (target) {
+        const known = contacts.find((c) => c.id === target);
+        const validation = await validateContactForCall(target, me.id, {
+          name: peerLabel || known?.name,
+          username: known?.username,
+          color: known?.color || peerColor,
+          avatarUrl: known?.avatarUrl || peerAvatarUrl,
+        });
+        if (!validation.ok) {
+          if (validation.reason === 'self') {
+            setError(
+              'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+            );
+            return;
+          }
+          const title = peerLabel || known?.name || target;
+          const shouldRemove = window.confirm(
+            `Контакт «${title}» больше не найден (профиль удалён или ID изменился).\n\nУдалить его из записной книжки?`
+          );
+          if (shouldRemove) {
+            const next = await removeContact(target);
+            setContacts(next);
+            setError(`Контакт «${title}» удалён из записной книжки.`);
+          } else {
+            setError(`Контакт «${title}» неактуален. Обновите ссылку собеседника.`);
+          }
+          clearCallSessionResidue();
+          return;
+        }
+        if (validation.idChanged) {
+          setContacts(await loadContacts());
+          setGuestPeerId(validation.contact.id);
+          guestPeerIdRef.current = validation.contact.id;
+          await setActivePeer(validation.contact.id, validation.contact.name);
+        }
+        const callTarget = validation.contact.id;
+        saveCallResidue({ peerId: callTarget, guestPeerId: callTarget });
         const callId = newCallId();
         outboundCallIdRef.current = callId;
         void upsertCallSession({
           callId,
           fromUserId: me.id,
-          toUserId: target,
+          toUserId: callTarget,
           status: 'ringing',
         });
         void callInboxRef.current?.sendOffer(
-          target,
+          callTarget,
           {
             id: me.id,
             name: me.name,
@@ -1648,6 +1799,7 @@ export default function App() {
       setCallExpanded(false);
       setScreen('chat');
     } catch (e) {
+      clearCallSessionResidue();
       setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
     }
   };
