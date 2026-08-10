@@ -4733,3 +4733,145 @@ textarea {
   opacity: 0.85;
   transform: translateX(2px);
 }
+
+.start-download-panel {
+  margin-top: 4px;
+  padding: 14px 16px 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.start-download-panel__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.start-download-panel__row {
+  display: grid;
+  gap: 10px;
+}
+
+@media (min-width: 480px) {
+  .start-download-panel__row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.start-client-btn--compact {
+  min-height: 54px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.start-client-btn--compact .start-client-btn__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+
+.start-client-btn--compact .start-client-btn__title {
+  font-size: 0.92rem;
+}
+
+.start-download-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(6, 8, 12, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.start-download-modal {
+  position: relative;
+  width: min(100%, 420px);
+  padding: 24px 22px 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+    rgba(18, 20, 26, 0.92);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  color: #e2e8f0;
+}
+
+.start-download-modal h2 {
+  margin: 0 0 10px;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.start-download-modal p {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.start-download-modal code {
+  font-size: 0.82rem;
+  color: #cbd5e1;
+  word-break: break-all;
+}
+
+.start-download-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.start-download-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.start-download-modal__primary,
+.start-download-modal__ghost {
+  border-radius: 14px;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.start-download-modal__primary {
+  border: 1px solid rgba(226, 232, 240, 0.35);
+  background: rgba(226, 232, 240, 0.14);
+  color: #f8fafc;
+}
+
+.start-download-modal__ghost {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94a3b8;
+}
