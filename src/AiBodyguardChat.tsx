@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Radar, Send, Square, X } from 'lucide-react';
-import { useLocalAI } from './useLocalAI';
+import { CloudOff, Radar, Send, Square, X } from 'lucide-react';
+import { useAiSecretary } from './useAiSecretary';
 
 export type AiChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  isError?: boolean;
 };
 
 type AiBodyguardChatProps = {
@@ -23,14 +24,14 @@ export default function AiBodyguardChat({
   collectSituationContext,
   onClose,
 }: AiBodyguardChatProps) {
-  const { generate, loading, error, cancel, setError } = useLocalAI();
+  const { generate, loading, error, cancel, setError } = useAiSecretary();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<AiChatMessage[]>([
     {
       id: 'welcome',
       role: 'assistant',
       content:
-        'На связи. Я вижу карту лучше, чем ты думаешь. Спрашивай — или молчи и не светись.',
+        'На связи. Облако подключено — карту вижу лучше, чем ты думаешь. Спрашивай или молчи.',
     },
   ]);
   const listRef = useRef<HTMLDivElement>(null);
@@ -48,20 +49,20 @@ export default function AiBodyguardChat({
     setError('');
     setMessages((prev) => [...prev, { id: uid(), role: 'user', content: text }]);
 
-    // Тихо: контекст капсул не показываем в UI.
     const situation = collectSituationContext();
 
     try {
       const reply = await generate(text, situation);
       setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: reply }]);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Сбой канала';
+      const msg = e instanceof Error ? e.message : 'Облако недоступно';
       setMessages((prev) => [
         ...prev,
         {
           id: uid(),
           role: 'assistant',
-          content: `Канал оборван: ${msg}`,
+          isError: true,
+          content: msg,
         },
       ]);
     }
@@ -82,7 +83,7 @@ export default function AiBodyguardChat({
             </span>
             <div>
               <h2>ИИ-телохранитель</h2>
-              <p>Локальный LLM · контекст капсул без утечки в UI</p>
+              <p>Облачный gpt-4o-mini · контекст капсул без утечки в UI</p>
             </div>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
@@ -94,20 +95,35 @@ export default function AiBodyguardChat({
           {messages.map((m) => (
             <div
               key={m.id}
-              className={`ai-bodyguard-bubble ${m.role === 'user' ? 'is-user' : 'is-ai'}`}
+              className={`ai-bodyguard-bubble ${m.role === 'user' ? 'is-user' : 'is-ai'}${
+                m.isError ? ' is-error' : ''
+              }`}
             >
+              {m.isError && (
+                <span className="ai-bodyguard-error-icon" aria-hidden>
+                  <CloudOff size={14} />
+                </span>
+              )}
               {m.content}
             </div>
           ))}
           {loading && (
-            <div className="ai-bodyguard-bubble is-ai is-typing">Сканирую обстановку…</div>
+            <div className="ai-bodyguard-bubble is-ai is-typing">
+              <span className="ai-bodyguard-scan-dots" aria-hidden>
+                <span />
+                <span />
+                <span />
+              </span>
+              ИИ сканирует…
+            </div>
           )}
         </div>
 
         {error && (
-          <p className="ai-bodyguard-error" role="alert">
-            {error}
-          </p>
+          <div className="ai-bodyguard-error-banner" role="alert">
+            <CloudOff size={16} />
+            <span>{error}</span>
+          </div>
         )}
 
         <form
