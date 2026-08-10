@@ -736,6 +736,34 @@ export class P2PConnection {
     this.setCallState('idle');
   }
 
+  async cancelCall(): Promise<void> {
+    this.clearCallInviteRetry();
+    this.clearJoinRetry();
+
+    if (this.callState === 'calling') {
+      try {
+        this.sendCallControl({ t: 'call-decline', msgId: crypto.randomUUID() });
+      } catch {
+        /* */
+      }
+      this.stopLocalMedia();
+      this.handlers.onLocalStream?.(null);
+      this.clearRemoteStream();
+      this.resetAdaptState();
+      this.setCallState('idle');
+      return;
+    }
+
+    if (this.callState === 'ringing') {
+      await this.declineCall();
+      return;
+    }
+
+    if (this.callState === 'in-call' || this.callState === 'ending') {
+      await this.hangUp();
+    }
+  }
+
   async hangUp(): Promise<void> {
     this.clearCallInviteRetry();
     this.callAcceptedPendingOffer = false;

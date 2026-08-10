@@ -132,6 +132,16 @@ export async function isUsernameAvailable(
   }
 }
 
+/** Бросает «Имя занято», если username уже есть у другого пользователя. */
+export async function assertUsernameAvailable(
+  username: string,
+  forUserId: string
+): Promise<void> {
+  if (!username) return;
+  const free = await isUsernameAvailable(username, forUserId);
+  if (!free) throw new Error('Имя занято');
+}
+
 /** Стандартный UUID (с дефисами). Короткие id приложения сюда не попадают. */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -147,7 +157,7 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
     const username = identity.username || null;
     if (username) {
       const free = await isUsernameAvailable(username, identity.id);
-      if (!free) throw new Error('Этот никнейм уже занят');
+      if (!free) throw new Error('Имя занято');
     }
 
     const sb = getSupabase();
@@ -164,7 +174,7 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
     if (error) {
       if (/username|unique|duplicate/i.test(error.message)) {
-        throw new Error('Этот никнейм уже занят');
+        throw new Error('Имя занято');
       }
       console.warn('[paranoic] profiles upsert', error.message);
     }
@@ -206,7 +216,7 @@ export async function ensureProfileRow(identity: UserIdentity): Promise<void> {
   if (error) {
     throw new Error(
       error.message.includes('username')
-        ? 'Этот никнейм уже занят'
+        ? 'Имя занято'
         : `Не удалось сохранить профиль: ${error.message}`
     );
   }

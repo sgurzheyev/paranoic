@@ -1,4 +1,4 @@
-import { ArrowLeft, Phone } from 'lucide-react';
+import { ArrowLeft, Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
 import type { CallState } from './p2p';
 
@@ -12,6 +12,7 @@ type GuestDirectCallProps = {
   signalingStatus: string;
   callState: CallState;
   onCall: () => void;
+  onCancel: () => void;
   onBack: () => void;
 };
 
@@ -26,18 +27,27 @@ export default function GuestDirectCall({
   signalingStatus,
   callState,
   onCall,
+  onCancel,
   onBack,
 }: GuestDirectCallProps) {
-  const calling = callState === 'calling' || callState === 'in-call';
+  const inCall = callState === 'in-call';
+  const calling = callState === 'calling';
   const waiting =
-    joining || Boolean(signalingStatus) || (!connected && !calling);
-  const label = calling
-    ? callState === 'in-call'
-      ? 'Разговор идёт…'
-      : 'Звоним…'
-    : waiting
-      ? signalingStatus || 'Подключаемся…'
-      : `ПОЗВОНИТЬ ${hostName.toUpperCase()}`;
+    joining || Boolean(signalingStatus) || (!connected && !calling && !inCall);
+  const isCancellable = !inCall && (waiting || calling);
+
+  const label = inCall
+    ? 'Разговор идёт…'
+    : calling
+      ? 'Звоним…'
+      : waiting
+        ? signalingStatus || 'Подключаемся…'
+        : `ПОЗВОНИТЬ ${hostName.toUpperCase()}`;
+
+  const handleMainClick = () => {
+    if (isCancellable) onCancel();
+    else if (!inCall) onCall();
+  };
 
   return (
     <div className="guest-direct-call">
@@ -58,19 +68,23 @@ export default function GuestDirectCall({
         <p className="guest-direct-hint">
           {connected
             ? 'Связь установлена. Нажмите, чтобы позвонить.'
-            : 'Ждём, пока хост примет подключение…'}
+            : isCancellable
+              ? 'Нажмите кнопку, чтобы отменить ожидание.'
+              : 'Ждём, пока хост примет подключение…'}
         </p>
 
         <button
           type="button"
           className={`guest-direct-call-btn${waiting && !connected ? ' is-waiting' : ''}${
             calling ? ' is-active' : ''
-          }`}
-          onClick={onCall}
-          disabled={calling}
+          }${isCancellable ? ' is-cancellable' : ''}`}
+          onClick={handleMainClick}
+          disabled={inCall}
+          title={isCancellable ? 'Повесить трубку / Cancel' : undefined}
+          aria-label={isCancellable ? 'Отменить звонок' : label}
         >
           <span className="guest-direct-call-pulse" aria-hidden />
-          <Phone size={32} />
+          {isCancellable ? <PhoneOff size={32} /> : <Phone size={32} />}
           <span>{label}</span>
         </button>
       </div>

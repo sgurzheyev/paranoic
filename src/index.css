@@ -4287,8 +4287,32 @@ textarea {
 }
 
 .guest-direct-call-btn.is-active {
-  opacity: 0.85;
-  cursor: default;
+  opacity: 0.92;
+}
+
+.guest-direct-call-btn.is-cancellable {
+  cursor: pointer;
+}
+
+.guest-direct-call-btn.is-cancellable:hover:not(:disabled) {
+  border-color: rgba(239, 68, 68, 0.55);
+  background:
+    linear-gradient(165deg, rgba(239, 68, 68, 0.2), rgba(239, 68, 68, 0.08)),
+    rgba(0, 0, 0, 0.28);
+  color: #fecaca;
+  box-shadow:
+    0 20px 48px rgba(239, 68, 68, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  animation: none;
+}
+
+.guest-direct-call-btn.is-cancellable.is-waiting:hover:not(:disabled) {
+  animation: none;
+}
+
+.call-overlay .mega-btn.hangup.is-cancelling:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.55);
 }
 
 .guest-direct-call-pulse {

@@ -193,8 +193,9 @@ export default function CallOverlay({
               )}
               <button
                 type="button"
-                className="mega-btn hangup compact-hangup"
+                className={`mega-btn hangup compact-hangup${callState === 'calling' ? ' is-cancelling' : ''}`}
                 onClick={onHangUp}
+                title={callState === 'calling' ? 'Повесить трубку / Cancel' : undefined}
               >
                 <PhoneOff size={showExpanded ? 28 : 20} />
                 {showExpanded ? (callState === 'calling' ? 'Отменить' : 'Завершить') : null}

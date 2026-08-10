@@ -8,7 +8,7 @@ import {
   validateUsername,
   type UserIdentity,
 } from './identity';
-import { isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
+import { assertUsernameAvailable, isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
 import { saveSettings, type AppSettings } from './settings';
 
 type ProfileModalProps = {
@@ -108,7 +108,7 @@ export default function ProfileModal({
         setUsernameHint(
           free
             ? `Свободен · ${window.location.origin}/?u=${check.value}`
-            : 'Этот никнейм уже занят'
+            : 'Имя занято'
         );
       });
     }, 350);
@@ -161,11 +161,7 @@ export default function ProfileModal({
         return;
       }
       if (userCheck.value) {
-        const free = await isUsernameAvailable(userCheck.value, identity.id);
-        if (!free) {
-          setError('Этот никнейм уже занят');
-          return;
-        }
+        await assertUsernameAvailable(userCheck.value, identity.id);
       }
       const next = updateIdentity({
         name: name.trim() || 'Я',

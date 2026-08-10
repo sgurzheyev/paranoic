@@ -43,6 +43,7 @@ import {
   newCallId,
   type CallerInfo,
 } from './callSignaling';
+import { upsertCallSession, updateCallSessionStatus } from './callSessions';
 import { fetchMyAccessFlags } from './admin';
 import { resolveCallerInfo } from './callers';
 import {
@@ -1505,11 +1506,18 @@ export default function App() {
       return;
     }
     try {
-      const me = identityRef.current;
+      const me = getOrCreateIdentity();
+      identityRef.current = me;
       const target = peerIdRef.current || guestPeerIdRef.current;
       if (target) {
         const callId = newCallId();
         outboundCallIdRef.current = callId;
+        void upsertCallSession({
+          callId,
+          fromUserId: me.id,
+          toUserId: target,
+          status: 'ringing',
+        });
         void callInboxRef.current?.sendOffer(
           target,
           {
@@ -1618,22 +1626,31 @@ export default function App() {
     setScreen((s) => (s === 'call' ? 'chat' : s));
   };
 
-  const hangUp = async () => {
+  const cancelCall = async () => {
     stopRingtone();
     closeActiveNotification();
+    pendingStartCallRef.current = false;
+
+    const me = identityRef.current;
     const target = peerIdRef.current || guestPeerIdRef.current;
     const callId = outboundCallIdRef.current;
-    if (target && callId && callState === 'calling') {
-      void callInboxRef.current?.sendCancel(target, identityRef.current.id, callId);
+    const state = p2pRef.current?.currentCallState ?? callState;
+
+    if (target && callId && state === 'calling') {
+      void callInboxRef.current?.sendCancel(target, me.id, callId);
+      void updateCallSessionStatus(callId, 'cancelled');
     }
+
     outboundCallIdRef.current = null;
     setIncomingRing(null);
-    await p2pRef.current?.hangUp();
+    pendingRingAcceptRef.current = false;
+
+    await p2pRef.current?.cancelCall();
     attachLocalVideo(null);
     setScreenSharing(false);
     setNetworkQuality('good');
     setCallExpanded(false);
-    setScreen('chat');
+    setScreen(guestPeerIdRef.current ? 'home' : 'chat');
   };
 
   const toggleScreenShare = async () => {
@@ -2212,6 +2229,7 @@ export default function App() {
                 signalingStatus={signalingStatus}
                 callState={callState}
                 onCall={() => void guestCallHost()}
+                onCancel={() => void cancelCall()}
                 onBack={returnToOwnInbox}
               />
             ) : (
@@ -2846,7 +2864,7 @@ export default function App() {
         remoteVideoRef={remoteVideoRef}
         onAccept={() => void acceptMediaCall()}
         onDecline={() => void declineMediaCall()}
-        onHangUp={() => void hangUp()}
+        onHangUp={() => void cancelCall()}
         onToggleScreenShare={() => void toggleScreenShare()}
       />
       )}
