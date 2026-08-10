@@ -1,4 +1,5 @@
 import { Globe2, Shield } from 'lucide-react';
+import ParanoicLogo from './ParanoicLogo';
 
 export type AppModeChoice = 'paranoic' | 'family';
 
@@ -27,10 +28,8 @@ export default function ModeSelector({ onSelect }: ModeSelectorProps) {
       />
 
       <div className="relative z-10 mx-auto flex min-h-svh max-w-3xl flex-col justify-center gap-10 px-5 py-12 sm:px-8">
-        <header className="text-center">
-          <p className="mb-3 text-xs font-bold uppercase tracking-[0.32em] text-slate-400">
-            Paranoic
-          </p>
+        <header className="flex flex-col items-center text-center">
+          <ParanoicLogo size={88} withWordmark className="mb-5" />
           <h1 className="m-0 text-4xl font-extrabold tracking-tight text-white sm:text-5xl">
             Как соединяемся?
           </h1>

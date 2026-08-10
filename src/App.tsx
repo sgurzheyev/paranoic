@@ -3,7 +3,6 @@ import {
   Phone,
   MessageCircle,
   ImagePlus,
-  Shield,
   Copy,
   Check,
   CheckCheck,
@@ -35,6 +34,7 @@ import CallOverlay from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
 import GuestDirectCall from './GuestDirectCall';
+import ParanoicLogo from './ParanoicLogo';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
@@ -2283,7 +2283,7 @@ export default function App() {
           >
             <ArrowLeft size={20} />
           </button>
-          <Shield className="brand-icon" strokeWidth={2.2} />
+          <ParanoicLogo size={36} compact className="brand-logo-mark" />
           <div>
             <h1>Paranoic</h1>
             <p className="brand-sub">Семейная связь без чужих серверов</p>
