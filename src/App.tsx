@@ -43,7 +43,7 @@ import {
   newCallId,
   type CallerInfo,
 } from './callSignaling';
-import { upsertCallSession, updateCallSessionStatus } from './callSessions';
+import { upsertCallSession, updateCallSessionStatus, fetchRingingCallsForUser } from './callSessions';
 import { fetchMyAccessFlags } from './admin';
 import { resolveCallerInfo } from './callers';
 import {
@@ -751,12 +751,80 @@ export default function App() {
     });
     callInboxRef.current = inbox;
     void inbox.start(identity.id).catch((e) => {
-      console.warn('[paranoic call inbox]', e);
+      console.warn('[P2P Audit] call inbox start failed', e);
     });
     return () => {
       cancelled = true;
       callInboxRef.current = null;
       void inbox.stop();
+    };
+  }, [identity.id]);
+
+  /** Fallback: poll call_sessions если Realtime offer потерялся в фоне. */
+  useEffect(() => {
+    if (!hasSupabaseConfig()) return;
+    let cancelled = false;
+    const seen = new Set<string>();
+
+    const poll = async () => {
+      if (cancelled || isBannedRef.current) return;
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const rows = await fetchRingingCallsForUser(identity.id);
+        for (const row of rows) {
+          if (seen.has(row.call_id)) continue;
+          if (p2pRef.current?.currentCallState !== 'idle') continue;
+
+          const caller = await resolveCallerInfo(
+            row.from_user_id,
+            contactsRef.current,
+            presenceUsersRef.current
+          );
+          if (cancelled) continue;
+
+          let applied = false;
+          setIncomingRing((prev) => {
+            if (prev) {
+              seen.add(prev.callId);
+              return prev;
+            }
+            applied = true;
+            return { callId: row.call_id, from: caller };
+          });
+          seen.add(row.call_id);
+          if (!applied) continue;
+
+          console.log('[P2P Audit] call_sessions poll recovered offer', row.call_id);
+          setPeerLabel(caller.name || callerDisplayName(caller));
+          setPeerAvatarUrl(caller.avatarUrl || '');
+          setPeerColor(caller.color || '#60a5fa');
+          peerMetaRef.current = {
+            id: caller.id,
+            label: caller.name || callerDisplayName(caller),
+            avatarUrl: caller.avatarUrl || '',
+            color: caller.color || '#60a5fa',
+          };
+          startRingtone();
+          notifyIfHidden('Входящий звонок', {
+            body: `Вам звонит ${callerDisplayName(caller)}`,
+            tag: 'paranoic-call',
+          });
+        }
+      } catch (e) {
+        console.warn('[P2P Audit] call_sessions poll error', e);
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 8_000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
     };
   }, [identity.id]);
 
@@ -1553,6 +1621,9 @@ export default function App() {
     closeActiveNotification();
     void ensureNotifyPermission();
     const ring = incomingRing;
+    if (ring?.callId) {
+      void updateCallSessionStatus(ring.callId, 'accepted');
+    }
     try {
       if (p2pRef.current?.currentCallState === 'ringing') {
         const stream = await ensureP2P().acceptCall();
@@ -1618,6 +1689,7 @@ export default function App() {
         identityRef.current.id,
         ring.callId
       );
+      void updateCallSessionStatus(ring.callId, 'rejected');
     }
     if (p2pRef.current?.currentCallState === 'ringing') {
       await ensureP2P().declineCall();
@@ -1637,6 +1709,12 @@ export default function App() {
     const state = p2pRef.current?.currentCallState ?? callState;
 
     if (target && callId && state === 'calling') {
+      void callInboxRef.current?.sendCancel(target, me.id, callId);
+      void updateCallSessionStatus(callId, 'cancelled');
+    } else if (callId && (state === 'in-call' || state === 'ending')) {
+      void updateCallSessionStatus(callId, 'ended');
+    } else if (target && callId) {
+      // Гость ещё ждёт Accept — всё равно помечаем отмену для peer.
       void callInboxRef.current?.sendCancel(target, me.id, callId);
       void updateCallSessionStatus(callId, 'cancelled');
     }

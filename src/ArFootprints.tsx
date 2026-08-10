@@ -68,12 +68,22 @@ export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
         }
       } catch {
         if (!cancelled) {
-          setError('Нет доступа к камере. Разрешите камеру для AR Footprints.');
+          setMode('camera');
+          setError('Нет доступа к камере. Разрешите камеру или закройте AR — карта и звонки доступны.');
+          setHint('Базовый режим без AR');
         }
       }
     };
 
     const start = async () => {
+      // Старые WebView / Safari без mediaDevices — сразу мягкий выход в UI.
+      if (!navigator.mediaDevices?.getUserMedia && !(navigator as Navigator & { xr?: XrSystem }).xr) {
+        setMode('camera');
+        setError('AR и камера недоступны на этом устройстве. Используйте карту.');
+        setHint('Базовый режим');
+        return;
+      }
+
       const xr = (navigator as Navigator & { xr?: XrSystem }).xr;
       try {
         const supported = Boolean(
@@ -98,7 +108,7 @@ export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
           return;
         }
       } catch (e) {
-        console.warn('[paranoic ar] WebXR unavailable', e);
+        console.warn('[P2P Audit] WebXR unavailable — camera fallback', e);
       }
       await startCameraFallback();
     };

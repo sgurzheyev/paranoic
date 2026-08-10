@@ -46,9 +46,14 @@ function channelName(userId: string): string {
   return `calls:${userId}`;
 }
 
+function audit(stage: string, detail?: unknown): void {
+  if (detail !== undefined) console.log('[P2P Audit]', stage, detail);
+  else console.log('[P2P Audit]', stage);
+}
+
 /**
  * Отправка broadcast в персональный call-канал пользователя.
- * Подписываемся коротко, шлём событие, отписываемся.
+ * Подписываемся коротко, шлём событие, отписываемся (с ретраями).
  */
 async function sendToUserChannel(
   userId: string,
@@ -57,39 +62,51 @@ async function sendToUserChannel(
 ): Promise<void> {
   if (!hasSupabaseConfig()) return;
   const sb = getSupabase();
-  const ch = sb.channel(channelName(userId), {
-    config: { broadcast: { self: false } },
-  });
+  let lastError: unknown;
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error('call channel timeout')), 8_000);
-      ch.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          window.clearTimeout(timer);
-          resolve();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          window.clearTimeout(timer);
-          reject(new Error(`call channel ${status}`));
-        }
-      });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const ch = sb.channel(channelName(userId), {
+      config: { broadcast: { self: false } },
     });
 
-    const result = await ch.send({
-      type: 'broadcast',
-      event,
-      payload,
-    });
-    if (result !== 'ok') {
-      console.warn('[paranoic call] send failed', event, result);
-    }
-  } finally {
     try {
-      await sb.removeChannel(ch);
-    } catch {
-      /* */
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => reject(new Error('call channel timeout')), 8_000);
+        ch.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            window.clearTimeout(timer);
+            resolve();
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            window.clearTimeout(timer);
+            reject(new Error(`call channel ${status}`));
+          }
+        });
+      });
+
+      const result = await ch.send({
+        type: 'broadcast',
+        event,
+        payload,
+      });
+      if (result !== 'ok') {
+        throw new Error(`call send ${String(result)}`);
+      }
+      audit('call ring sent', { event, to: userId, attempt, callId: payload.callId });
+      return;
+    } catch (e) {
+      lastError = e;
+      audit('call ring send retry', { event, to: userId, attempt, error: String(e) });
+      await new Promise((r) => setTimeout(r, 200 * attempt));
+    } finally {
+      try {
+        await sb.removeChannel(ch);
+      } catch {
+        /* */
+      }
     }
   }
+
+  console.warn('[P2P Audit] call ring send failed', event, lastError);
 }
 
 /**
@@ -100,6 +117,9 @@ export class CallInbox {
   private channel: RealtimeChannel | null = null;
   private userId = '';
   private handlers: CallInboxHandlers;
+  private recovering = false;
+  private subscribed = false;
+  private visibilityHandler: (() => void) | null = null;
 
   constructor(handlers: CallInboxHandlers = {}) {
     this.handlers = handlers;
@@ -107,10 +127,50 @@ export class CallInbox {
 
   async start(userId: string): Promise<void> {
     if (!hasSupabaseConfig()) return;
-    if (this.channel && this.userId === userId) return;
+    if (this.channel && this.userId === userId && this.subscribed) return;
 
     await this.stop();
     this.userId = userId;
+    await this.subscribeInbox(userId);
+    this.bindVisibilityRecover();
+  }
+
+  private bindVisibilityRecover(): void {
+    if (this.visibilityHandler || typeof document === 'undefined') return;
+    this.visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!this.userId) return;
+      if (this.channel && this.subscribed) return;
+      audit('call inbox tab visible — resubscribe', { userId: this.userId });
+      void this.recoverIfNeeded();
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+  }
+
+  private async recoverIfNeeded(): Promise<void> {
+    if (!this.userId || this.recovering) return;
+    this.recovering = true;
+    try {
+      const uid = this.userId;
+      const ch = this.channel;
+      this.channel = null;
+      this.subscribed = false;
+      if (ch) {
+        try {
+          await getSupabase().removeChannel(ch);
+        } catch {
+          /* */
+        }
+      }
+      await this.subscribeInbox(uid);
+    } catch (e) {
+      console.warn('[P2P Audit] call inbox recover failed', e);
+    } finally {
+      this.recovering = false;
+    }
+  }
+
+  private async subscribeInbox(userId: string): Promise<void> {
     const sb = getSupabase();
     const ch = sb.channel(channelName(userId), {
       config: { broadcast: { self: false } },
@@ -121,6 +181,7 @@ export class CallInbox {
       if (!offer || offer.type !== 'call_offer') return;
       if (offer.toUserId !== this.userId) return;
       if (!offer.from?.id || offer.from.id === this.userId) return;
+      audit('call inbox offer', { callId: offer.callId, from: offer.from.id });
       this.handlers.onOffer?.(offer);
     });
 
@@ -128,6 +189,7 @@ export class CallInbox {
       const event = payload as CallRejectEvent;
       if (!event || event.type !== 'call_reject') return;
       if (event.toUserId !== this.userId) return;
+      audit('call inbox reject', { callId: event.callId, from: event.fromUserId });
       this.handlers.onReject?.(event);
     });
 
@@ -135,18 +197,27 @@ export class CallInbox {
       const event = payload as CallCancelEvent;
       if (!event || event.type !== 'call_cancel') return;
       if (event.toUserId !== this.userId) return;
+      audit('call inbox cancel', { callId: event.callId, from: event.fromUserId });
       this.handlers.onCancel?.(event);
     });
 
     this.channel = ch;
+    this.subscribed = false;
     await new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(() => reject(new Error('call inbox timeout')), 12_000);
       ch.subscribe((status) => {
+        audit('call inbox subscribe', { status, userId });
         if (status === 'SUBSCRIBED') {
+          this.subscribed = true;
           window.clearTimeout(timer);
           resolve();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           window.clearTimeout(timer);
+          const wasLive = this.subscribed;
+          this.subscribed = false;
+          if (wasLive && this.channel === ch) {
+            void this.recoverIfNeeded();
+          }
           reject(new Error(`call inbox ${status}`));
         }
       });
@@ -154,13 +225,19 @@ export class CallInbox {
   }
 
   async stop(): Promise<void> {
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
     const ch = this.channel;
     this.channel = null;
+    this.subscribed = false;
     this.userId = '';
     if (!ch) return;
     try {
       const sb = getSupabase();
       await sb.removeChannel(ch);
+      audit('call inbox stopped');
     } catch {
       /* */
     }
@@ -169,7 +246,6 @@ export class CallInbox {
   /** Инициатор → получателю: Caller ID до WebRTC. */
   async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<void> {
     if (!toUserId || toUserId === from.id) return;
-    // Клиентская защита: бан проверяется в App до вызова; дубль на всякий случай.
     const payload: CallOfferEvent = {
       type: 'call_offer',
       callId,

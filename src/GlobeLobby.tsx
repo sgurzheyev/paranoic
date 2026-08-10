@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
@@ -34,8 +34,27 @@ import {
 import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
 import MemoryGemPopup from './MemoryGemPopup';
 import MemoryGemComposer from './MemoryGemComposer';
-import ArFootprints from './ArFootprints';
+import SoftFeatureBoundary from './SoftFeatureBoundary';
 import AiBodyguardChat from './AiBodyguardChat';
+
+const ArFootprints = lazy(() =>
+  import('./ArFootprints').catch((err) => {
+    console.warn('[P2P Audit] ArFootprints module failed to load', err);
+    return {
+      default: function ArUnavailable({ onClose }: { gems: MapGem[]; onClose: () => void }) {
+        return (
+          <div className="ar-footprints soft-feature-fallback" role="dialog" aria-label="AR недоступен">
+            <p>AR не поддерживается на этом устройстве.</p>
+            <p className="hint">Используйте карту и звонки в обычном режиме.</p>
+            <button type="button" className="ar-footprints-close" onClick={onClose}>
+              Закрыть
+            </button>
+          </div>
+        );
+      },
+    };
+  })
+);
 
 export type MapPerson = PresenceUser & {
   isContact: boolean;
@@ -937,7 +956,27 @@ export default function GlobeLobby({
       )}
 
       {arOpen && (
-        <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
+        <SoftFeatureBoundary
+          name="AR Footprints"
+          fallback={
+            <div className="ar-footprints soft-feature-fallback" role="status">
+              <p>AR недоступен. Продолжайте в базовом режиме.</p>
+              <button type="button" className="ar-footprints-close" onClick={() => setArOpen(false)}>
+                Закрыть
+              </button>
+            </div>
+          }
+        >
+          <Suspense
+            fallback={
+              <div className="ar-footprints soft-feature-fallback" role="status">
+                Загрузка AR…
+              </div>
+            }
+          >
+            <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
+          </Suspense>
+        </SoftFeatureBoundary>
       )}
 
       {aiOpen && (

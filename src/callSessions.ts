@@ -4,6 +4,19 @@ export const CALL_SESSIONS_TABLE = 'call_sessions';
 
 export type CallSessionStatus = 'ringing' | 'accepted' | 'cancelled' | 'rejected' | 'ended';
 
+export type CallSessionRow = {
+  call_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  status: CallSessionStatus;
+  updated_at: string;
+};
+
+function audit(stage: string, detail?: unknown): void {
+  if (detail !== undefined) console.log('[P2P Audit]', stage, detail);
+  else console.log('[P2P Audit]', stage);
+}
+
 export async function upsertCallSession(params: {
   callId: string;
   fromUserId: string;
@@ -23,9 +36,18 @@ export async function upsertCallSession(params: {
       },
       { onConflict: 'call_id' }
     );
-    if (error) console.warn('[paranoic] call_sessions upsert', error.message);
+    if (error) {
+      console.warn('[P2P Audit] call_sessions upsert failed', error.message);
+      return;
+    }
+    audit('call_sessions upsert', {
+      callId: params.callId,
+      status: params.status,
+      from: params.fromUserId,
+      to: params.toUserId,
+    });
   } catch (e) {
-    console.warn('[paranoic] call_sessions upsert failed', e);
+    console.warn('[P2P Audit] call_sessions upsert exception', e);
   }
 }
 
@@ -40,8 +62,42 @@ export async function updateCallSessionStatus(
       .from(CALL_SESSIONS_TABLE)
       .update({ status, updated_at: new Date().toISOString() })
       .eq('call_id', callId);
-    if (error) console.warn('[paranoic] call_sessions update', error.message);
+    if (error) {
+      console.warn('[P2P Audit] call_sessions update failed', error.message);
+      return;
+    }
+    audit('call_sessions status', { callId, status });
   } catch (e) {
-    console.warn('[paranoic] call_sessions update failed', e);
+    console.warn('[P2P Audit] call_sessions update exception', e);
+  }
+}
+
+/** Fallback: пропущенные Realtime offer'ы за последние N минут. */
+export async function fetchRingingCallsForUser(
+  toUserId: string,
+  withinMs = 3 * 60_000
+): Promise<CallSessionRow[]> {
+  if (!hasSupabaseConfig() || !toUserId) return [];
+  try {
+    const since = new Date(Date.now() - withinMs).toISOString();
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(CALL_SESSIONS_TABLE)
+      .select('call_id,from_user_id,to_user_id,status,updated_at')
+      .eq('to_user_id', toUserId)
+      .eq('status', 'ringing')
+      .gte('updated_at', since)
+      .order('updated_at', { ascending: false })
+      .limit(5);
+    if (error) {
+      console.warn('[P2P Audit] call_sessions poll failed', error.message);
+      return [];
+    }
+    const rows = (data ?? []) as CallSessionRow[];
+    if (rows.length) audit('call_sessions poll ringing', { count: rows.length, toUserId });
+    return rows;
+  } catch (e) {
+    console.warn('[P2P Audit] call_sessions poll exception', e);
+    return [];
   }
 }

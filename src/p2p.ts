@@ -84,12 +84,15 @@ type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
 type SignalReject = { type: 'reject'; peerId: string; targetPeerId: string };
 
 /**
- * Публичные STUN/TURN (Open Relay) — без платных API.
- * iceTransportPolicy по умолчанию 'all'.
+ * Публичные STUN (Google) + Open Relay TURN — без платных API.
+ * iceTransportPolicy: 'all' (host / srflx / relay).
  */
 const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
   { urls: 'stun:openrelay.metered.ca:80' },
   {
     urls: 'turn:openrelay.metered.ca:80',
@@ -101,7 +104,17 @@ const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
+  {
+    urls: 'turns:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
+
+function p2pAudit(stage: string, detail?: unknown): void {
+  if (detail !== undefined) console.log('[P2P Audit]', stage, detail);
+  else console.log('[P2P Audit]', stage);
+}
 
 function iceUrlList(server: RTCIceServer): string[] {
   if (!server.urls) return [];
@@ -123,7 +136,7 @@ function classifyIceServers(servers: RTCIceServer[]): { stun: string[]; turn: st
 
 function logIceServers(source: string, servers: RTCIceServer[]): void {
   const { stun, turn } = classifyIceServers(servers);
-  console.log(`[paranoic ICE] ${source}`, {
+  p2pAudit(`ICE servers (${source})`, {
     iceTransportPolicy: 'all',
     total: servers.length,
     stunCount: stun.length,
@@ -512,9 +525,10 @@ export class P2PConnection {
     this.handshakeStarted = false;
     this.pendingCandidates = [];
     this.cachedIceServers = PUBLIC_ICE_SERVERS;
-    logIceServers('public Open Relay', this.cachedIceServers);
+    logIceServers('public Google STUN + Open Relay', this.cachedIceServers);
     this.setStatus(options.isHost ? 'waiting-answer' : 'connecting');
     this.setSignalingStatus('Подключаемся к сокетам...');
+    p2pAudit('joinRoom start', { roomId, isHost: options.isHost, peerId: this.peerId });
 
     const sb = getSupabase();
     const signal = sb.channel(`room:${roomId}`, {
@@ -545,15 +559,30 @@ export class P2PConnection {
 
     await new Promise<void>((resolve, reject) => {
       signal.subscribe((status) => {
+        p2pAudit('room signal subscribe', { roomId, status });
         if (status === 'SUBSCRIBED') resolve();
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          reject(new Error('Не удалось подключиться к комнате (signaling)'));
+          // Если уже в комнате — помечаем сбой; иначе reject на старте.
+          if (this.signal === signal) {
+            p2pAudit('room signal lost', { roomId, status });
+            this.handlers.onError?.(
+              new Error('Сигналинг комнаты оборвался. Перезайдите по ссылке.')
+            );
+            if (this.callState === 'in-call' || this.callState === 'calling') {
+              void this.tryIceRestart();
+            } else {
+              this.setStatus('failed');
+            }
+          } else {
+            reject(new Error('Не удалось подключиться к комнате (signaling)'));
+          }
         }
       });
     });
 
     this.signal = signal;
-    console.log('[paranoic signal] joined room', roomId, {
+    p2pAudit('joined room', {
+      roomId,
       peerId: this.peerId,
       isHost: this.isHost,
     });
@@ -737,6 +766,7 @@ export class P2PConnection {
   }
 
   async cancelCall(): Promise<void> {
+    p2pAudit('cancelCall', { callState: this.callState, status: this.status });
     this.clearCallInviteRetry();
     this.clearJoinRetry();
 
@@ -761,6 +791,12 @@ export class P2PConnection {
 
     if (this.callState === 'in-call' || this.callState === 'ending') {
       await this.hangUp();
+      return;
+    }
+
+    // Гость ещё ждёт Accept хоста — сбрасываем handshake, signaling оставляем.
+    if (this.status === 'connecting' || this.status === 'creating-offer' || this.status === 'waiting-answer') {
+      this.softResetPeer();
     }
   }
 
@@ -1116,23 +1152,7 @@ export class P2PConnection {
     this.setStatus('disconnected');
   }
 
-  private async broadcast(event: string, payload: object): Promise<void> {
-    if (!this.signal) return;
-    try {
-      const result = await this.signal.send({
-        type: 'broadcast',
-        event,
-        payload,
-      });
-      if (result === 'timed out' || result === 'error') {
-        console.warn('[paranoic signal] broadcast failed', event, result);
-      }
-    } catch (e) {
-      console.warn('[paranoic signal] broadcast failed', event, e);
-    }
-  }
-
-  /** Повторная отправка критичных Realtime-событий (join/offer/answer/ctrl). */
+  /** Повторная отправка критичных Realtime-событий (join/offer/answer/ICE/ctrl). */
   private async broadcastReliable(event: string, payload: object): Promise<void> {
     if (!this.signal) return;
     for (let attempt = 0; attempt < BROADCAST_RETRIES; attempt++) {
@@ -1143,12 +1163,13 @@ export class P2PConnection {
           payload,
         });
         if (result !== 'timed out' && result !== 'error') return;
-        console.warn('[paranoic signal] broadcast retry', event, result, attempt + 1);
+        console.warn('[P2P Audit] broadcast retry', event, result, attempt + 1);
       } catch (e) {
-        console.warn('[paranoic signal] broadcast retry error', event, e);
+        console.warn('[P2P Audit] broadcast retry error', event, e);
       }
       await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
     }
+    console.warn('[P2P Audit] broadcast exhausted', event);
   }
 
   private newMsgId(): string {
@@ -1379,12 +1400,14 @@ export class P2PConnection {
     }
     if (!this.pc || !this.pc.remoteDescription) {
       this.pendingCandidates.push(payload.candidate);
+      p2pAudit('ICE candidate queued', { pending: this.pendingCandidates.length });
       return;
     }
     try {
       await this.pc.addIceCandidate(payload.candidate);
+      p2pAudit('ICE candidate applied');
     } catch (e) {
-      console.warn('[paranoic ICE] addIceCandidate failed', e);
+      console.warn('[P2P Audit] addIceCandidate failed', e);
     }
   }
 
@@ -1760,6 +1783,12 @@ export class P2PConnection {
   private async createPeerConnection(): Promise<RTCPeerConnection> {
     const iceServers = this.cachedIceServers ?? PUBLIC_ICE_SERVERS;
     this.cachedIceServers = iceServers;
+    p2pAudit('createPeerConnection', {
+      peerId: this.peerId,
+      iceServerCount: iceServers.length,
+      callState: this.callState,
+      status: this.status,
+    });
     const pc = new RTCPeerConnection({
       iceServers,
       iceCandidatePoolSize: 16,
@@ -1768,17 +1797,26 @@ export class P2PConnection {
       iceTransportPolicy: 'all',
     });
 
-    // Trickle ICE — кандидаты сразу в Supabase, без ожидания complete
+    // Trickle ICE — кандидаты с ретраями (Realtime часто теряет одиночные broadcast).
     pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      void this.broadcast('ice-candidate', {
+      if (!event.candidate) {
+        p2pAudit('ICE gathering complete', { peerId: this.peerId });
+        return;
+      }
+      const candidate = event.candidate.toJSON();
+      p2pAudit('ICE candidate local', {
+        type: event.candidate.type,
+        protocol: event.candidate.protocol,
+        address: event.candidate.address,
+      });
+      void this.broadcastReliable('ice-candidate', {
         peerId: this.peerId,
-        candidate: event.candidate.toJSON(),
+        candidate,
       });
     };
 
     pc.onicecandidateerror = (event) => {
-      console.warn('[paranoic ICE] candidate error', event.errorCode, event.errorText);
+      console.warn('[P2P Audit] ICE candidate error', event.errorCode, event.errorText);
     };
 
     pc.ontrack = (event) => {
@@ -1810,28 +1848,25 @@ export class P2PConnection {
     };
 
     pc.onconnectionstatechange = () => {
+      p2pAudit('connectionState', {
+        state: pc.connectionState,
+        ice: pc.iceConnectionState,
+        callState: this.callState,
+      });
       switch (pc.connectionState) {
         case 'connected':
           this.iceRestarting = false;
           this.iceRestartAttempts = 0;
           this.clearIceCheckTimeout();
           this.clearIceSoftRestartTimer();
+          this.setSignalingStatus('Связь установлена!');
           break;
         case 'disconnected':
-          // Краткий просад / смена IP — агрессивный мягкий ICE.
+          // Краткий просад / смена IP — мягкий ICE restart.
           this.scheduleIceSoftRestart();
           break;
         case 'failed':
-          void this.tryIceRestart().then((ok) => {
-            if (!ok && this.callState !== 'in-call' && this.callState !== 'calling' && this.callState !== 'ringing') {
-              this.clearIceCheckTimeout();
-              this.setStatus('failed');
-              this.handlers.onError?.(new Error('Не удалось связаться'));
-            } else if (!ok && (this.callState === 'in-call' || this.callState === 'calling')) {
-              // Повторная попытка через короткую паузу.
-              window.setTimeout(() => void this.tryIceRestart(), 900);
-            }
-          });
+          void this.handleIceFailure('connectionState=failed');
           break;
         case 'closed':
           this.clearIceCheckTimeout();
@@ -1842,8 +1877,10 @@ export class P2PConnection {
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
+      p2pAudit('iceConnectionState', { state, callState: this.callState });
       if (state === 'checking') {
         this.armIceCheckTimeout(pc);
+        this.setSignalingStatus('Обмен маршрутами (ICE)...');
       } else if (state === 'connected' || state === 'completed') {
         this.clearIceCheckTimeout();
         this.clearIceSoftRestartTimer();
@@ -1853,13 +1890,41 @@ export class P2PConnection {
         this.scheduleIceSoftRestart();
       } else if (state === 'failed') {
         this.clearIceCheckTimeout();
-        void this.tryIceRestart();
+        void this.handleIceFailure('iceConnectionState=failed');
       } else if (state === 'closed') {
         this.clearIceCheckTimeout();
       }
     };
 
     return pc;
+  }
+
+  /** failed / длительный disconnected → ICE restart, иначе корректный сброс. */
+  private async handleIceFailure(reason: string): Promise<void> {
+    p2pAudit('ICE failure', {
+      reason,
+      attempts: this.iceRestartAttempts,
+      callState: this.callState,
+      status: this.status,
+    });
+    const ok = await this.tryIceRestart();
+    if (ok) return;
+
+    if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+      if (this.iceRestartAttempts < 5) {
+        window.setTimeout(() => void this.tryIceRestart(), 900);
+        return;
+      }
+      p2pAudit('ICE exhausted — soft reset', { reason });
+      this.handlers.onError?.(new Error('Связь оборвалась. Переподключаемся…'));
+      this.softResetPeer();
+      return;
+    }
+
+    this.clearIceCheckTimeout();
+    this.setStatus('failed');
+    this.handlers.onError?.(new Error('Не удалось связаться'));
+    this.softResetPeer();
   }
 
   private clearIceCheckTimeout(): void {
@@ -1878,6 +1943,7 @@ export class P2PConnection {
 
   private scheduleIceSoftRestart(): void {
     if (this.iceSoftRestartTimer || this.iceRestarting) return;
+    p2pAudit('ICE soft restart scheduled', { delayMs: ICE_SOFT_RESTART_DELAY_MS });
     this.iceSoftRestartTimer = setTimeout(() => {
       this.iceSoftRestartTimer = null;
       if (!this.pc) return;
@@ -1910,12 +1976,23 @@ export class P2PConnection {
   private async tryIceRestart(): Promise<boolean> {
     if (!this.pc || this.iceRestarting) return false;
     if (this.pc.signalingState === 'closed') return false;
-    if (!this.isReady && this.status !== 'connected') return false;
-    if (this.iceRestartAttempts >= 5) return false;
+    // Разрешаем restart после обмена SDP (не только когда DC уже open).
+    const hasRemote = Boolean(this.pc.remoteDescription);
+    if (!this.isReady && this.status !== 'connected' && !hasRemote) return false;
+    if (this.iceRestartAttempts >= 5) {
+      p2pAudit('ICE restart capped', { attempts: this.iceRestartAttempts });
+      return false;
+    }
 
     this.iceRestarting = true;
     this.iceRestartAttempts += 1;
     const preservedCall = this.callState;
+    p2pAudit('ICE restart attempt', {
+      attempt: this.iceRestartAttempts,
+      callState: preservedCall,
+      status: this.status,
+      hasRemote,
+    });
     try {
       if (typeof this.pc.restartIce === 'function') {
         this.pc.restartIce();
@@ -1936,7 +2013,8 @@ export class P2PConnection {
       // Не трогаем callState / экран звонка.
       if (preservedCall !== 'idle') this.callState = preservedCall;
       return true;
-    } catch {
+    } catch (e) {
+      p2pAudit('ICE restart failed', e);
       this.iceRestarting = false;
       return false;
     }
@@ -1955,6 +2033,7 @@ export class P2PConnection {
     this.makingOffer = false;
     this.ignoreOffer = false;
     this.iceRestarting = false;
+    this.iceRestartAttempts = 0;
     this.refreshingMedia = false;
     this.lastRemoteVideoBytes = 0;
     this.stalledChecks = 0;
@@ -2456,6 +2535,7 @@ export class P2PConnection {
     this.makingOffer = false;
     this.ignoreOffer = false;
     this.iceRestarting = false;
+    this.iceRestartAttempts = 0;
     this.refreshingMedia = false;
     this.lastRemoteVideoBytes = 0;
     this.stalledChecks = 0;

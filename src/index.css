@@ -3764,6 +3764,24 @@ textarea {
   border-color: rgba(248, 113, 113, 0.4);
 }
 
+.soft-feature-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 180px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text, #e8eaef);
+}
+
+.soft-feature-fallback .hint {
+  margin: 0;
+  color: var(--muted, #9aa3b5);
+  font-size: 0.9rem;
+}
+
 .ar-footprints-list {
   position: absolute;
   left: 16px;
