@@ -1977,10 +1977,24 @@ export default function App() {
   const toggleScreenShare = async () => {
     setError('');
     try {
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices ||
+        typeof navigator.mediaDevices.getDisplayMedia !== 'function'
+      ) {
+        setError('Демонстрация экрана доступна только в версии для компьютера');
+        return;
+      }
       const active = await ensureP2P().toggleScreenShare();
       setScreenSharing(active);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось переключить демонстрацию экрана');
+      const msg =
+        e instanceof Error ? e.message : 'Не удалось переключить демонстрацию экрана';
+      if (/getDisplayMedia is not a function/i.test(msg)) {
+        setError('Демонстрация экрана доступна только в версии для компьютера');
+        return;
+      }
+      setError(msg);
     }
   };
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Maximize2,
   Minimize2,
@@ -8,6 +8,18 @@ import {
   PhoneOff,
 } from 'lucide-react';
 import type { CallState, NetworkQuality } from './p2p';
+
+function supportsScreenShare(): boolean {
+  try {
+    return !!(
+      typeof navigator !== 'undefined' &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getDisplayMedia === 'function'
+    );
+  } catch {
+    return false;
+  }
+}
 
 type CallOverlayProps = {
   callState: CallState;
@@ -50,6 +62,7 @@ export default function CallOverlay({
     origY: number;
   } | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const canScreenShare = useMemo(() => supportsScreenShare(), []);
 
   const isRinging = callState === 'ringing';
   const showExpanded = expanded || isRinging;
@@ -180,7 +193,7 @@ export default function CallOverlay({
                   {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
                 </button>
               )}
-              {callState === 'in-call' && (
+              {callState === 'in-call' && canScreenShare && (
                 <button
                   type="button"
                   className={`call-glass-btn ${screenSharing ? 'active' : ''}`}

@@ -911,6 +911,14 @@ export class P2PConnection {
     }
     if (this.sharingScreen) return;
 
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getDisplayMedia !== 'function'
+    ) {
+      throw new Error('Демонстрация экрана доступна только в версии для компьютера');
+    }
+
     const display = await navigator.mediaDevices.getDisplayMedia({
       video: {
         frameRate: { ideal: 15, max: 30 },
