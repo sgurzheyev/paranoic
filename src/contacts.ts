@@ -2,6 +2,9 @@ import localforage from 'localforage';
 import { looksLikeUsername, isValidUuid } from './identity';
 import { hasSupabaseConfig } from './lib/supabase';
 import { fetchProfileByUsername, fetchRemoteProfile, looksLikeUuid } from './profile';
+import { isTrusted, trustUser } from './trust';
+
+export type ContactSource = 'magic' | 'hello' | 'manual' | 'trust' | 'call';
 
 export type Contact = {
   id: string;
@@ -10,6 +13,9 @@ export type Contact = {
   avatarUrl?: string;
   /** Публичный username, если известен (для резолва при смене id). */
   username?: string;
+  /** Явно доверенный (дублирует localStorage trusted-ids). */
+  trusted?: boolean;
+  source?: ContactSource;
   addedAt: string;
 };
 
@@ -26,7 +32,12 @@ const CONTACTS_KEY = 'contact-list';
 
 export async function loadContacts(): Promise<Contact[]> {
   const rows = await contactsDb.getItem<Contact[]>(CONTACTS_KEY);
-  return rows ?? [];
+  const list = rows ?? [];
+  // Синхронизируем флаг trusted из localStorage.
+  return list.map((c) => ({
+    ...c,
+    trusted: Boolean(c.trusted) || isTrusted(c.id),
+  }));
 }
 
 export async function saveContacts(contacts: Contact[]): Promise<void> {
@@ -38,12 +49,15 @@ export async function upsertContact(
 ): Promise<Contact[]> {
   const list = await loadContacts();
   const idx = list.findIndex((c) => c.id === contact.id);
+  const trusted = Boolean(contact.trusted) || isTrusted(contact.id);
   const row: Contact = {
     id: contact.id,
     name: contact.name,
     color: contact.color,
     avatarUrl: contact.avatarUrl ?? '',
     username: contact.username,
+    trusted,
+    source: contact.source,
     addedAt: contact.addedAt ?? new Date().toISOString(),
   };
   if (idx >= 0) {
@@ -53,6 +67,8 @@ export async function upsertContact(
       addedAt: list[idx]!.addedAt,
       avatarUrl: row.avatarUrl || list[idx]!.avatarUrl,
       username: row.username || list[idx]!.username,
+      trusted: trusted || Boolean(list[idx]!.trusted),
+      source: row.source || list[idx]!.source,
     };
   } else {
     list.push(row);
@@ -63,9 +79,28 @@ export async function upsertContact(
 }
 
 export async function removeContact(id: string): Promise<Contact[]> {
+  // Доверенные контакты не удаляются из книжки.
+  if (isTrusted(id)) {
+    return loadContacts();
+  }
   const list = (await loadContacts()).filter((c) => c.id !== id);
   await saveContacts(list);
   return list;
+}
+
+/** Доверять: localStorage + запись в книжку (контакт не пропадает). */
+export async function trustAndUpsertContact(
+  contact: Omit<Contact, 'addedAt' | 'trusted' | 'source'> & {
+    addedAt?: string;
+    username?: string;
+  }
+): Promise<Contact[]> {
+  trustUser(contact.id);
+  return upsertContact({
+    ...contact,
+    trusted: true,
+    source: 'trust',
+  });
 }
 
 function isPeerIdWithoutRequiredProfile(id: string): boolean {
@@ -94,6 +129,7 @@ export async function validateContactForCall(
     color: hint?.color || '#60a5fa',
     avatarUrl: hint?.avatarUrl || '',
     username: hint?.username,
+    trusted: isTrusted(contactId),
     addedAt: new Date().toISOString(),
   });
 
@@ -113,11 +149,9 @@ export async function validateContactForCall(
   }
 
   if (!remote) {
-    // Username известен, но профиля нет — точно stale.
     if (usernameHint) {
       return { ok: false, reason: 'missing' };
     }
-    // Голый UUID/legacy id без строки profiles — звонок по id всё ещё возможен.
     if (isPeerIdWithoutRequiredProfile(contactId)) {
       return { ok: true, contact: fallbackContact(), idChanged: false, skipped: true };
     }
@@ -134,6 +168,8 @@ export async function validateContactForCall(
     color: remote.color || hint?.color || '#60a5fa',
     avatarUrl: remote.avatar_url || hint?.avatarUrl || '',
     username: remote.username || usernameHint || undefined,
+    trusted: isTrusted(remote.id),
+    source: 'call',
     addedAt: new Date().toISOString(),
   };
 
@@ -144,4 +180,39 @@ export async function validateContactForCall(
   await upsertContact(contact);
 
   return { ok: true, contact, idChanged };
+}
+
+/**
+ * Цепная реакция Magic Link: сохранить хоста в книжку гостя сразу при резолве.
+ */
+export async function captureHostFromMagicLink(opts: {
+  hostId: string;
+  myUserId: string;
+  urlHandle?: string | null;
+}): Promise<Contact | null> {
+  const { hostId, myUserId, urlHandle } = opts;
+  if (!hostId || hostId === myUserId) return null;
+
+  let remote = await fetchRemoteProfile(hostId);
+  if (!remote && urlHandle && looksLikeUsername(urlHandle)) {
+    remote = await fetchProfileByUsername(urlHandle);
+  }
+
+  const username =
+    remote?.username ||
+    (urlHandle && looksLikeUsername(urlHandle) ? urlHandle : undefined);
+
+  const contact: Contact = {
+    id: remote?.id || hostId,
+    name: remote?.name || username || 'Контакт',
+    color: remote?.color || '#60a5fa',
+    avatarUrl: remote?.avatar_url || '',
+    username,
+    trusted: isTrusted(remote?.id || hostId),
+    source: 'magic',
+    addedAt: new Date().toISOString(),
+  };
+
+  await upsertContact(contact);
+  return contact;
 }

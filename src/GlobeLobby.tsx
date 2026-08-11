@@ -810,7 +810,7 @@ export default function GlobeLobby({
           )}
         </div>
 
-        <div className="pointer-events-auto mt-auto flex flex-col gap-3 px-4 pb-6 sm:px-6">
+        <div className="pointer-events-auto mt-auto flex flex-col gap-3 px-4 pb-28 sm:px-6">
           {isTargetingMode ? (
             <div className="flex flex-col items-center gap-3">
               <button

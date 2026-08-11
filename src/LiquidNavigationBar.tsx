@@ -1,29 +1,35 @@
-import { Camera, Globe2, MessageCircle } from 'lucide-react';
+import { Camera, MessageCircle, Settings2, UserRound, Users } from 'lucide-react';
 
-export type LiquidNavTab = 'chat' | 'camera' | 'map';
+export type LiquidNavTab = 'chats' | 'contacts' | 'settings' | 'profile';
+
+/** @deprecated старые вкладки сессии — оставлены для совместимости типов */
+export type SessionNavTab = 'chat' | 'camera' | 'map';
 
 type LiquidNavigationBarProps = {
   active: LiquidNavTab;
-  onChat: () => void;
-  onCamera: () => void;
-  onMap: () => void;
+  onChats: () => void;
+  onContacts: () => void;
+  onSettings: () => void;
+  onProfile: () => void;
 };
 
 const TABS: { id: LiquidNavTab; label: string; icon: typeof MessageCircle }[] = [
-  { id: 'chat', label: 'Чат', icon: MessageCircle },
-  { id: 'camera', label: 'Камера', icon: Camera },
-  { id: 'map', label: 'Карта', icon: Globe2 },
+  { id: 'chats', label: 'Чаты', icon: MessageCircle },
+  { id: 'contacts', label: 'Контакты', icon: Users },
+  { id: 'settings', label: 'Настройки', icon: Settings2 },
+  { id: 'profile', label: 'Профиль', icon: UserRound },
 ];
 
 /**
- * Нижняя Liquid Navigation — только при активном соединении / звонке.
- * Blob плавно едет под активной иконкой (CSS transform).
+ * Фиксированный Bottom Tab Bar (iOS / modern Android).
+ * Скрывается снаружи при открытом чате или активном звонке.
  */
 export default function LiquidNavigationBar({
   active,
-  onChat,
-  onCamera,
-  onMap,
+  onChats,
+  onContacts,
+  onSettings,
+  onProfile,
 }: LiquidNavigationBarProps) {
   const activeIndex = Math.max(
     0,
@@ -31,16 +37,17 @@ export default function LiquidNavigationBar({
   );
 
   const handlers: Record<LiquidNavTab, () => void> = {
-    chat: onChat,
-    camera: onCamera,
-    map: onMap,
+    chats: onChats,
+    contacts: onContacts,
+    settings: onSettings,
+    profile: onProfile,
   };
 
   return (
-    <nav className="liquid-nav" aria-label="Навигация сессии">
-      <div className="liquid-nav-panel">
+    <nav className="liquid-nav" aria-label="Главная навигация">
+      <div className="liquid-nav-panel liquid-nav-panel--tabs4">
         <span
-          className="liquid-nav-blob"
+          className="liquid-nav-blob liquid-nav-blob--tabs4"
           aria-hidden
           style={{
             transform: `translateX(${activeIndex * 100}%)`,
@@ -67,3 +74,6 @@ export default function LiquidNavigationBar({
     </nav>
   );
 }
+
+/** Заглушка: иконка камеры больше не в таббаре, но может пригодиться в оверлее. */
+export { Camera };

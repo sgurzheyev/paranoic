@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Phone,
   MessageCircle,
-  ImagePlus,
   Copy,
   Check,
   CheckCheck,
@@ -24,6 +23,10 @@ import {
   Video,
   Camera,
   ShieldCheck,
+  Shield,
+  Ban,
+  Globe2,
+  UserCheck,
 } from 'lucide-react';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -37,6 +40,12 @@ import GuestDirectCall from './GuestDirectCall';
 import ParanoicLogo from './ParanoicLogo';
 import MediaNoteOverlay from './MediaNoteOverlay';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
+import {
+  blockUser,
+  isBlocked,
+  isTrusted,
+  loadTrustedIds,
+} from './trust';
 import {
   CallInbox,
   callerDisplayName,
@@ -119,8 +128,10 @@ import {
   type UserIdentity,
 } from './identity';
 import {
+  captureHostFromMagicLink,
   loadContacts,
   removeContact,
+  trustAndUpsertContact,
   upsertContact,
   validateContactForCall,
   type Contact,
@@ -238,6 +249,9 @@ export default function App() {
   const [callExpanded, setCallExpanded] = useState(false);
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
+  /** Главная вкладка Bottom Tab Bar. */
+  const [mainTab, setMainTab] = useState<LiquidNavTab>('chats');
+  const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
   /** Режим заметки: голос или видео-кружочек. */
   const [noteMode, setNoteMode] = useState<NoteMode>('video');
   const [noteRecording, setNoteRecording] = useState<{
@@ -314,35 +328,36 @@ export default function App() {
 
   const mapPeople = useMemo((): MapPerson[] => {
     const list: MapPerson[] = presenceUsers
-      .filter((u) => u.userId !== identity.id)
+      .filter((u) => u.userId !== identity.id && !isBlocked(u.userId))
       .map((u) => {
         const contact = contacts.find((c) => c.id === u.userId);
+        const trusted = Boolean(contact?.trusted) || trustedIds.has(u.userId) || isTrusted(u.userId);
         return {
           ...u,
-          isContact: Boolean(contact),
+          isContact: Boolean(contact) || trusted,
           name: contact?.name || u.name,
           color: contact?.color || u.color,
           avatarUrl: u.avatarUrl || contact?.avatarUrl || '',
         };
       });
 
-    if (geo) {
-      list.push({
-        userId: identity.id,
-        name: identity.name,
-        color: identity.color,
-        avatarUrl: identity.avatarUrl,
-        themeFon: identity.themeFon,
-        lat: geo.lat,
-        lng: geo.lng,
-        online: true,
-        updatedAt: Date.now(),
-        isContact: false,
-        isMe: true,
-      });
-    }
+    // Всегда показываем свою точку (GPS или Антарктида / Ghost).
+    const selfGeo = geo ?? { ...ANTARCTICA };
+    list.push({
+      userId: identity.id,
+      name: identity.name,
+      color: identity.color,
+      avatarUrl: identity.avatarUrl,
+      themeFon: identity.themeFon,
+      lat: selfGeo.lat,
+      lng: selfGeo.lng,
+      online: true,
+      updatedAt: Date.now(),
+      isContact: false,
+      isMe: true,
+    });
     return list;
-  }, [presenceUsers, contacts, identity, geo]);
+  }, [presenceUsers, contacts, identity, geo, trustedIds]);
 
   const revokeMediaUrls = useCallback(() => {
     for (const url of mediaUrlsRef.current) URL.revokeObjectURL(url);
@@ -737,6 +752,7 @@ export default function App() {
       onOffer: (offer) => {
         if (cancelled) return;
         if (isBannedRef.current) return;
+        if (isBlocked(offer.from.id)) return;
         setAppMode((m) => (m === 'select' ? 'paranoic' : m));
         setIncomingConnection(false);
         setPeerLabel(offer.from.name || callerDisplayName(offer.from));
@@ -1217,6 +1233,8 @@ export default function App() {
               color: peer.color,
               avatarUrl: peer.avatarUrl || '',
               username: looksLikeUsername(peer.name) ? peer.name : undefined,
+              trusted: isTrusted(peer.userId),
+              source: 'hello',
             });
             setContacts(next);
           })();
@@ -1540,12 +1558,26 @@ export default function App() {
         setMagicLink(buildMagicLink(me));
 
         if (provisionalPeer) {
-          const known = contacts.find((c) => c.id === provisionalPeer);
-          const presence = presenceUsers.find((u) => u.userId === provisionalPeer);
+          // Цепная реакция: гость сразу сохраняет хоста в записную книжку.
+          const captured = await captureHostFromMagicLink({
+            hostId: provisionalPeer,
+            myUserId: me.id,
+            urlHandle,
+          });
+          if (cancelled) return;
+          if (captured) {
+            setContacts(await loadContacts());
+          }
+          const known =
+            captured || contactsRef.current.find((c) => c.id === provisionalPeer);
+          const presence = presenceUsersRef.current.find(
+            (u) => u.userId === provisionalPeer
+          );
+          const label = known?.name || presence?.name || 'Близкий';
           setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
           setPeerColor(presence?.color || known?.color || '#60a5fa');
-          setPeerLabel(known?.name || presence?.name || 'Близкий');
-          await setActivePeer(provisionalPeer, known?.name || presence?.name || 'Близкий');
+          setPeerLabel(label);
+          await setActivePeer(provisionalPeer, label);
         } else if (isHost && appMode === 'paranoic') {
           await setActivePeer(null);
         }
@@ -1612,6 +1644,11 @@ export default function App() {
       return;
     }
 
+    if (isBlocked(targetUserId)) {
+      setError('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+      return;
+    }
+
     setError('');
     const validation = await validateContactForCall(targetUserId, me.id, {
       name: label || known?.name,
@@ -1661,6 +1698,7 @@ export default function App() {
     }
 
     setAppMode('paranoic');
+    setMainTab(opts?.openChat ? 'chats' : mainTab);
     setScreen(opts?.openChat ? 'chat' : 'home');
     setMessengerSidebarOpen(false);
     setHostingSelf(false);
@@ -2344,15 +2382,63 @@ export default function App() {
   };
 
   const connected = p2pStatus === 'connected';
-  const isActiveSession =
-    connected ||
+  const callUiOpen =
+    callExpanded ||
     callState === 'calling' ||
     callState === 'in-call' ||
-    callState === 'ringing';
-  const liquidNavActive: LiquidNavTab =
-    callState === 'calling' || callState === 'in-call' || callState === 'ringing'
-      ? 'camera'
-      : 'chat';
+    (callState === 'ringing' && Boolean(incomingRing));
+  /** Bottom nav: на главных вкладках; скрыт в открытом чате, звонке и guest direct. */
+  const showBottomNav =
+    screen !== 'chat' &&
+    !callUiOpen &&
+    !guestPeerId &&
+    !incomingRing;
+
+  const activePeerId = peerId || guestPeerId;
+  const peerIsTrusted = Boolean(
+    activePeerId &&
+      (trustedIds.has(activePeerId) ||
+        isTrusted(activePeerId) ||
+        contacts.some((c) => c.id === activePeerId && c.trusted))
+  );
+  const showTrustBanner =
+    screen === 'chat' &&
+    Boolean(activePeerId) &&
+    !peerIsTrusted &&
+    messages.some((m) => !m.mine);
+
+  const goMainTab = (tab: LiquidNavTab) => {
+    setMainTab(tab);
+    setScreen('home');
+    setMessengerSidebarOpen(false);
+    setCallExpanded(false);
+    if (appMode === 'family' || appMode === 'select') {
+      setAppMode('paranoic');
+    }
+  };
+
+  const handleTrustPeer = async () => {
+    const id = activePeerId;
+    if (!id) return;
+    const next = await trustAndUpsertContact({
+      id,
+      name: peerLabel || 'Контакт',
+      color: peerColor || '#60a5fa',
+      avatarUrl: peerAvatarUrl || '',
+      username: looksLikeUsername(peerLabel) ? peerLabel : undefined,
+    });
+    setContacts(next);
+    setTrustedIds(loadTrustedIds());
+  };
+
+  const handleBlockPeer = async () => {
+    const id = activePeerId;
+    if (!id) return;
+    blockUser(id);
+    setTrustedIds(loadTrustedIds());
+    setError(`«${peerLabel}» заблокирован. Сообщения и звонки от этого ID игнорируются.`);
+    disconnect();
+  };
 
   const shellStyle =
     appMode === 'paranoic'
@@ -2403,7 +2489,7 @@ export default function App() {
           />
         )}
         <GlobeLobby
-          onBack={() => setAppMode('select')}
+          onBack={() => goMainTab('contacts')}
           people={mapPeople}
           geoSource={
             settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
@@ -2442,6 +2528,15 @@ export default function App() {
             );
           }}
         />
+        {!incomingRing && (
+          <LiquidNavigationBar
+            active={mainTab}
+            onChats={() => goMainTab('chats')}
+            onContacts={() => goMainTab('contacts')}
+            onSettings={() => goMainTab('settings')}
+            onProfile={() => goMainTab('profile')}
+          />
+        )}
       </>
     );
   }
@@ -2449,7 +2544,7 @@ export default function App() {
   return (
     <div
       className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}${
-        isActiveSession ? ' has-liquid-nav' : ''
+        showBottomNav ? ' has-liquid-nav' : ''
       }`}
       style={shellStyle}
     >
@@ -2543,183 +2638,339 @@ export default function App() {
               />
             ) : (
               <>
-            <div className="identity-card">
-              <button
-                type="button"
-                className="avatar-hit"
-                onClick={() => setProfileOpen(true)}
-                aria-label="Открыть профиль"
-              >
-                <Avatar
-                  name={identity.name}
-                  color={identity.color}
-                  avatarUrl={identity.avatarUrl}
-                  online="self"
-                />
-              </button>
-              <div className="identity-meta">
-                {editingName ? (
-                  <div className="name-edit">
-                    <input
-                      value={nameDraft}
-                      onChange={(e) => setNameDraft(e.target.value)}
-                      maxLength={32}
-                      autoFocus
-                    />
-                    <button type="button" className="text-link" onClick={saveName}>
-                      Сохранить
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="name-btn"
-                    onClick={() => {
-                      setNameDraft(identity.name);
-                      setEditingName(true);
-                    }}
-                  >
-                    <span>{identity.name}</span>
-                    <Pencil size={14} />
-                  </button>
-                )}
-                <p className="mono-id">ID · {identity.id}</p>
-                {settings.ghostMode && (
-                  <p className="ghost-mode-pill">
-                    <Ghost size={12} /> Ghost Mode · Антарктида
-                  </p>
-                )}
-                {settings.ephemeral24h && (
-                  <p className="ghost-mode-pill soft">
-                    <Timer size={12} /> Сообщения исчезают через 24 ч
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                className="icon-btn profile-settings-btn"
-                onClick={() => setProfileOpen(true)}
-                aria-label="Настройки профиля"
-              >
-                <Settings2 size={20} />
-              </button>
-            </div>
-
-                <div className="room-card magic-card liquid-glass-card">
-                  <Link2 size={28} className="room-card-icon" />
-                  <p className="room-id-label">Ваша магическая ссылка</p>
-                  <p className="mono-box magic-url">{magicLink}</p>
-                  <button
-                    type="button"
-                    className="mega-btn primary compact"
-                    onClick={() => void copyMagicLink()}
-                  >
-                    {copied ? <Check size={28} /> : <Copy size={28} />}
-                    {copied ? 'Скопировано' : 'Скопировать ссылку'}
-                  </button>
-                  <p className="hint">
-                    {identity.username
-                      ? `Короткая ссылка: ?u=${identity.username}`
-                      : 'Задайте никнейм в профиле — ссылка станет короткой и красивой.'}
-                  </p>
-                </div>
-
-                {!connected ? (
-                  <p className="lead">
-                    {joining || signalingStatus
-                      ? signalingStatus || 'Ждём входящий звонок по вашей ссылке…'
-                      : 'Ссылка активна. Или выберите контакт ниже.'}
-                  </p>
-                ) : (
-                  <>
-                    <p className="lead">
-                      На связи: <strong>{peerLabel}</strong>
-                    </p>
-                    <div className="mega-grid">
-                      <button type="button" className="mega-btn call" onClick={() => void startCall()}>
-                        <Phone size={36} />
-                        Позвонить
-                      </button>
-                      <button
-                        type="button"
-                        className="mega-btn chat"
-                        onClick={() => setScreen('chat')}
-                      >
-                        <MessageCircle size={36} />
-                        Написать
-                      </button>
-                      <button
-                        type="button"
-                        className="mega-btn media"
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <ImagePlus size={36} />
-                        Отправить фото / видео
-                      </button>
+                {mainTab === 'chats' && (
+                  <div className="tab-panel liquid-glass-card contacts-panel">
+                    <div className="contacts-head">
+                      <h2>Чаты</h2>
+                      <span className="contacts-count">{contacts.length}</span>
                     </div>
-                    <button type="button" className="text-link danger" onClick={disconnect}>
-                      <Unplug size={16} /> Разорвать связь
-                    </button>
-                  </>
-                )}
-
-            <div className="contacts-panel liquid-glass-card">
-              <div className="contacts-head">
-                <h2>Контакты</h2>
-                <span className="contacts-count">{contacts.length}</span>
-              </div>
-              {contacts.length === 0 ? (
-                <p className="empty-contacts">
-                  Пока пусто. Когда кто-то откроет вашу ссылку (или вы — чужую), контакт появится
-                  здесь.
-                </p>
-              ) : (
-                <ul className="contacts-list">
-                  {contacts.map((c) => {
-                    const online = onlineIds.has(c.id);
-                    return (
-                      <li key={c.id}>
+                    {connected && peerId && (
+                      <div className="active-session-card">
+                        <p className="lead" style={{ margin: 0 }}>
+                          На связи: <strong>{peerLabel}</strong>
+                        </p>
+                        <div className="mega-grid" style={{ marginTop: 12 }}>
+                          <button
+                            type="button"
+                            className="mega-btn call"
+                            onClick={() => void startCall()}
+                          >
+                            <Phone size={28} />
+                            Позвонить
+                          </button>
+                          <button
+                            type="button"
+                            className="mega-btn chat"
+                            onClick={() => setScreen('chat')}
+                          >
+                            <MessageCircle size={28} />
+                            Открыть чат
+                          </button>
+                        </div>
                         <button
                           type="button"
-                          className="contact-row"
-                          onClick={() => void connectToUser(c.id, c.name)}
-                          disabled={connected && peerId === c.id}
+                          className="text-link danger"
+                          onClick={disconnect}
+                          style={{ marginTop: 8 }}
                         >
-                          <Avatar
-                            name={c.name}
-                            color={c.color}
-                            avatarUrl={
-                              c.avatarUrl ||
-                              presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
-                            }
-                            size="sm"
-                            online={online ? true : 'off'}
-                          />
-                          <span className="contact-info">
-                            <span className="contact-name">{c.name}</span>
-                            <span className="contact-status">
-                              {online ? 'в сети' : 'не в сети'}
-                            </span>
-                          </span>
-                          <Phone size={18} className="contact-call" />
+                          <Unplug size={16} /> Разорвать связь
                         </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
+                      </div>
+                    )}
+                    {contacts.length === 0 ? (
+                      <p className="empty-contacts">
+                        Пока нет чатов. Откройте чужую ссылку или дождитесь, пока кто-то откроет
+                        вашу — контакт сохранится автоматически.
+                      </p>
+                    ) : (
+                      <ul className="contacts-list">
+                        {contacts.map((c) => {
+                          const online = onlineIds.has(c.id);
+                          const trusted = c.trusted || trustedIds.has(c.id);
+                          return (
+                            <li key={c.id}>
+                              <button
+                                type="button"
+                                className="contact-row"
+                                onClick={() =>
+                                  void connectToUser(c.id, c.name, { openChat: true })
+                                }
+                              >
+                                <Avatar
+                                  name={c.name}
+                                  color={c.color}
+                                  avatarUrl={
+                                    c.avatarUrl ||
+                                    presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                                  }
+                                  size="sm"
+                                  online={online ? true : 'off'}
+                                />
+                                <span className="contact-info">
+                                  <span className="contact-name">
+                                    {c.name}
+                                    {trusted && (
+                                      <span className="trust-badge" title="Доверенный">
+                                        <UserCheck size={12} />
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="contact-status">
+                                    {online ? 'в сети' : 'не в сети'}
+                                  </span>
+                                </span>
+                                <MessageCircle size={18} className="contact-call" />
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
-            {getRoomIdFromUrl() && (
-              <p className="hint muted-sep">
-                Legacy-комната: {roomId} · {buildRoomShareUrl(roomId)}
-              </p>
-            )}
-            {keyString && (
-              <p className="hint muted-sep">
-                E2EE активен · {hostingSelf ? 'свой инбокс' : 'гостевой'}
-              </p>
-            )}
+                {mainTab === 'contacts' && (
+                  <div className="tab-panel liquid-glass-card contacts-panel">
+                    <div className="contacts-head">
+                      <h2>Контакты</h2>
+                      <span className="contacts-count">{contacts.length}</span>
+                    </div>
+                    <p className="hint" style={{ marginTop: 0 }}>
+                      Доверенные контакты закреплены навсегда. Карта семьи — в настройках.
+                    </p>
+                    {contacts.length === 0 ? (
+                      <p className="empty-contacts">
+                        Записная книжка пуста. Перейдите по чужой ссылке — хост сохранится
+                        автоматически.
+                      </p>
+                    ) : (
+                      <ul className="contacts-list">
+                        {contacts.map((c) => {
+                          const online = onlineIds.has(c.id);
+                          const trusted = c.trusted || trustedIds.has(c.id);
+                          return (
+                            <li key={c.id}>
+                              <button
+                                type="button"
+                                className="contact-row"
+                                onClick={() => void connectToUser(c.id, c.name)}
+                                disabled={connected && peerId === c.id}
+                              >
+                                <Avatar
+                                  name={c.name}
+                                  color={c.color}
+                                  avatarUrl={
+                                    c.avatarUrl ||
+                                    presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                                  }
+                                  size="sm"
+                                  online={online ? true : 'off'}
+                                />
+                                <span className="contact-info">
+                                  <span className="contact-name">
+                                    {c.name}
+                                    {trusted && (
+                                      <span className="trust-badge" title="Доверенный">
+                                        <UserCheck size={12} />
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="contact-status">
+                                    {trusted
+                                      ? online
+                                        ? 'доверенный · в сети'
+                                        : 'доверенный · не в сети'
+                                      : online
+                                        ? 'в сети'
+                                        : 'не в сети'}
+                                  </span>
+                                </span>
+                                <Phone size={18} className="contact-call" />
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {mainTab === 'settings' && (
+                  <div className="tab-panel liquid-glass-card contacts-panel settings-tab">
+                    <div className="contacts-head">
+                      <h2>Настройки</h2>
+                    </div>
+                    <div className="profile-privacy-card" style={{ marginTop: 8 }}>
+                      <p className="profile-privacy-title">Приватность</p>
+                      <div className="ios-toggle-row">
+                        <div className="ios-toggle-copy">
+                          <div className="ios-toggle-label">
+                            <Ghost size={16} />
+                            <span>Ghost Mode</span>
+                          </div>
+                          <p>На карте вы в Антарктиде, GPS выключен.</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={settings.ghostMode}
+                          className={`ios-switch ${settings.ghostMode ? 'on' : ''}`}
+                          onClick={() => {
+                            const saved = saveSettings({ ghostMode: !settings.ghostMode });
+                            setSettings(saved);
+                          }}
+                        />
+                      </div>
+                      <div className="ios-toggle-row">
+                        <div className="ios-toggle-copy">
+                          <div className="ios-toggle-label">
+                            <Timer size={16} />
+                            <span>Удалять через 24 часа</span>
+                          </div>
+                          <p>Старые сообщения стираются из локального хранилища.</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={settings.ephemeral24h}
+                          className={`ios-switch ${settings.ephemeral24h ? 'on' : ''}`}
+                          onClick={() => {
+                            const saved = saveSettings({
+                              ephemeral24h: !settings.ephemeral24h,
+                            });
+                            setSettings(saved);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="mega-btn primary compact"
+                      style={{ marginTop: 16 }}
+                      onClick={() => setAppMode('family')}
+                    >
+                      <Globe2 size={22} />
+                      Открыть карту семьи
+                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="mega-btn media compact"
+                        style={{ marginTop: 10 }}
+                        onClick={() => setAdminOpen(true)}
+                      >
+                        <ShieldCheck size={20} />
+                        Admin Panel
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="text-link"
+                      style={{ marginTop: 16 }}
+                      onClick={() => setAppMode('select')}
+                    >
+                      <ArrowLeft size={16} /> К выбору режима
+                    </button>
+                  </div>
+                )}
+
+                {mainTab === 'profile' && (
+                  <>
+                    <div className="identity-card">
+                      <button
+                        type="button"
+                        className="avatar-hit"
+                        onClick={() => setProfileOpen(true)}
+                        aria-label="Открыть профиль"
+                      >
+                        <Avatar
+                          name={identity.name}
+                          color={identity.color}
+                          avatarUrl={identity.avatarUrl}
+                          online="self"
+                        />
+                      </button>
+                      <div className="identity-meta">
+                        {editingName ? (
+                          <div className="name-edit">
+                            <input
+                              value={nameDraft}
+                              onChange={(e) => setNameDraft(e.target.value)}
+                              maxLength={32}
+                              autoFocus
+                            />
+                            <button type="button" className="text-link" onClick={saveName}>
+                              Сохранить
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="name-btn"
+                            onClick={() => {
+                              setNameDraft(identity.name);
+                              setEditingName(true);
+                            }}
+                          >
+                            <span>{identity.name}</span>
+                            <Pencil size={14} />
+                          </button>
+                        )}
+                        <p className="mono-id">ID · {identity.id}</p>
+                        {settings.ghostMode && (
+                          <p className="ghost-mode-pill">
+                            <Ghost size={12} /> Ghost Mode · Антарктида
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn profile-settings-btn"
+                        onClick={() => setProfileOpen(true)}
+                        aria-label="Редактировать профиль"
+                      >
+                        <Settings2 size={20} />
+                      </button>
+                    </div>
+
+                    <div className="room-card magic-card liquid-glass-card">
+                      <Link2 size={28} className="room-card-icon" />
+                      <p className="room-id-label">Ваша магическая ссылка</p>
+                      <p className="mono-box magic-url">{magicLink}</p>
+                      <button
+                        type="button"
+                        className="mega-btn primary compact"
+                        onClick={() => void copyMagicLink()}
+                      >
+                        {copied ? <Check size={28} /> : <Copy size={28} />}
+                        {copied ? 'Скопировано' : 'Скопировать ссылку'}
+                      </button>
+                      <p className="hint">
+                        {identity.username
+                          ? `Короткая ссылка: ?u=${identity.username}`
+                          : 'Задайте никнейм в профиле — ссылка станет короткой.'}
+                      </p>
+                    </div>
+
+                    {!connected ? (
+                      <p className="lead">
+                        {joining || signalingStatus
+                          ? signalingStatus || 'Ждём входящий звонок по вашей ссылке…'
+                          : 'Ссылка активна. Поделитесь ею — гости сохранят вас в контакты.'}
+                      </p>
+                    ) : (
+                      <p className="lead">
+                        На связи: <strong>{peerLabel}</strong>
+                      </p>
+                    )}
+
+                    {keyString && (
+                      <p className="hint muted-sep">
+                        E2EE активен · {hostingSelf ? 'свой инбокс' : 'гостевой'}
+                      </p>
+                    )}
+                  </>
+                )}
               </>
             )}
           </section>
@@ -2807,7 +3058,14 @@ export default function App() {
               >
                 <PanelLeft size={20} />
               </button>
-              <button type="button" className="text-link chat-back-home" onClick={() => setScreen('home')}>
+              <button
+                type="button"
+                className="text-link chat-back-home"
+                onClick={() => {
+                  setScreen('home');
+                  setMainTab('chats');
+                }}
+              >
                 <ArrowLeft size={16} /> Назад
               </button>
               <div className="chat-peer">
@@ -2843,6 +3101,36 @@ export default function App() {
                 <Paperclip size={20} />
               </button>
             </div>
+
+            {showTrustBanner && (
+              <div className="trust-banner" role="status">
+                <div className="trust-banner-copy">
+                  <Shield size={16} />
+                  <p>
+                    Новый собеседник. Добавьте в доверенные, чтобы контакт навсегда остался в
+                    записной книжке.
+                  </p>
+                </div>
+                <div className="trust-banner-actions">
+                  <button
+                    type="button"
+                    className="trust-btn trust"
+                    onClick={() => void handleTrustPeer()}
+                  >
+                    <UserCheck size={16} />
+                    Доверять
+                  </button>
+                  <button
+                    type="button"
+                    className="trust-btn block"
+                    onClick={() => void handleBlockPeer()}
+                  >
+                    <Ban size={16} />
+                    Заблокировать
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="chat-log">
               {messages.length === 0 ? (
@@ -3178,25 +3466,13 @@ export default function App() {
       />
       )}
 
-      {isActiveSession && !incomingRing && (
+      {showBottomNav && (
         <LiquidNavigationBar
-          active={liquidNavActive}
-          onChat={() => {
-            setCallExpanded(false);
-            setScreen('chat');
-          }}
-          onCamera={() => {
-            if (callState === 'in-call' || callState === 'calling') {
-              setCallExpanded(true);
-              return;
-            }
-            void startCall();
-            setCallExpanded(true);
-          }}
-          onMap={() => {
-            setCallExpanded(false);
-            setAppMode('family');
-          }}
+          active={mainTab}
+          onChats={() => goMainTab('chats')}
+          onContacts={() => goMainTab('contacts')}
+          onSettings={() => goMainTab('settings')}
+          onProfile={() => goMainTab('profile')}
         />
       )}
 
