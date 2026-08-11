@@ -83,7 +83,6 @@ import {
 } from './crypto';
 import { P2PConnection, type CallState, type NetworkQuality, type P2PStatus, type SignalingDebugStatus } from './p2p';
 import {
-  buildRoomShareUrl,
   clearRoomParamFromUrl,
   getRoomIdFromUrl,
   resolveRoom,
@@ -201,7 +200,6 @@ export default function App() {
   /** id → счётчик вспышек ❤️ для перезапуска анимации. */
   const [heartBursts, setHeartBursts] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
-  const [roomId, setRoomId] = useState('');
   const [magicLink, setMagicLink] = useState(() =>
     buildMagicLink(getOrCreateIdentity())
   );
@@ -1561,12 +1559,10 @@ export default function App() {
             status: liveStatus,
             appMode,
           });
-          setRoomId(room);
           setJoining(false);
           return;
         }
 
-        setRoomId(room);
         setMagicLink(buildMagicLink(me));
 
         if (provisionalPeer) {
