@@ -83,6 +83,12 @@ import {
 } from './crypto';
 import { P2PConnection, type CallState, type NetworkQuality, type P2PStatus, type SignalingDebugStatus } from './p2p';
 import {
+  destroyP2PSession,
+  ensureP2PSession,
+  getP2PSession,
+} from './p2pSession';
+import { useP2P } from './P2PProvider';
+import {
   clearRoomParamFromUrl,
   getRoomIdFromUrl,
   resolveRoom,
@@ -175,6 +181,11 @@ function nowTime() {
 }
 
 export default function App() {
+  const {
+    setStatus: mirrorP2pStatus,
+    setCallState: mirrorCallState,
+    setSignalingStatus: mirrorSignalingStatus,
+  } = useP2P();
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [appMode, setAppMode] = useState<AppMode>(() => {
@@ -722,6 +733,17 @@ export default function App() {
     };
   }, [peerId, guestPeerId, peerLabel, peerAvatarUrl, peerColor]);
 
+  // Подхватить глобальную сессию после навигации / StrictMode.
+  useEffect(() => {
+    const existing = getP2PSession();
+    if (existing) {
+      p2pRef.current = existing;
+      setP2pStatus(existing.currentStatus);
+      setCallState(existing.currentCallState);
+      setSignalingStatus(existing.currentSignalingStatus);
+    }
+  }, []);
+
   /** Разблокировка автоплея рингтона после первого жеста. */
   useEffect(() => bindAudioUnlock(), []);
 
@@ -739,7 +761,7 @@ export default function App() {
       if (flags.isBanned && !wasBanned) {
         pendingStartCallRef.current = false;
         stopRingtone();
-        p2pRef.current?.close();
+        destroyP2PSession();
         p2pRef.current = null;
         setCallState('idle');
         setP2pStatus('idle');
@@ -989,10 +1011,11 @@ export default function App() {
   }, []);
 
   const ensureP2P = useCallback(() => {
-    if (!p2pRef.current) {
-      p2pRef.current = new P2PConnection({
+    // Синглтон из p2pSession — не пересоздаём PC при навигации; обновляем handlers.
+    p2pRef.current = ensureP2PSession({
         onStatus: (status) => {
           setP2pStatus(status);
+          mirrorP2pStatus(status);
           if (status === 'connected') {
             setError('');
             setIncomingConnection(false);
@@ -1062,9 +1085,13 @@ export default function App() {
             clearCallSessionResidue();
           }
         },
-        onSignalingStatus: (status) => setSignalingStatus(status),
+        onSignalingStatus: (status) => {
+          setSignalingStatus(status);
+          mirrorSignalingStatus(status);
+        },
         onCallState: (state) => {
           setCallState(state);
+          mirrorCallState(state);
           if (state === 'ringing') {
             setCallExpanded(true);
             const meta = peerMetaRef.current;
@@ -1418,8 +1445,7 @@ export default function App() {
           );
         },
         onError: (err) => setError(err.message),
-      });
-    }
+    });
     p2pRef.current.setLocalIdentity({
       userId: identityRef.current.id,
       name: identityRef.current.name,
@@ -1427,7 +1453,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer]);
+  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -1455,10 +1481,28 @@ export default function App() {
         const urlHandle = appMode === 'paranoic' ? getMagicTargetFromUrl() : null;
         const legacyRoom = appMode === 'paranoic' ? getRoomIdFromUrl() : null;
 
+        // Активный гостевой peer переживает family/select — не рвём P2P при открытии карты.
+        const stickyGuest =
+          guestPeerIdRef.current && guestPeerIdRef.current !== me.id
+            ? guestPeerIdRef.current
+            : null;
+        const live = getP2PSession();
+        const liveCall = live?.currentCallState ?? 'idle';
+        const keepGuestRoom =
+          Boolean(stickyGuest) &&
+          Boolean(live) &&
+          (live!.currentStatus === 'connected' ||
+            live!.currentStatus === 'connecting' ||
+            live!.currentStatus === 'creating-offer' ||
+            live!.currentStatus === 'waiting-answer' ||
+            liveCall === 'in-call' ||
+            liveCall === 'calling' ||
+            liveCall === 'ringing');
+
         // Резолв ?u=username|id → реальный peer id.
         let urlRoute = resolveMagicRoute(me.id, me.username);
-        if (appMode === 'family' || appMode === 'select') {
-          // Фон: всегда свой инбокс-хост, чтобы принимать join/звонки.
+        if ((appMode === 'family' || appMode === 'select') && !keepGuestRoom && !stickyGuest) {
+          // Фон: свой инбокс-хост, чтобы принимать join/звонки.
           urlRoute = { kind: 'self' };
         } else if (urlRoute.kind === 'guest' && urlHandle) {
           const resolvedId = await resolveHandleToUserId(urlHandle);
@@ -1492,14 +1536,11 @@ export default function App() {
           });
         }
 
-        // В Family/Select всегда свой инбокс (хост).
+        // Sticky guest > URL guest > null (свой инбокс). Не сбрасываем гостя при family/select.
         const guestId =
-          appMode === 'family' || appMode === 'select'
-            ? null
-            : (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
-              (guestPeerIdRef.current && guestPeerIdRef.current !== me.id
-                ? guestPeerIdRef.current
-                : null);
+          stickyGuest ||
+          (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
+          null;
 
         let room: string;
         let isHost: boolean;
@@ -1718,11 +1759,23 @@ export default function App() {
     setPeerAvatarUrl(presence?.avatarUrl || validation.contact.avatarUrl || '');
     setPeerColor(presence?.color || validation.contact.color || '#60a5fa');
     await setActivePeer(resolvedId, resolvedLabel);
-    p2pRef.current?.close();
+    destroyP2PSession();
     p2pRef.current = null;
     setSessionEpoch((n) => n + 1);
   };
 
+  /** Только UI: назад в список — P2P НЕ трогаем (как Telegram). */
+  const navigateHome = useCallback(() => {
+    setScreen('home');
+    setMainTab('chats');
+    setMessengerSidebarOpen(false);
+    setCallExpanded(false);
+  }, []);
+
+  /**
+   * Явный Hang Up / «Разорвать связь»: закрываем PC и возвращаемся в свой инбокс.
+   * Навигация «Назад» сюда не ходит.
+   */
   const returnToOwnInbox = () => {
     clearMagicParamFromUrl();
     clearRoomParamFromUrl();
@@ -1732,15 +1785,33 @@ export default function App() {
     guestPeerIdRef.current = null;
     setHostingSelf(true);
     void setActivePeer(null);
-    p2pRef.current?.close();
+    destroyP2PSession();
     p2pRef.current = null;
     setP2pStatus('idle');
     setCallState('idle');
     setScreen('home');
+    setMainTab('chats');
     setSessionEpoch((n) => n + 1);
   };
 
   const disconnect = () => {
+    returnToOwnInbox();
+  };
+
+  /** Guest UI «Назад»: если уже на связи — только спрятать UI; иначе отменить join. */
+  const leaveGuestUi = () => {
+    const live = getP2PSession();
+    const connectedNow = live?.currentStatus === 'connected';
+    const inCall =
+      live?.currentCallState === 'in-call' ||
+      live?.currentCallState === 'calling' ||
+      callState === 'in-call' ||
+      callState === 'calling';
+    if (connectedNow || inCall) {
+      navigateHome();
+      if (connectedNow) setScreen('chat');
+      return;
+    }
     returnToOwnInbox();
   };
 
@@ -2777,7 +2848,7 @@ export default function App() {
       <main className="app-main">
         {screen === 'home' && (
           <section className="home">
-            {guestPeerId ? (
+            {guestPeerId && !connected ? (
               <GuestDirectCall
                 hostName={peerLabel}
                 hostColor={peerColor}
@@ -2790,7 +2861,7 @@ export default function App() {
                 connectionStatus={p2pStatus}
                 onCall={() => void guestCallHost()}
                 onCancel={() => void cancelCall()}
-                onBack={returnToOwnInbox}
+                onBack={leaveGuestUi}
               />
             ) : (
               <>
@@ -3144,10 +3215,10 @@ export default function App() {
                   className="text-link"
                   onClick={() => {
                     setMessengerSidebarOpen(false);
-                    setScreen('home');
+                    navigateHome();
                   }}
                 >
-                  <ArrowLeft size={16} /> Профиль
+                  <ArrowLeft size={16} /> Чаты
                 </button>
                 <h2>Чаты</h2>
               </div>
@@ -3218,8 +3289,7 @@ export default function App() {
                 type="button"
                 className="text-link chat-back-home"
                 onClick={() => {
-                  setScreen('home');
-                  setMainTab('chats');
+                  navigateHome();
                 }}
               >
                 <ArrowLeft size={16} /> Назад

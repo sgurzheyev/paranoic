@@ -468,6 +468,11 @@ export class P2PConnection {
     this.handlers = handlers;
   }
 
+  /** Обновить колбэки UI без пересоздания RTCPeerConnection. */
+  setHandlers(handlers: P2PHandlers): void {
+    this.handlers = { ...this.handlers, ...handlers };
+  }
+
   /** Локальная личность для обмена при открытии DataChannel. */
   setLocalIdentity(identity: PeerIdentity): void {
     this.localIdentity = identity;
@@ -1998,7 +2003,7 @@ export class P2PConnection {
     return pc;
   }
 
-  /** failed / длительный disconnected → ICE restart, иначе корректный сброс. */
+  /** failed / длительный disconnected → ICE restart, иначе silent soft reset. */
   private async handleIceFailure(reason: string): Promise<void> {
     p2pAudit('ICE failure', {
       reason,
@@ -2009,12 +2014,16 @@ export class P2PConnection {
     const ok = await this.tryIceRestart();
     if (ok) return;
 
-    if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+    const inMediaCall =
+      this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing';
+    const keepSession = Boolean(this.signal) && (inMediaCall || this.status === 'connected' || this.status === 'disconnected');
+
+    if (keepSession) {
       if (this.iceRestartAttempts < 5) {
         window.setTimeout(() => void this.tryIceRestart(), 900);
         return;
       }
-      p2pAudit('ICE exhausted — soft reset', { reason });
+      p2pAudit('ICE exhausted — silent soft reset', { reason });
       this.handlers.onError?.(new Error('Связь оборвалась. Переподключаемся…'));
       this.softResetPeer();
       return;
@@ -2547,7 +2556,9 @@ export class P2PConnection {
       }
       if (this.status === 'connected') {
         this.setStatus('disconnected');
-        if (this.isHost && this.signal) {
+        // Silent reconnect: и хост, и гость — signaling жив, PC пересобираем.
+        if (this.signal) {
+          p2pAudit('DC closed — silent softResetPeer');
           this.softResetPeer();
         }
       }
