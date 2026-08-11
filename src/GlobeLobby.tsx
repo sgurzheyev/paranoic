@@ -36,6 +36,13 @@ import MemoryGemPopup from './MemoryGemPopup';
 import MemoryGemComposer from './MemoryGemComposer';
 import SoftFeatureBoundary from './SoftFeatureBoundary';
 import AiBodyguardChat from './AiBodyguardChat';
+import {
+  buildRealtimeSystemBlock,
+  reverseGeocodeLabel,
+} from './aiContext';
+import { getP2PSession } from './p2pSession';
+import { isTrusted } from './trust';
+import { loadContacts } from './contacts';
 
 const ArFootprints = lazy(() =>
   import('./ArFootprints').catch((err) => {
@@ -674,14 +681,72 @@ export default function GlobeLobby({
     });
   };
 
-  const collectSituationContext = () => {
+  const collectSituationContext = async () => {
     const map = mapRef.current;
     const bounds = map?.getBounds() ?? null;
-    return buildVisibleGemsContext(gems, {
+    const gemsContext = buildVisibleGemsContext(gems, {
       showGems,
       inBounds: bounds
         ? (lat, lng) => bounds.contains([lng, lat])
         : undefined,
+    });
+
+    const snapshot = peopleRef.current;
+    const self = snapshot.find((p) => p.isMe);
+    const byId = new Map<
+      string,
+      { id: string; name: string; online: boolean; trusted?: boolean }
+    >();
+    for (const p of snapshot) {
+      if (p.isMe || !p.isContact) continue;
+      byId.set(p.userId, {
+        id: p.userId,
+        name: p.name,
+        online: Boolean(p.online),
+        trusted: isTrusted(p.userId),
+      });
+    }
+    try {
+      const book = await loadContacts();
+      for (const c of book) {
+        const prev = byId.get(c.id);
+        byId.set(c.id, {
+          id: c.id,
+          name: c.name || prev?.name || 'Контакт',
+          online: prev?.online ?? false,
+          trusted: Boolean(c.trusted) || isTrusted(c.id) || prev?.trusted,
+        });
+      }
+    } catch {
+      /* книжка недоступна — остаёмся на presence */
+    }
+    const contactRows = [...byId.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'ru')
+    );
+
+    let placeLabel: string | null = null;
+    if (
+      self &&
+      !ghostMode &&
+      geoSource === 'gps' &&
+      Number.isFinite(self.lat) &&
+      Number.isFinite(self.lng)
+    ) {
+      placeLabel = await reverseGeocodeLabel(self.lat, self.lng);
+    }
+
+    const live = getP2PSession();
+
+    return buildRealtimeSystemBlock({
+      lat: self?.lat ?? null,
+      lng: self?.lng ?? null,
+      geoSource,
+      ghostMode,
+      placeLabel,
+      contacts: contactRows,
+      gemsContext,
+      p2pStatus: live?.currentStatus ?? null,
+      callState: live?.currentCallState ?? null,
     });
   };
 

@@ -10,8 +10,8 @@ export type AiChatMessage = {
 };
 
 type AiBodyguardChatProps = {
-  /** Тихий сбор: content видимых map_gems → [Контекст обстановки]. */
-  collectSituationContext: () => string;
+  /** Сбор realtime-контекста (локация, контакты, P2P, капсулы) → system prompt. */
+  collectSituationContext: () => string | Promise<string>;
   onClose: () => void;
 };
 
@@ -49,7 +49,7 @@ export default function AiBodyguardChat({
     setError('');
     setMessages((prev) => [...prev, { id: uid(), role: 'user', content: text }]);
 
-    const situation = collectSituationContext();
+    const situation = await Promise.resolve(collectSituationContext());
 
     try {
       const reply = await generate(text, situation);
@@ -84,7 +84,7 @@ export default function AiBodyguardChat({
             </span>
             <div>
               <h2>ИИ-телохранитель</h2>
-              <p>Облачный gpt-4o-mini · контекст капсул без утечки в UI</p>
+              <p>Облачный gpt-4o-mini · видит карту, контакты и статус связи</p>
             </div>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">

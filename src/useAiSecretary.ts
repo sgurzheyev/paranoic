@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { buildBodyguardSystemPrompt } from './aiContext';
 import { AI_SECRETARY_FUNCTION, BODYGUARD_SYSTEM_PROMPT } from './aiSettings';
 import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
 
@@ -42,7 +43,7 @@ export function formatAiChannelError(err: unknown): string {
 
 /**
  * ИИ-телохранитель через Supabase Edge Function → OpenAI gpt-4o-mini.
- * Прямых запросов к OpenAI / Ollama с клиента нет.
+ * `situationContext` вшивается в system prompt (Context Injection), не в user bubble.
  */
 export function useAiSecretary() {
   const [loading, setLoading] = useState(false);
@@ -70,13 +71,14 @@ export function useAiSecretary() {
         await ensureAuthSession();
         const sb = getSupabase();
 
-        const userContent = situationContext?.trim()
-          ? `${trimmed}\n\n[Контекст обстановки]\n${situationContext.trim()}`
-          : trimmed;
+        const systemContent = buildBodyguardSystemPrompt(
+          BODYGUARD_SYSTEM_PROMPT,
+          situationContext
+        );
 
         const messages = [
-          { role: 'system' as const, content: BODYGUARD_SYSTEM_PROMPT },
-          { role: 'user' as const, content: userContent },
+          { role: 'system' as const, content: systemContent },
+          { role: 'user' as const, content: trimmed },
         ];
 
         const { data, error: invokeError } = await sb.functions.invoke(AI_SECRETARY_FUNCTION, {
@@ -88,7 +90,6 @@ export function useAiSecretary() {
         }
 
         if (invokeError) {
-          // Тело ошибки иногда приходит в data (non-2xx от Edge Function).
           if (data && typeof data === 'object' && 'error' in data) {
             const bodyErr = (data as { error?: string }).error;
             if (bodyErr) throw new Error(bodyErr);
