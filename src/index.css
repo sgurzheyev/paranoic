@@ -2897,8 +2897,19 @@ textarea {
 }
 
 .family-mapbox .mapboxgl-ctrl-bottom-right {
-  margin-bottom: 9.5rem;
+  margin-bottom: calc(7.25rem + env(safe-area-inset-bottom, 0px));
   margin-right: 0.75rem;
+}
+
+/** Отступ под фиксированный Bottom Tab Bar (высота панели ≈ 72px + 16px gap + safe area). */
+.map-chrome-bottom {
+  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 640px) {
+  .map-chrome-bottom {
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .map-avatar-marker {
@@ -3989,15 +4000,16 @@ textarea {
   border-color: rgba(252, 165, 165, 0.6);
 }
 
-/* Чат ИИ поверх карты */
+/* Чат ИИ поверх карты — выше liquid-nav (z-index 45), с отступом под Tab Bar */
 .ai-bodyguard-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 50;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   padding: 16px;
+  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
   background: rgba(3, 5, 10, 0.45);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -4006,6 +4018,7 @@ textarea {
 @media (min-width: 640px) {
   .ai-bodyguard-backdrop {
     align-items: center;
+    padding-bottom: 16px;
   }
 }
 
