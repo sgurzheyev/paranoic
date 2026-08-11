@@ -18,12 +18,12 @@ export function pickRecorderMime(mode: NoteMode): string {
   const candidates =
     mode === 'video'
       ? [
-          'video/webm;codecs=vp9,opus',
-          'video/webm;codecs=vp8,opus',
-          'video/webm',
           'video/mp4',
+          'video/webm;codecs=vp8,opus',
+          'video/webm;codecs=vp9,opus',
+          'video/webm',
         ]
-      : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+      : ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
 
   for (const mime of candidates) {
     if (
@@ -68,7 +68,7 @@ export async function openNoteStream(mode: NoteMode): Promise<MediaStream> {
   });
 }
 
-export function stopStream(stream: MediaStream | null): void {
+export function stopStream(stream: MediaStream | null | undefined): void {
   if (!stream) return;
   for (const track of stream.getTracks()) {
     try {
@@ -85,8 +85,16 @@ export type NoteRecording = {
   durationMs: number;
 };
 
+export type NoteRecorderSession = {
+  /** Корректно завершить запись (для отправки). */
+  stop: () => void;
+  /** Прервать без полезных данных. */
+  cancel: () => void;
+  result: Promise<NoteRecording | null>;
+};
+
 /**
- * Запись MediaRecorder до stop()/max duration.
+ * Запись MediaRecorder до stop()/cancel()/max duration.
  * `onTick` — прогресс 0..1.
  */
 export function recordMediaNote(
@@ -96,20 +104,24 @@ export function recordMediaNote(
     onTick?: (ratio: number, elapsedMs: number) => void;
     signal?: AbortSignal;
   }
-): {
-  stop: () => void;
-  result: Promise<NoteRecording | null>;
-} {
+): NoteRecorderSession {
   const mime = pickRecorderMime(mode);
-  const recorder = new MediaRecorder(stream, { mimeType: mime });
+  let recorder: MediaRecorder;
+  try {
+    recorder = new MediaRecorder(stream, { mimeType: mime });
+  } catch {
+    recorder = new MediaRecorder(stream);
+  }
+
   const chunks: BlobPart[] = [];
   const startedAt = Date.now();
   let tickTimer: ReturnType<typeof setInterval> | null = null;
   let maxTimer: ReturnType<typeof setTimeout> | null = null;
   let settled = false;
+  let discarded = false;
 
   recorder.ondataavailable = (e) => {
-    if (e.data.size > 0) chunks.push(e.data);
+    if (e.data && e.data.size > 0) chunks.push(e.data);
   };
 
   const cleanupTimers = () => {
@@ -119,68 +131,109 @@ export function recordMediaNote(
     maxTimer = null;
   };
 
-  const result = new Promise<NoteRecording | null>((resolve) => {
-    recorder.onstop = () => {
-      cleanupTimers();
-      if (settled) return;
-      settled = true;
-      const elapsed = Date.now() - startedAt;
-      if (elapsed < MIN_NOTE_MS || chunks.length === 0) {
-        resolve(null);
-        return;
-      }
-      const blob = new Blob(chunks, { type: mime.split(';')[0] || mime });
-      const ext = extensionForMime(mime);
-      const mediaKind = mode === 'video' ? 'circle' : 'voice';
-      const name =
-        mode === 'video' ? `circle-${Date.now()}.${ext}` : `voice-${Date.now()}.${ext}`;
-      const file = new File([blob], name, { type: blob.type || mime });
-      resolve({ file, mediaKind, durationMs: elapsed });
-    };
-
-    recorder.onerror = () => {
-      cleanupTimers();
-      if (settled) return;
-      settled = true;
-      resolve(null);
-    };
-
-    options?.signal?.addEventListener('abort', () => {
-      try {
-        if (recorder.state !== 'inactive') recorder.stop();
-      } catch {
-        /* */
-      }
-    });
-  });
-
-  recorder.start(200);
-  tickTimer = setInterval(() => {
-    const elapsed = Date.now() - startedAt;
-    options?.onTick?.(Math.min(1, elapsed / MAX_NOTE_MS), elapsed);
-    if (elapsed >= MAX_NOTE_MS) {
-      try {
-        if (recorder.state !== 'inactive') recorder.stop();
-      } catch {
-        /* */
-      }
-    }
-  }, 100);
-
-  maxTimer = setTimeout(() => {
+  const safeStop = () => {
     try {
-      if (recorder.state !== 'inactive') recorder.stop();
+      if (recorder.state === 'recording' || recorder.state === 'paused') {
+        recorder.stop();
+      }
     } catch {
       /* */
     }
-  }, MAX_NOTE_MS + 50);
+  };
+
+  let settle: ((value: NoteRecording | null) => void) | null = null;
+
+  const finish = (value: NoteRecording | null) => {
+    cleanupTimers();
+    if (settled) return;
+    settled = true;
+    settle?.(value);
+  };
+
+  const result = new Promise<NoteRecording | null>((resolve) => {
+    settle = resolve;
+
+    recorder.onstop = () => {
+      if (discarded) {
+        finish(null);
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < MIN_NOTE_MS || chunks.length === 0) {
+        finish(null);
+        return;
+      }
+      const type = (recorder.mimeType || mime).split(';')[0] || mime;
+      const blob = new Blob(chunks, { type });
+      if (blob.size < 32) {
+        finish(null);
+        return;
+      }
+      const ext = extensionForMime(type);
+      const mediaKind = mode === 'video' ? 'circle' : 'voice';
+      const name =
+        mode === 'video' ? `circle-${Date.now()}.${ext}` : `voice-${Date.now()}.${ext}`;
+      const file = new File([blob], name, { type: blob.type || type });
+      finish({ file, mediaKind, durationMs: elapsed });
+    };
+
+    recorder.onerror = () => {
+      discarded = true;
+      finish(null);
+    };
+
+    const onAbort = () => {
+      discarded = true;
+      chunks.length = 0;
+      if (recorder.state === 'recording' || recorder.state === 'paused') {
+        safeStop();
+      } else {
+        finish(null);
+      }
+    };
+
+    if (options?.signal) {
+      if (options.signal.aborted) onAbort();
+      else options.signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+
+  // iOS/Safari часто ломается на timeslice — пробуем без него при ошибке.
+  try {
+    recorder.start(250);
+  } catch {
+    try {
+      recorder.start();
+    } catch {
+      discarded = true;
+      cleanupTimers();
+      return {
+        stop: () => undefined,
+        cancel: () => undefined,
+        result: Promise.resolve(null),
+      };
+    }
+  }
+
+  tickTimer = setInterval(() => {
+    const elapsed = Date.now() - startedAt;
+    options?.onTick?.(Math.min(1, elapsed / MAX_NOTE_MS), elapsed);
+    if (elapsed >= MAX_NOTE_MS) safeStop();
+  }, 100);
+
+  maxTimer = setTimeout(() => safeStop(), MAX_NOTE_MS + 50);
 
   return {
     stop: () => {
-      try {
-        if (recorder.state !== 'inactive') recorder.stop();
-      } catch {
-        /* */
+      safeStop();
+    },
+    cancel: () => {
+      discarded = true;
+      chunks.length = 0;
+      if (recorder.state === 'recording' || recorder.state === 'paused') {
+        safeStop();
+      } else {
+        finish(null);
       }
     },
     result,

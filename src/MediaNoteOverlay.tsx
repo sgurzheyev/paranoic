@@ -6,6 +6,8 @@ type MediaNoteOverlayProps = {
   mode: NoteMode;
   stream: MediaStream;
   progress: number;
+  /** Палец ушёл вверх / в зону отмены (Telegram slide-to-cancel). */
+  cancelArmed?: boolean;
   onCancel: () => void;
 };
 
@@ -14,6 +16,7 @@ export default function MediaNoteOverlay({
   mode,
   stream,
   progress,
+  cancelArmed = false,
   onCancel,
 }: MediaNoteOverlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -32,12 +35,18 @@ export default function MediaNoteOverlay({
   const deg = Math.round(progress * 360);
 
   return (
-    <div className="media-note-overlay" role="dialog" aria-label="Запись сообщения">
+    <div
+      className={`media-note-overlay${cancelArmed ? ' cancel-armed' : ''}`}
+      role="dialog"
+      aria-label="Запись сообщения"
+    >
       <div className="media-note-stage">
         <div
           className="media-note-ring"
           style={{
-            background: `conic-gradient(var(--chat) ${deg}deg, rgba(255,255,255,0.12) 0deg)`,
+            background: `conic-gradient(${
+              cancelArmed ? 'rgba(248,113,113,0.95)' : 'var(--chat)'
+            } ${deg}deg, rgba(255,255,255,0.12) 0deg)`,
           }}
         >
           <div className="media-note-preview">
@@ -52,17 +61,36 @@ export default function MediaNoteOverlay({
           </div>
         </div>
         <p className="media-note-hint">
-          {mode === 'video' ? (
+          {cancelArmed ? (
             <>
-              <Video size={14} /> Отпустите, чтобы отправить
+              <X size={14} /> Отпустите, чтобы отменить
+            </>
+          ) : mode === 'video' ? (
+            <>
+              <Video size={14} /> Удерживайте · отпустите, чтобы отправить
             </>
           ) : (
             <>
-              <Mic size={14} /> Отпустите, чтобы отправить
+              <Mic size={14} /> Удерживайте · отпустите, чтобы отправить
             </>
           )}
         </p>
-        <button type="button" className="media-note-cancel" onClick={onCancel} aria-label="Отмена">
+        <button
+          type="button"
+          className="media-note-cancel"
+          aria-label="Отмена"
+          onPointerDown={(e) => {
+            // Важно: pointerdown, не click — иначе pointer capture / hold глотает tap.
+            e.preventDefault();
+            e.stopPropagation();
+            onCancel();
+          }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCancel();
+          }}
+        >
           <X size={18} /> Отмена
         </button>
       </div>

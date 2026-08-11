@@ -1249,6 +1249,8 @@ textarea {
   cursor: pointer;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -1257,6 +1259,15 @@ textarea {
   background: linear-gradient(165deg, rgba(232, 160, 172, 0.45), rgba(255, 255, 255, 0.06));
   border-color: rgba(232, 160, 172, 0.55);
   transform: scale(1.04);
+}
+
+.chat-record-btn.cancel-armed {
+  background: linear-gradient(165deg, rgba(248, 113, 113, 0.5), rgba(255, 255, 255, 0.06));
+  border-color: rgba(248, 113, 113, 0.65);
+}
+
+.media-note-overlay.cancel-armed .media-note-hint {
+  color: #fecaca;
 }
 
 .note-mode-toggle {
@@ -1345,6 +1356,12 @@ textarea {
   border-radius: 999px;
   padding: 8px 14px;
   cursor: pointer;
+  touch-action: manipulation;
+  pointer-events: auto;
+  position: relative;
+  z-index: 2;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .file-pending-card {
