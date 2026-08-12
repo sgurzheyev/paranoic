@@ -150,11 +150,13 @@ import {
   loadContacts,
   removeContact,
   resolvePeerHandle,
+  resolvePeerProfile,
   trustAndUpsertContact,
   upsertContact,
   validateContactForCall,
   type Contact,
 } from './contacts';
+import { syncProfileToSupabase, fetchRemoteProfile } from './profile';
 import {
   clearCallResidueState,
   clearCallSessionResidue,
@@ -162,7 +164,6 @@ import {
   saveCallResidue,
 } from './callSessionCleanup';
 import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
-import { syncProfileToSupabase, fetchRemoteProfile } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -281,6 +282,7 @@ export default function App() {
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
   const [mainTab, setMainTab] = useState<LiquidNavTab>(() => {
+    if (getMagicTargetFromUrl()) return 'chats';
     if (hasSavedLoginSession() || shouldSkipModeSelector()) {
       if (!getMagicTargetFromUrl()) return 'contacts';
     }
@@ -740,40 +742,59 @@ export default function App() {
     clearCallResidueState();
   }, []);
 
-  /** Magic link: резолв хоста и имя до join — гость видит «Подключаемся к [Имя]». */
+  /** Magic link (?u=): SELECT profiles → контакт → экран гостя до join. */
   useEffect(() => {
     const urlHandle = getMagicTargetFromUrl();
     if (!urlHandle) return;
+
+    const me = identityRef.current;
+    if (resolveMagicRoute(me.id, me.username).kind === 'self') return;
+
     let cancelled = false;
     void (async () => {
-      const me = identityRef.current;
-      const resolvedId = await resolvePeerHandle(urlHandle);
-      if (cancelled || !resolvedId || resolvedId === me.id) return;
+      setAppMode('paranoic');
+      setScreen('home');
+      setMainTab('chats');
+      setLinkWarning('');
 
-      guestPeerIdRef.current = resolvedId;
-      setGuestPeerId(resolvedId);
+      if (!hasSupabaseConfig()) {
+        setLinkWarning('Supabase не настроен — ссылка недоступна');
+        return;
+      }
+
+      const profile = await resolvePeerProfile(urlHandle);
+      if (cancelled) return;
+
+      if (!profile?.id) {
+        setLinkWarning('Пользователь не найден');
+        setGuestPeerId(null);
+        guestPeerIdRef.current = null;
+        setHostingSelf(true);
+        setP2pStatus('failed');
+        return;
+      }
+
+      if (profile.id === me.id) return;
+
+      guestPeerIdRef.current = profile.id;
+      setGuestPeerId(profile.id);
       setHostingSelf(false);
+      setPeerLabel(profile.name || profile.username || 'Контакт');
+      setPeerAvatarUrl(profile.avatar_url || '');
+      setPeerColor(profile.color || '#60a5fa');
 
       const captured = await captureHostFromMagicLink({
-        hostId: resolvedId,
+        hostId: profile.id,
         myUserId: me.id,
         urlHandle,
+        profile,
       });
       if (cancelled) return;
       if (captured) {
         setContacts(await loadContacts());
-        setPeerLabel(captured.name);
-        setPeerAvatarUrl(captured.avatarUrl || '');
-        setPeerColor(captured.color);
-      } else {
-        const remote = await fetchRemoteProfile(resolvedId);
-        if (remote) {
-          setPeerLabel(remote.name);
-          setPeerAvatarUrl(remote.avatar_url || '');
-          setPeerColor(remote.color);
-        }
       }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -1641,7 +1662,6 @@ export default function App() {
           const resolvedId = await resolvePeerHandle(urlHandle);
           if (cancelled) return;
           if (!resolvedId) {
-            // Жёсткий стоп: не уходим в «Подключаемся» с битым peer id.
             setGuestPeerId(null);
             guestPeerIdRef.current = null;
             setHostingSelf(true);
@@ -1649,9 +1669,7 @@ export default function App() {
             setSignalingStatus('');
             setJoining(false);
             clearCallSessionResidue();
-            setError(
-              `Пользователь «${urlHandle}» не найден. Проверьте никнейм или откройте ссылку с ID.`
-            );
+            setLinkWarning('Пользователь не найден');
             console.warn('[P2P_DEBUG] abort join — peer unresolved', { urlHandle });
             return;
           }
@@ -1740,7 +1758,6 @@ export default function App() {
         setMagicLink(buildMagicLink(me));
 
         if (provisionalPeer) {
-          // Цепная реакция: гость сразу сохраняет хоста в записную книжку.
           const captured = await captureHostFromMagicLink({
             hostId: provisionalPeer,
             myUserId: me.id,
@@ -3153,7 +3170,6 @@ export default function App() {
           <ParanoicLogo size={36} compact className="brand-logo-mark" />
           <div>
             <h1>Paranoic</h1>
-            <p className="brand-sub">Семейная связь без чужих серверов</p>
           </div>
         </div>
         <div className="app-header-right">

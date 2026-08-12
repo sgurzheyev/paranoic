@@ -30,11 +30,14 @@ export type SyncProfileOptions = {
   password?: string;
 };
 
-/** Колонки profiles в production Supabase. */
-export const PROFILE_COLUMNS =
-  'id,name,color,avatar_url,theme_fon,username,role,is_banned,password';
+/** Публичные поля profiles (magic link / lookup — без password). */
+export const PROFILE_PUBLIC_COLUMNS =
+  'id,name,color,avatar_url,theme_fon,username,role,is_banned';
 
-const PROFILE_SELECT = PROFILE_COLUMNS;
+/** Колонки profiles в production Supabase (включая password для входа). */
+export const PROFILE_COLUMNS = `${PROFILE_PUBLIC_COLUMNS},password`;
+
+const PROFILE_SELECT = PROFILE_PUBLIC_COLUMNS;
 
 /** Прочитать сохранённый пароль из строки profiles (колонка `password`). */
 export function readStoredPassword(row: Record<string, unknown> | RemoteProfile): string {
@@ -265,61 +268,92 @@ export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile 
   }
 }
 
-/** Найти профиль по короткому username. */
+/** Найти профиль по username — SELECT в public.profiles. */
 export async function fetchProfileByUsername(
   username: string
 ): Promise<RemoteProfile | null> {
   if (!hasSupabaseConfig()) return null;
-  const handle = normalizeUsername(username);
+  const handle = normalizeUsername(username.replace(/^@+/, ''));
   if (!handle) return null;
   try {
     const sb = getSupabase();
-    const { data, error } = await sb
+
+    const { data: exact, error: exactErr } = await sb
       .from(PROFILES_TABLE)
-      .select(PROFILE_SELECT)
+      .select(PROFILE_PUBLIC_COLUMNS)
+      .eq('username', handle)
+      .maybeSingle();
+    if (exactErr) {
+      console.warn('[paranoic] username lookup (eq)', exactErr.message);
+    } else if (exact) {
+      return exact as RemoteProfile;
+    }
+
+    const { data: fuzzy, error: fuzzyErr } = await sb
+      .from(PROFILES_TABLE)
+      .select(PROFILE_PUBLIC_COLUMNS)
       .ilike('username', handle)
       .maybeSingle();
-    if (error) {
-      console.warn('[paranoic] username lookup', error.message);
+    if (fuzzyErr) {
+      console.warn('[paranoic] username lookup (ilike)', fuzzyErr.message);
       return null;
     }
-    return data as RemoteProfile | null;
-  } catch {
+    return (fuzzy as RemoteProfile | null) ?? null;
+  } catch (e) {
+    console.warn('[paranoic] username lookup failed', e);
     return null;
   }
 }
 
 /**
- * ?u=handle → реальный user id.
- * UUID / legacy id → id (даже без строки в profiles).
- * Username → lookup в profiles; не найден → null (нельзя угадать inbox).
+ * ?u=handle → профиль из Supabase.
+ * Username всегда резолвится через SELECT; UUID — по id.
  */
-export async function resolveHandleToUserId(handle: string): Promise<string | null> {
-  const raw = handle.trim();
+export async function resolveMagicLinkProfile(
+  rawHandle: string
+): Promise<RemoteProfile | null> {
+  const raw = rawHandle.trim().replace(/^@+/, '');
   if (!raw) return null;
 
-  // UUID — всегда валидный peer id (профиль в Supabase не обязателен).
   if (looksLikeUuid(raw) || isValidUuid(raw)) {
-    console.log('[P2P_DEBUG] resolve uuid', { handle: raw });
-    return raw;
+    return fetchRemoteProfile(raw);
   }
 
-  // Не UUID → ищем по никнейму в profiles.
-  const byUsername = await fetchProfileByUsername(raw);
-  if (byUsername?.id) {
-    console.log('[P2P_DEBUG] resolve username', { handle: raw, userId: byUsername.id });
-    return byUsername.id;
+  const normalized = normalizeUsername(raw);
+  if (normalized) {
+    const byUsername = await fetchProfileByUsername(normalized);
+    if (byUsername?.id) {
+      console.log('[paranoic] magic link resolved username', {
+        handle: raw,
+        userId: byUsername.id,
+      });
+      return byUsername;
+    }
   }
 
-  // Прямой id в profiles (короткий/legacy).
   const byId = await fetchRemoteProfile(raw);
   if (byId?.id) {
-    console.log('[P2P_DEBUG] resolve id', { handle: raw, userId: byId.id });
-    return byId.id;
+    console.log('[paranoic] magic link resolved id', { handle: raw, userId: byId.id });
+    return byId;
   }
 
-  // Не похоже на username — это peer id без строки profiles (офлайн-гость / legacy).
-  if (!looksLikeUsername(raw) && raw.length >= 8) {
+  console.warn('[paranoic] magic link profile not found', { handle: raw });
+  return null;
+}
+
+/**
+ * ?u=handle → реальный user id.
+ * Username → обязательный SELECT в profiles; не угадываем inbox по строке.
+ */
+export async function resolveHandleToUserId(handle: string): Promise<string | null> {
+  const raw = handle.trim().replace(/^@+/, '');
+  if (!raw) return null;
+
+  const profile = await resolveMagicLinkProfile(raw);
+  if (profile?.id) return profile.id;
+
+  // Legacy peer id (не username): длинный id без строки в profiles.
+  if (!looksLikeUsername(raw) && !normalizeUsername(raw) && raw.length >= 8) {
     console.log('[P2P_DEBUG] resolve legacy peer id', { handle: raw });
     return raw;
   }
@@ -344,15 +378,33 @@ async function hashPasswordForLogin(password: string): Promise<string> {
   return hashPassword(password, { minLength: 1 });
 }
 
-/** SELECT * FROM profiles WHERE username = handle */
+/** SELECT profiles WHERE username = handle (вход — с password). */
 async function fetchProfileRowByUsername(
   handle: string
 ): Promise<{ row: RemoteProfile | null; dbError: string | null }> {
+  const profile = await fetchProfileByUsername(handle);
+  if (profile) {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(PROFILES_TABLE)
+      .select(PROFILE_COLUMNS)
+      .eq('id', profile.id)
+      .maybeSingle();
+    if (error) {
+      console.error('[paranoic login] SELECT password', { username: handle, message: error.message });
+      return { row: profile, dbError: null };
+    }
+    return { row: (data as RemoteProfile | null) ?? profile, dbError: null };
+  }
+
+  const normalized = normalizeUsername(handle);
+  if (!normalized) return { row: null, dbError: null };
+
   const sb = getSupabase();
   const { data, error } = await sb
     .from(PROFILES_TABLE)
     .select(PROFILE_COLUMNS)
-    .eq('username', handle)
+    .eq('username', normalized)
     .maybeSingle();
 
   if (error) {

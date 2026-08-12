@@ -1,7 +1,7 @@
 {
   "name": "Paranoic",
   "short_name": "Paranoic",
-  "description": "Семейная связь без чужих серверов",
+  "description": "Приватная семейная связь",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait-primary",

@@ -5,7 +5,8 @@ import {
   fetchProfileByUsername,
   fetchRemoteProfile,
   looksLikeUuid,
-  resolveHandleToUserId,
+  resolveMagicLinkProfile,
+  type RemoteProfile,
 } from './profile';
 import { isTrusted, trustUser } from './trust';
 
@@ -135,21 +136,27 @@ export async function findLocalContact(
 }
 
 /**
- * ?u=handle → peer id: Supabase, затем локальная записная книжка.
- * Для контактов из local storage не показываем «не найден» из‑за сбоя сети.
+ * ?u=handle → peer id: Supabase SELECT, затем локальная записная книжка.
  */
 export async function resolvePeerHandle(handle: string): Promise<string | null> {
-  const trimmed = handle.trim();
+  const trimmed = handle.trim().replace(/^@+/, '');
   if (!trimmed) return null;
 
-  const remote = await resolveHandleToUserId(trimmed);
-  if (remote) return remote;
+  const profile = await resolveMagicLinkProfile(trimmed);
+  if (profile?.id) return profile.id;
 
   const local = await findLocalContact(trimmed, {
     username: looksLikeUsername(trimmed) ? trimmed : undefined,
     name: looksLikeUsername(trimmed) ? trimmed : undefined,
   });
   return local?.id ?? null;
+}
+
+/** Профиль хоста для ?u= (для UI до join). */
+export async function resolvePeerProfile(handle: string): Promise<RemoteProfile | null> {
+  const trimmed = handle.trim().replace(/^@+/, '');
+  if (!trimmed) return null;
+  return resolveMagicLinkProfile(trimmed);
 }
 
 /**
@@ -236,11 +243,15 @@ export async function captureHostFromMagicLink(opts: {
   hostId: string;
   myUserId: string;
   urlHandle?: string | null;
+  profile?: RemoteProfile | null;
 }): Promise<Contact | null> {
-  const { hostId, myUserId, urlHandle } = opts;
+  const { hostId, myUserId, urlHandle, profile: preset } = opts;
   if (!hostId || hostId === myUserId) return null;
 
-  let remote = await fetchRemoteProfile(hostId);
+  let remote = preset ?? (await fetchRemoteProfile(hostId));
+  if (!remote && urlHandle) {
+    remote = await resolveMagicLinkProfile(urlHandle);
+  }
   if (!remote && urlHandle && looksLikeUsername(urlHandle)) {
     remote = await fetchProfileByUsername(urlHandle);
   }
