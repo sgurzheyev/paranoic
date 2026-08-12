@@ -145,6 +145,7 @@ import {
   captureHostFromMagicLink,
   loadContacts,
   removeContact,
+  resolvePeerHandle,
   trustAndUpsertContact,
   upsertContact,
   validateContactForCall,
@@ -157,7 +158,7 @@ import {
   saveCallResidue,
 } from './callSessionCleanup';
 import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
-import { syncProfileToSupabase, resolveHandleToUserId, fetchRemoteProfile } from './profile';
+import { syncProfileToSupabase, fetchRemoteProfile } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -736,7 +737,7 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       const me = identityRef.current;
-      const resolvedId = await resolveHandleToUserId(urlHandle);
+      const resolvedId = await resolvePeerHandle(urlHandle);
       if (cancelled || !resolvedId || resolvedId === me.id) return;
 
       guestPeerIdRef.current = resolvedId;
@@ -1605,7 +1606,7 @@ export default function App() {
           // Фон: свой инбокс-хост, чтобы принимать join/звонки.
           urlRoute = { kind: 'self' };
         } else if (urlRoute.kind === 'guest' && urlHandle) {
-          const resolvedId = await resolveHandleToUserId(urlHandle);
+          const resolvedId = await resolvePeerHandle(urlHandle);
           if (cancelled) return;
           if (!resolvedId) {
             // Жёсткий стоп: не уходим в «Подключаемся» с битым peer id.
@@ -1779,19 +1780,36 @@ export default function App() {
     return peerIdRef.current === targetId || guestPeerIdRef.current === targetId;
   };
 
-  const quickChatContact = (c: Contact) => {
-    void connectToUser(c.id, c.name, { openChat: true });
-  };
-
-  const quickCallContact = (c: Contact) => {
-    pendingStartCallRef.current = true;
-    void connectToUser(c.id, c.name, { openChat: true });
-  };
-
-  const connectToUser = async (
+  const openPeerSession = async (
     targetUserId: string,
-    label?: string,
-    opts?: { openChat?: boolean }
+    label: string,
+    contactMeta?: Partial<Pick<Contact, 'username' | 'avatarUrl' | 'color'>>,
+    opts?: { openChat?: boolean; rejoin?: boolean }
+  ) => {
+    const meta = contactMeta ?? {};
+    setAppMode('paranoic');
+    setMainTab(opts?.openChat !== false ? 'chats' : mainTab);
+    setScreen(opts?.openChat !== false ? 'chat' : 'home');
+    setMessengerSidebarOpen(false);
+    setHostingSelf(false);
+    setGuestPeerId(targetUserId);
+    guestPeerIdRef.current = targetUserId;
+    saveCallResidue({ peerId: targetUserId, guestPeerId: targetUserId });
+    setMagicUserInUrl(targetUserId);
+    const presence = presenceUsers.find((u) => u.userId === targetUserId);
+    setPeerAvatarUrl(presence?.avatarUrl || meta.avatarUrl || '');
+    setPeerColor(presence?.color || meta.color || '#60a5fa');
+    await setActivePeer(targetUserId, label);
+    if (opts?.rejoin !== false) {
+      destroyP2PSession();
+      p2pRef.current = null;
+      setSessionEpoch((n) => n + 1);
+    }
+  };
+
+  const connectToLocalContact = async (
+    contact: Contact,
+    opts?: { openChat?: boolean; startCall?: boolean }
   ) => {
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Связь недоступна.');
@@ -1799,7 +1817,72 @@ export default function App() {
     }
 
     const me = identityRef.current;
+    const targetUserId = contact.id;
+
+    if (targetUserId === me.id) {
+      setError(
+        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
+      );
+      return;
+    }
+
+    if (isBlocked(targetUserId)) {
+      setError('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+      return;
+    }
+
+    setError('');
+    const liveConnected = isLiveConnectedTo(targetUserId);
+
+    if (opts?.startCall) {
+      pendingStartCallRef.current = true;
+      if (liveConnected) {
+        setAppMode('paranoic');
+        await startCall();
+        return;
+      }
+    }
+
+    if (liveConnected && opts?.openChat !== false && !opts?.startCall) {
+      setAppMode('paranoic');
+      setMainTab('chats');
+      setScreen('chat');
+      setMessengerSidebarOpen(false);
+      await setActivePeer(targetUserId, contact.name);
+      return;
+    }
+
+    await openPeerSession(targetUserId, contact.name, contact, {
+      openChat: opts?.openChat,
+      rejoin: !liveConnected,
+    });
+  };
+
+  const quickChatContact = (c: Contact) => {
+    void connectToLocalContact(c, { openChat: true });
+  };
+
+  const quickCallContact = (c: Contact) => {
+    void connectToLocalContact(c, { startCall: true, openChat: false });
+  };
+
+  const connectToUser = async (
+    targetUserId: string,
+    label?: string,
+    opts?: { openChat?: boolean; startCall?: boolean }
+  ) => {
     const known = contacts.find((c) => c.id === targetUserId);
+    if (known) {
+      await connectToLocalContact(known, opts);
+      return;
+    }
+
+    if (isBannedRef.current) {
+      setError('Ваш аккаунт заблокирован. Связь недоступна.');
+      return;
+    }
+
+    const me = identityRef.current;
 
     if (targetUserId === me.id) {
       setError(
@@ -1815,10 +1898,8 @@ export default function App() {
 
     setError('');
     const validation = await validateContactForCall(targetUserId, me.id, {
-      name: label || known?.name,
-      username: known?.username || (label && looksLikeUsername(label) ? label : undefined),
-      color: known?.color,
-      avatarUrl: known?.avatarUrl,
+      name: label,
+      username: label && looksLikeUsername(label) ? label : undefined,
     });
 
     if (!validation.ok) {
@@ -1829,36 +1910,11 @@ export default function App() {
         return;
       }
       if (validation.reason === 'missing' && isLiveConnectedTo(targetUserId)) {
-        const resolvedId = targetUserId;
-        const resolvedLabel = label || known?.name || 'Близкий';
-        setAppMode('paranoic');
-        setMainTab(opts?.openChat ? 'chats' : mainTab);
-        setScreen(opts?.openChat ? 'chat' : 'home');
-        setMessengerSidebarOpen(false);
-        setHostingSelf(false);
-        setGuestPeerId(resolvedId);
-        guestPeerIdRef.current = resolvedId;
-        saveCallResidue({ peerId: resolvedId, guestPeerId: resolvedId });
-        setMagicUserInUrl(known?.username || resolvedId);
-        const presence = presenceUsers.find((u) => u.userId === resolvedId);
-        setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
-        setPeerColor(presence?.color || known?.color || '#60a5fa');
-        await setActivePeer(resolvedId, resolvedLabel);
+        await openPeerSession(targetUserId, label || 'Близкий', {}, { openChat: opts?.openChat, rejoin: false });
         return;
       }
-      const title = label || known?.name || targetUserId;
-      const shouldRemove = window.confirm(
-        `Контакт «${title}» больше не найден (профиль удалён или ID изменился).\n\nУдалить его из записной книжки?`
-      );
-      if (shouldRemove) {
-        const next = await removeContact(targetUserId);
-        setContacts(next);
-        setError(`Контакт «${title}» удалён из записной книжки.`);
-      } else {
-        setError(
-          `Контакт «${title}» неактуален. Удалите его из списка или обновите ссылку собеседника.`
-        );
-      }
+      const title = label || targetUserId;
+      setError(`Пользователь «${title}» не найден. Проверьте никнейм или откройте ссылку с ID.`);
       return;
     }
 
@@ -1866,8 +1922,7 @@ export default function App() {
     const resolvedLabel = validation.contact.name || label || 'Близкий';
 
     if (validation.idChanged) {
-      const next = await loadContacts();
-      setContacts(next);
+      setContacts(await loadContacts());
     } else if (!validation.skipped) {
       setContacts(await loadContacts());
     }
@@ -1879,22 +1934,13 @@ export default function App() {
       return;
     }
 
-    setAppMode('paranoic');
-    setMainTab(opts?.openChat ? 'chats' : mainTab);
-    setScreen(opts?.openChat ? 'chat' : 'home');
-    setMessengerSidebarOpen(false);
-    setHostingSelf(false);
-    setGuestPeerId(resolvedId);
-    guestPeerIdRef.current = resolvedId;
-    saveCallResidue({ peerId: resolvedId, guestPeerId: resolvedId });
-    setMagicUserInUrl(validation.contact.username || resolvedId);
-    const presence = presenceUsers.find((u) => u.userId === resolvedId);
-    setPeerAvatarUrl(presence?.avatarUrl || validation.contact.avatarUrl || '');
-    setPeerColor(presence?.color || validation.contact.color || '#60a5fa');
-    await setActivePeer(resolvedId, resolvedLabel);
-    destroyP2PSession();
-    p2pRef.current = null;
-    setSessionEpoch((n) => n + 1);
+    if (opts?.startCall) {
+      pendingStartCallRef.current = true;
+    }
+
+    await openPeerSession(resolvedId, resolvedLabel, validation.contact, {
+      openChat: opts?.openChat,
+    });
   };
 
   /** Только UI: назад в список — P2P НЕ трогаем (как Telegram). */
@@ -3153,8 +3199,8 @@ export default function App() {
                                 c.avatarUrl ||
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
                               }
+                              onOpen={() => quickChatContact(c)}
                               onCall={() => quickCallContact(c)}
-                              onMessage={() => quickChatContact(c)}
                             />
                           );
                         })}
@@ -3194,8 +3240,8 @@ export default function App() {
                                 c.avatarUrl ||
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
                               }
+                              onOpen={() => quickChatContact(c)}
                               onCall={() => quickCallContact(c)}
-                              onMessage={() => quickChatContact(c)}
                             />
                           );
                         })}

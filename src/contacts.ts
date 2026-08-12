@@ -1,7 +1,12 @@
 import localforage from 'localforage';
 import { looksLikeUsername, isValidUuid } from './identity';
 import { hasSupabaseConfig } from './lib/supabase';
-import { fetchProfileByUsername, fetchRemoteProfile, looksLikeUuid } from './profile';
+import {
+  fetchProfileByUsername,
+  fetchRemoteProfile,
+  looksLikeUuid,
+  resolveHandleToUserId,
+} from './profile';
 import { isTrusted, trustUser } from './trust';
 
 export type ContactSource = 'magic' | 'hello' | 'manual' | 'trust' | 'call';
@@ -107,12 +112,52 @@ function isPeerIdWithoutRequiredProfile(id: string): boolean {
   return looksLikeUuid(id) || isValidUuid(id) || (!looksLikeUsername(id) && id.length >= 8);
 }
 
+/** Найти контакт в локальной записной книжке (id / username). */
+export async function findLocalContact(
+  contactId: string,
+  hint?: { username?: string; name?: string }
+): Promise<Contact | null> {
+  const list = await loadContacts();
+  const usernameHint =
+    (hint?.username && looksLikeUsername(hint.username) ? hint.username : '') ||
+    (hint?.name && looksLikeUsername(hint.name) ? hint.name : '') ||
+    (looksLikeUsername(contactId) ? contactId : '');
+
+  return (
+    list.find(
+      (c) =>
+        c.id === contactId ||
+        (usernameHint &&
+          c.username &&
+          c.username.toLowerCase() === usernameHint.toLowerCase())
+    ) ?? null
+  );
+}
+
+/**
+ * ?u=handle → peer id: Supabase, затем локальная записная книжка.
+ * Для контактов из local storage не показываем «не найден» из‑за сбоя сети.
+ */
+export async function resolvePeerHandle(handle: string): Promise<string | null> {
+  const trimmed = handle.trim();
+  if (!trimmed) return null;
+
+  const remote = await resolveHandleToUserId(trimmed);
+  if (remote) return remote;
+
+  const local = await findLocalContact(trimmed, {
+    username: looksLikeUsername(trimmed) ? trimmed : undefined,
+    name: looksLikeUsername(trimmed) ? trimmed : undefined,
+  });
+  return local?.id ?? null;
+}
+
 /**
  * Перед звонком: сверить контакт с Supabase.
  * - self → блок
- * - missing → ok:false (UI предложит удалить из книжки)
+ * - missing → ok:false (только для абсолютно новых пользователей)
  * - найден → обновить кэш (в т.ч. если id сменился через username)
- * Без Supabase / UUID без профиля — пропускаем жёсткую проверку (legacy/гость).
+ * Локальная записная книжка имеет приоритет — Supabase не блокирует чат/звонок.
  */
 export async function validateContactForCall(
   contactId: string,
@@ -121,6 +166,11 @@ export async function validateContactForCall(
 ): Promise<ContactValidation> {
   if (!contactId || contactId === myUserId) {
     return { ok: false, reason: 'self' };
+  }
+
+  const local = await findLocalContact(contactId, hint);
+  if (local) {
+    return { ok: true, contact: local, idChanged: false, skipped: true };
   }
 
   const fallbackContact = (): Contact => ({
@@ -148,25 +198,7 @@ export async function validateContactForCall(
     remote = await fetchProfileByUsername(usernameHint);
   }
 
-  if (!remote && usernameHint) {
-    const list = await loadContacts();
-    const cached = list.find(
-      (c) =>
-        c.id === contactId ||
-        (c.username && c.username.toLowerCase() === usernameHint.toLowerCase())
-    );
-    if (cached) {
-      return { ok: true, contact: cached, idChanged: false, skipped: true };
-    }
-    return { ok: false, reason: 'missing' };
-  }
-
   if (!remote) {
-    const list = await loadContacts();
-    const cached = list.find((c) => c.id === contactId);
-    if (cached) {
-      return { ok: true, contact: cached, idChanged: false, skipped: true };
-    }
     if (isPeerIdWithoutRequiredProfile(contactId)) {
       return { ok: true, contact: fallbackContact(), idChanged: false, skipped: true };
     }

@@ -1,4 +1,4 @@
-import { MessageCircle, Phone, UserCheck } from 'lucide-react';
+import { Phone, UserCheck } from 'lucide-react';
 import Avatar from './Avatar';
 import type { Contact } from './contacts';
 
@@ -8,23 +8,29 @@ type ContactListRowProps = {
   trusted: boolean;
   avatarUrl?: string;
   disabled?: boolean;
+  onOpen: () => void;
   onCall: () => void;
-  onMessage: () => void;
 };
 
-/** Строка контакта с быстрыми кнопками «Позвонить» и «Чат». */
+/** Строка контакта: tap по карточке → чат, иконка справа → звонок. */
 export default function ContactListRow({
   contact,
   online,
   trusted,
   avatarUrl,
   disabled = false,
+  onOpen,
   onCall,
-  onMessage,
 }: ContactListRowProps) {
   return (
     <li className="contact-list-item">
-      <div className="contact-row contact-row--info">
+      <button
+        type="button"
+        className="contact-row contact-row--info"
+        disabled={disabled}
+        aria-label={`Чат с ${contact.name}`}
+        onClick={onOpen}
+      >
         <Avatar
           name={contact.name}
           color={contact.color}
@@ -43,27 +49,19 @@ export default function ContactListRow({
           </span>
           <span className="contact-status">{online ? 'в сети' : 'не в сети'}</span>
         </span>
-      </div>
-      <div className="contact-row-actions">
-        <button
-          type="button"
-          className="contact-action-btn contact-action-btn--call"
-          disabled={disabled}
-          aria-label={`Позвонить ${contact.name}`}
-          onClick={onCall}
-        >
-          <Phone size={17} />
-        </button>
-        <button
-          type="button"
-          className="contact-action-btn contact-action-btn--chat"
-          disabled={disabled}
-          aria-label={`Чат с ${contact.name}`}
-          onClick={onMessage}
-        >
-          <MessageCircle size={17} />
-        </button>
-      </div>
+      </button>
+      <button
+        type="button"
+        className="contact-action-btn contact-action-btn--call"
+        disabled={disabled}
+        aria-label={`Позвонить ${contact.name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onCall();
+        }}
+      >
+        <Phone size={18} strokeWidth={2.25} />
+      </button>
     </li>
   );
 }

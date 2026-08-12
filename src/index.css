@@ -2859,13 +2859,21 @@ textarea {
 .contact-row--info {
   flex: 1;
   min-width: 0;
-  cursor: default;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
 
-.contact-row--info:hover {
-  border-color: var(--glass-border-soft);
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+.contact-row--info:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 18px rgba(255, 255, 255, 0.05);
+}
+
+.contact-row--info:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .contact-row-actions {
@@ -2879,8 +2887,8 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
   border: 1px solid var(--glass-border-soft);
   background: rgba(255, 255, 255, 0.06);
@@ -2903,9 +2911,18 @@ textarea {
   cursor: not-allowed;
 }
 
+.contact-action-btn--call {
+  color: #6ee7a8;
+  border-color: rgba(110, 231, 168, 0.55);
+  background: rgba(52, 211, 153, 0.16);
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.12);
+}
+
 .contact-action-btn--call:hover:not(:disabled) {
-  color: #7ddea8;
-  border-color: rgba(125, 222, 168, 0.45);
+  color: #a7f3c9;
+  border-color: rgba(110, 231, 168, 0.75);
+  background: rgba(52, 211, 153, 0.28);
+  box-shadow: 0 0 18px rgba(52, 211, 153, 0.22);
 }
 
 .contact-action-btn--chat:hover:not(:disabled) {
