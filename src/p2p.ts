@@ -890,9 +890,16 @@ export class P2PConnection {
       return;
     }
 
-    // Гость ещё ждёт Accept хоста — сбрасываем handshake, signaling оставляем.
-    if (this.status === 'connecting' || this.status === 'creating-offer' || this.status === 'waiting-answer') {
-      this.softResetPeer();
+    // Явная отмена — закрыть PC, остановить медиа, не перезапускать join.
+    if (
+      this.status === 'connecting' ||
+      this.status === 'creating-offer' ||
+      this.status === 'waiting-answer' ||
+      this.status === 'connected' ||
+      this.status === 'disconnected' ||
+      this.status === 'failed'
+    ) {
+      this.abortPendingConnection();
     }
   }
 
@@ -2163,6 +2170,53 @@ export class P2PConnection {
       this.iceRestarting = false;
       return false;
     }
+  }
+
+  /** Явная отмена пользователем — закрыть PC и НЕ перезапускать join. */
+  private abortPendingConnection(): void {
+    this.clearJoinRetry();
+    this.clearCallInviteRetry();
+    this.clearIceCheckTimeout();
+    this.clearIceSoftRestartTimer();
+    this.clearWaitForPeerTimeout();
+    this.stopMediaWatchdog();
+    this.stopNetworkWatch();
+    void this.stopScreenShareInternal(false);
+    this.stopLocalMedia();
+    this.clearRemoteStream();
+    this.failActiveFileTransfers(FILE_TRANSFER_LOST);
+    this.makingOffer = false;
+    this.ignoreOffer = false;
+    this.iceRestarting = false;
+    this.iceRestartAttempts = 0;
+    this.refreshingMedia = false;
+    this.handshakeStarted = false;
+    this.pendingCandidates = [];
+    this.pendingJoinPeerId = null;
+    this.pendingCallOffer = null;
+    this.callAcceptedPendingOffer = false;
+    this.remotePeerId = null;
+    this.handledCtrlIds.clear();
+    this.resetAdaptState();
+    this.setCallState('idle');
+    this.teardownDataChannels();
+
+    if (this.pc) {
+      this.pc.onicecandidate = null;
+      this.pc.onconnectionstatechange = null;
+      this.pc.oniceconnectionstatechange = null;
+      this.pc.ondatachannel = null;
+      this.pc.ontrack = null;
+      try {
+        this.pc.close();
+      } catch {
+        /* */
+      }
+      this.pc = null;
+    }
+
+    this.setStatus('idle');
+    this.setSignalingStatus('');
   }
 
   /** Закрывает PC/канал, но сохраняет Supabase signaling (инбокс хоста жив). */

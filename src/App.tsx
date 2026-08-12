@@ -199,6 +199,7 @@ export default function App() {
     setStatus: mirrorP2pStatus,
     setCallState: mirrorCallState,
     setSignalingStatus: mirrorSignalingStatus,
+    hangUpSession,
   } = useP2P();
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -2256,6 +2257,7 @@ export default function App() {
     stopRingtone();
     closeActiveNotification();
     pendingStartCallRef.current = false;
+    pendingRingAcceptRef.current = false;
 
     const me = identityRef.current;
     const target = peerIdRef.current || guestPeerIdRef.current;
@@ -2268,21 +2270,44 @@ export default function App() {
     } else if (callId && (state === 'in-call' || state === 'ending')) {
       void updateCallSessionStatus(callId, 'ended');
     } else if (target && callId) {
-      // Гость ещё ждёт Accept — всё равно помечаем отмену для peer.
       void callInboxRef.current?.sendCancel(target, me.id, callId);
       void updateCallSessionStatus(callId, 'cancelled');
     }
 
     outboundCallIdRef.current = null;
     setIncomingRing(null);
-    pendingRingAcceptRef.current = false;
 
-    await p2pRef.current?.cancelCall();
+    try {
+      await p2pRef.current?.cancelCall();
+    } catch {
+      /* */
+    }
+
+    hangUpSession();
+    p2pRef.current = null;
     attachLocalVideo(null);
     setScreenSharing(false);
     setNetworkQuality('good');
     setCallExpanded(false);
-    setScreen(guestPeerIdRef.current ? 'home' : 'chat');
+    setJoining(false);
+    setSignalingStatus('');
+    mirrorSignalingStatus('');
+    setCallState('idle');
+    setP2pStatus('idle');
+
+    if (guestPeerIdRef.current) {
+      clearMagicParamFromUrl();
+      clearCallSessionResidue();
+      clearEphemeralGuestId();
+      setGuestPeerId(null);
+      guestPeerIdRef.current = null;
+      setHostingSelf(true);
+      void setActivePeer(null);
+      setSessionEpoch((n) => n + 1);
+    }
+
+    setMainTab('contacts');
+    setScreen('home');
   };
 
   const toggleScreenShare = async () => {
@@ -2985,100 +3010,104 @@ export default function App() {
   if (appMode === 'family') {
     return (
       <div className="family-app-shell">
-        {error && (
-          <div
-            className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
-            role="alert"
-          >
-            <span className="app-toast__text">{error}</span>
-            <button
-              type="button"
-              className="app-toast__close icon-btn"
-              onClick={() => setError('')}
-              aria-label="Закрыть"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {callAlertToastOpen && callAlert && (
-          <div
-            className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
-            role="alert"
-          >
-            <span className="app-toast__text">{callAlert}</span>
-            <button
-              type="button"
-              className="app-toast__close icon-btn"
-              onClick={() => setCallAlertToastOpen(false)}
-              aria-label="Закрыть"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {linkWarning && (
-          <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
-            <span className="app-toast__text">{linkWarning}</span>
-          </div>
-        )}
-        {adminOpen && (
-          <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
-        )}
-        {incomingRing && (
-          <IncomingCallModal
-            caller={incomingRing.from}
-            onAccept={() => {
-              setAppMode('paranoic');
-              void acceptMediaCall();
+        <div className="family-map-stage">
+          <GlobeLobby
+            onBack={() => goMainTab('contacts')}
+            people={mapPeople}
+            geoSource={
+              settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
+            }
+            callAlertActive={Boolean(callAlert)}
+            onCallAlertReveal={() => {
+              if (callAlert) setCallAlertToastOpen(true);
             }}
-            onReject={() => void declineMediaCall()}
+            isAdmin={isAdmin}
+            onOpenAdmin={() => setAdminOpen(true)}
+            banned={isBanned}
+            ghostMode={settings.ghostMode}
+            onGhostModeChange={(next) => {
+              const saved = saveSettings({ ghostMode: next });
+              setSettings(saved);
+            }}
+            onChatUser={(user) => {
+              if (isBannedRef.current) {
+                setError('Ваш аккаунт заблокирован. Связь недоступна.');
+                setAppMode('paranoic');
+                return;
+              }
+              void connectToUser(
+                user.userId,
+                user.isContact ? user.name : 'Незнакомец',
+                { openChat: true }
+              );
+            }}
+            onCallUser={(user) => {
+              if (isBannedRef.current) {
+                setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+                setAppMode('paranoic');
+                return;
+              }
+              pendingStartCallRef.current = true;
+              void connectToUser(
+                user.userId,
+                user.isContact ? user.name : 'Незнакомец',
+                { openChat: true }
+              );
+            }}
           />
-        )}
-        <GlobeLobby
-          onBack={() => goMainTab('contacts')}
-          people={mapPeople}
-          geoSource={
-            settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
-          }
-          callAlertActive={Boolean(callAlert)}
-          onCallAlertReveal={() => {
-            if (callAlert) setCallAlertToastOpen(true);
-          }}
-          isAdmin={isAdmin}
-          onOpenAdmin={() => setAdminOpen(true)}
-          banned={isBanned}
-          ghostMode={settings.ghostMode}
-          onGhostModeChange={(next) => {
-            const saved = saveSettings({ ghostMode: next });
-            setSettings(saved);
-          }}
-          onChatUser={(user) => {
-            if (isBannedRef.current) {
-              setError('Ваш аккаунт заблокирован. Связь недоступна.');
-              setAppMode('paranoic');
-              return;
-            }
-            void connectToUser(
-              user.userId,
-              user.isContact ? user.name : 'Незнакомец',
-              { openChat: true }
-            );
-          }}
-          onCallUser={(user) => {
-            if (isBannedRef.current) {
-              setError('Ваш аккаунт заблокирован. Звонки недоступны.');
-              setAppMode('paranoic');
-              return;
-            }
-            pendingStartCallRef.current = true;
-            void connectToUser(
-              user.userId,
-              user.isContact ? user.name : 'Незнакомец',
-              { openChat: true }
-            );
-          }}
-        />
+        </div>
+        <div className="family-app-overlays" aria-live="polite">
+          {error && (
+            <div
+              className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
+              role="alert"
+            >
+              <span className="app-toast__text">{error}</span>
+              <button
+                type="button"
+                className="app-toast__close icon-btn"
+                onClick={() => setError('')}
+                aria-label="Закрыть"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {callAlertToastOpen && callAlert && (
+            <div
+              className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
+              role="alert"
+            >
+              <span className="app-toast__text">{callAlert}</span>
+              <button
+                type="button"
+                className="app-toast__close icon-btn"
+                onClick={() => setCallAlertToastOpen(false)}
+                aria-label="Закрыть"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {linkWarning && (
+            <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
+              <span className="app-toast__text">{linkWarning}</span>
+            </div>
+          )}
+          {adminOpen && (
+            <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
+          )}
+          {incomingRing && (
+            <IncomingCallModal
+              caller={incomingRing.from}
+              onAccept={() => {
+                setAppMode('paranoic');
+                void acceptMediaCall();
+              }}
+              onReject={() => void declineMediaCall()}
+            />
+          )}
+        </div>
         {!incomingRing && (
           <LiquidNavigationBar
             active={mainTab}

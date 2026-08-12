@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { ArrowLeft, Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
 import type { CallState, P2PStatus } from './p2p';
@@ -36,9 +37,16 @@ export default function GuestDirectCall({
   const inCall = callState === 'in-call';
   const calling = callState === 'calling';
   const failed = connectionStatus === 'failed' || connectionStatus === 'disconnected';
+  const waitingConnection =
+    connectionStatus === 'connecting' ||
+    connectionStatus === 'creating-offer' ||
+    connectionStatus === 'waiting-answer';
   const waiting =
     !failed &&
-    (joining || Boolean(signalingStatus) || (!connected && !calling && !inCall));
+    (joining ||
+      waitingConnection ||
+      Boolean(signalingStatus) ||
+      (!connected && !calling && !inCall));
   const isCancellable = !inCall && !failed && (waiting || calling);
 
   const label = failed
@@ -56,8 +64,13 @@ export default function GuestDirectCall({
       onBack();
       return;
     }
-    if (isCancellable) onCancel();
-    else if (!inCall) onCall();
+    if (!inCall && !calling && !waiting) onCall();
+  };
+
+  const handleCancel = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onCancel();
   };
 
   return (
@@ -90,22 +103,27 @@ export default function GuestDirectCall({
           type="button"
           className={`guest-direct-call-btn${waiting && !connected ? ' is-waiting' : ''}${
             calling ? ' is-active' : ''
-          }${isCancellable ? ' is-cancellable' : ''}${failed ? ' is-failed' : ''}`}
+          }${failed ? ' is-failed' : ''}`}
           onClick={handleMainClick}
-          disabled={inCall}
-          title={
-            failed
-              ? 'Назад'
-              : isCancellable
-                ? 'Повесить трубку / Cancel'
-                : undefined
-          }
-          aria-label={failed ? 'Назад' : isCancellable ? 'Отменить звонок' : label}
+          disabled={inCall || isCancellable}
+          aria-label={failed ? 'Назад' : label}
         >
           <span className="guest-direct-call-pulse" aria-hidden />
-          {isCancellable || failed ? <PhoneOff size={32} /> : <Phone size={32} />}
+          {failed ? <PhoneOff size={32} /> : <Phone size={32} />}
           <span>{label}</span>
         </button>
+
+        {isCancellable && (
+          <button
+            type="button"
+            className="guest-direct-cancel-btn"
+            aria-label="Отменить звонок"
+            onClick={handleCancel}
+          >
+            <PhoneOff size={18} />
+            Отменить
+          </button>
+        )}
       </div>
     </div>
   );

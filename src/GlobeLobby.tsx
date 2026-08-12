@@ -810,7 +810,7 @@ export default function GlobeLobby({
         : 'Запрашиваем геолокацию…';
 
   return (
-    <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
+    <div className="family-map-root absolute inset-0 h-full w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
       <div
         ref={containerRef}
         className={`family-mapbox absolute inset-0 h-full w-full${mapBootDone ? ' is-visible' : ''}`}
@@ -930,7 +930,7 @@ export default function GlobeLobby({
         </header>
 
         {banned && (
-          <div className="pointer-events-auto mx-4 mt-1 rounded-2xl border border-rose-400/40 bg-rose-500/15 px-4 py-3 text-center text-sm font-bold text-rose-100 sm:mx-6">
+          <div className="map-banned-banner pointer-events-auto">
             Аккаунт заблокирован — звонки и чат с карты недоступны.
           </div>
         )}

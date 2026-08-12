@@ -263,8 +263,37 @@ textarea {
   inset: 0;
   width: 100%;
   height: 100%;
+  height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  isolation: isolate;
+}
+
+.family-map-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.family-map-root {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.family-app-overlays {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+}
+
+.family-app-overlays > * {
+  pointer-events: auto;
 }
 
 .app-toast {
@@ -272,7 +301,7 @@ textarea {
   left: 50%;
   transform: translateX(-50%) translateY(10px);
   bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
-  z-index: 55;
+  z-index: 100;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2146,6 +2175,9 @@ textarea {
 }
 
 .call-overlay-actions {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -4029,6 +4061,25 @@ textarea {
 }
 
 /* ── Map layers menu + AR FAB ── */
+.map-banned-banner {
+  position: fixed;
+  top: calc(4.5rem + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 75;
+  max-width: min(92vw, 420px);
+  padding: 10px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(251, 113, 133, 0.4);
+  background: rgba(190, 24, 93, 0.22);
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fecdd3;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
 .map-layers-btn {
   display: inline-flex;
   align-items: center;
@@ -4052,10 +4103,10 @@ textarea {
 }
 
 .map-layers-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 20;
+  position: fixed;
+  top: calc(4.25rem + env(safe-area-inset-top, 0px));
+  right: max(1rem, env(safe-area-inset-right, 0px));
+  z-index: 80;
   width: min(260px, 78vw);
   padding: 12px;
   border-radius: 18px;
@@ -4832,6 +4883,35 @@ textarea {
 
 .guest-direct-call-btn.is-cancellable.is-waiting:hover:not(:disabled) {
   animation: none;
+}
+
+.guest-direct-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 800;
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.guest-direct-cancel-btn:hover {
+  background: rgba(239, 68, 68, 0.28);
+  border-color: rgba(248, 113, 113, 0.75);
+  transform: translateY(-1px);
 }
 
 .call-overlay .mega-btn.hangup.is-cancelling:hover {
