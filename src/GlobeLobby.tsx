@@ -20,9 +20,10 @@ import { initials } from './identity';
 import {
   applyMapboxAccessToken,
   applyMapboxStandardNight,
-  MAPBOX_STANDARD_STYLE,
+  MAPBOX_STANDARD_STYLE_WITH_CONFIG,
   whenMapStyleReady,
 } from './lib/mapbox';
+import ParanoicLogo from './ParanoicLogo';
 import { ANTARCTICA, type PresenceUser } from './presence';
 import {
   bindGemInteractions,
@@ -234,6 +235,8 @@ export default function GlobeLobby({
   onCallUserRef.current = onCallUser;
 
   const [mapReady, setMapReady] = useState(false);
+  const [mapBootDone, setMapBootDone] = useState(false);
+  const [splashGone, setSplashGone] = useState(false);
   const [tokenMissing, setTokenMissing] = useState(false);
   const [selected, setSelected] = useState<MapPerson | null>(null);
   const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
@@ -330,13 +333,13 @@ export default function GlobeLobby({
     try {
       map = new mapboxgl.Map({
         container,
-        // URL надёжнее кастомного imports-JSON при первом рендере.
-        style: MAPBOX_STANDARD_STYLE,
+        style: MAPBOX_STANDARD_STYLE_WITH_CONFIG,
         center,
         zoom: WORLD_ZOOM,
         pitch: 42,
         bearing: -12,
         antialias: true,
+        fadeDuration: 0,
         attributionControl: true,
       });
     } catch (err) {
@@ -411,24 +414,67 @@ export default function GlobeLobby({
       map.remove();
       mapRef.current = null;
       setMapReady(false);
+      setMapBootDone(false);
+      setSplashGone(false);
     };
     // me только для стартового центра при первом маунте
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Следим за GPS «меня» — плавно двигаем камеру при первом реальном фиксе. */
-  const didCenterOnGps = useRef(false);
+  /** Тёмный splash до полного рендера карты на координатах пользователя. */
+  const bootFinalizedRef = useRef(false);
   useEffect(() => {
-    if (!mapReady || !me || didCenterOnGps.current) return;
-    if (geoSource !== 'gps') return;
-    didCenterOnGps.current = true;
-    mapRef.current?.flyTo({
-      center: [me.lng, me.lat],
-      zoom: 4.5,
-      speed: 0.9,
-      essential: true,
-    });
-  }, [mapReady, me, geoSource]);
+    if (!mapReady || tokenMissing) return;
+    if (geoSource === 'pending') return;
+
+    const map = mapRef.current;
+    if (!map) return;
+
+    let cancelled = false;
+    let moveEndHandler: (() => void) | null = null;
+    let idleHandler: (() => void) | null = null;
+
+    const finalize = () => {
+      if (cancelled || bootFinalizedRef.current) return;
+      bootFinalizedRef.current = true;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) setMapBootDone(true);
+        });
+      });
+    };
+
+    const waitIdle = () => {
+      if (cancelled) return;
+      idleHandler = () => {
+        map.off('idle', idleHandler!);
+        finalize();
+      };
+      map.once('idle', idleHandler);
+    };
+
+    if (geoSource === 'gps' && me) {
+      moveEndHandler = () => {
+        map.off('moveend', moveEndHandler!);
+        waitIdle();
+      };
+      map.flyTo({
+        center: [me.lng, me.lat],
+        zoom: 4.5,
+        speed: 0.9,
+        essential: true,
+      });
+      map.once('moveend', moveEndHandler);
+    } else {
+      waitIdle();
+    }
+
+    return () => {
+      cancelled = true;
+      if (moveEndHandler) map.off('moveend', moveEndHandler);
+      if (idleHandler) map.off('idle', idleHandler);
+    };
+  }, [mapReady, geoSource, me, tokenMissing]);
 
   /** Синхронизация HTML-маркеров аватарок (только Family / контакты). */
   useEffect(() => {
@@ -761,9 +807,22 @@ export default function GlobeLobby({
     <div className="relative h-svh w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
       <div
         ref={containerRef}
-        className="family-mapbox absolute inset-0 h-full w-full"
+        className={`family-mapbox absolute inset-0 h-full w-full${mapBootDone ? ' is-visible' : ''}`}
         style={{ width: '100%', height: '100%', minHeight: '100vh' }}
       />
+
+      {!tokenMissing && !splashGone && (
+        <div
+          className={`map-boot-splash${mapBootDone ? ' is-hiding' : ''}`}
+          aria-hidden={mapBootDone}
+          onTransitionEnd={(e) => {
+            if (e.propertyName === 'opacity' && mapBootDone) setSplashGone(true);
+          }}
+        >
+          <ParanoicLogo size={72} compact className="map-boot-splash__logo" />
+          <span className="map-boot-splash__spinner" aria-hidden />
+        </div>
+      )}
 
       {tokenMissing && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-6 text-center backdrop-blur-md">
