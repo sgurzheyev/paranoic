@@ -7,6 +7,7 @@ import {
   Gem,
   Ghost,
   Layers,
+  Locate,
   MapPin,
   MessageCircle,
   Phone,
@@ -258,6 +259,10 @@ export default function GlobeLobby({
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  /** Один раз при первой геолокации — не перезапускать flyTo при каждом GPS-тике. */
+  const initialCenterAppliedRef = useRef(false);
+  /** Пользователь сам двигал карту — не включаем авто-follow. */
+  const userExploringRef = useRef(false);
 
   openGemRef.current = (gem) => setOpenedGem(gem);
 
@@ -306,6 +311,13 @@ export default function GlobeLobby({
       easing: (t) => 1 - Math.pow(1 - t, 3),
       padding: { top: 100, bottom: 200, left: 48, right: 48 },
     });
+  };
+
+  const flyToMyLocation = () => {
+    const self = peopleRef.current.find((p) => p.isMe);
+    if (!self) return;
+    userExploringRef.current = false;
+    flyToPerson(self, false);
   };
 
   const resolvePerson = (userId: string): MapPerson | undefined =>
@@ -407,7 +419,13 @@ export default function GlobeLobby({
 
     mapRef.current = map;
 
+    const markUserExploring = () => {
+      userExploringRef.current = true;
+    };
+    map.on('dragstart', markUserExploring);
+
     return () => {
+      map.off('dragstart', markUserExploring);
       cancelReady();
       ro?.disconnect();
       window.removeEventListener('resize', onWinResize);
@@ -427,11 +445,12 @@ export default function GlobeLobby({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Тёмный splash до полного рендера карты на координатах пользователя. */
+  /** Тёмный splash + однократный flyTo к GPS при первой загрузке. */
   const bootFinalizedRef = useRef(false);
   useEffect(() => {
     if (!mapReady || tokenMissing) return;
     if (geoSource === 'pending') return;
+    if (initialCenterAppliedRef.current) return;
 
     const map = mapRef.current;
     if (!map) return;
@@ -459,19 +478,24 @@ export default function GlobeLobby({
       map.once('idle', idleHandler);
     };
 
-    if (geoSource === 'gps' && me) {
+    if (geoSource === 'gps') {
+      const self = peopleRef.current.find((p) => p.isMe);
+      if (!self) return;
+
+      initialCenterAppliedRef.current = true;
       moveEndHandler = () => {
         map.off('moveend', moveEndHandler!);
         waitIdle();
       };
       map.flyTo({
-        center: [me.lng, me.lat],
+        center: [self.lng, self.lat],
         zoom: 4.5,
         speed: 0.9,
         essential: true,
       });
       map.once('moveend', moveEndHandler);
     } else {
+      initialCenterAppliedRef.current = true;
       waitIdle();
     }
 
@@ -1061,6 +1085,15 @@ export default function GlobeLobby({
                 <span>AR</span>
               </button>
               <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  aria-label="Моё местоположение"
+                  title="Моё местоположение"
+                  onClick={flyToMyLocation}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
+                >
+                  <Locate size={18} />
+                </button>
                 <button
                   type="button"
                   aria-label="Приблизить"
