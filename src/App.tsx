@@ -81,7 +81,14 @@ import {
   encryptBytes,
   decryptBytes,
 } from './crypto';
-import { P2PConnection, type CallState, type NetworkQuality, type P2PStatus, type SignalingDebugStatus } from './p2p';
+import {
+  P2PConnection,
+  isCallFailureUserAlert,
+  type CallState,
+  type NetworkQuality,
+  type P2PStatus,
+  type SignalingDebugStatus,
+} from './p2p';
 import {
   destroyP2PSession,
   ensureP2PSession,
@@ -211,6 +218,9 @@ export default function App() {
   /** id → счётчик вспышек ❤️ для перезапуска анимации. */
   const [heartBursts, setHeartBursts] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
+  /** Family Mode: ошибка дозвона — индикатор в шапке карты, toast только по клику. */
+  const [callAlert, setCallAlert] = useState('');
+  const [callAlertToastOpen, setCallAlertToastOpen] = useState(false);
   const [magicLink, setMagicLink] = useState(() =>
     buildMagicLink(getOrCreateIdentity())
   );
@@ -273,6 +283,7 @@ export default function App() {
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
   const identityRef = useRef(identity);
+  const appModeRef = useRef(appMode);
   const peerIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -725,6 +736,10 @@ export default function App() {
   }, [identity]);
 
   useEffect(() => {
+    appModeRef.current = appMode;
+  }, [appMode]);
+
+  useEffect(() => {
     peerMetaRef.current = {
       id: peerId || guestPeerId || '',
       label: peerLabel,
@@ -912,6 +927,15 @@ export default function App() {
     peerIdRef.current = peerId;
   }, [peerId]);
 
+  /** Family Mode: ошибки дозвона — индикатор, не авто-toast. */
+  useEffect(() => {
+    if (appMode !== 'family' || !error) return;
+    if (!isCallFailureUserAlert(error)) return;
+    setCallAlert(error);
+    setCallAlertToastOpen(false);
+    setError('');
+  }, [appMode, error]);
+
   useEffect(() => {
     secretKeyRef.current = secretKey;
   }, [secretKey]);
@@ -1018,6 +1042,8 @@ export default function App() {
           mirrorP2pStatus(status);
           if (status === 'connected') {
             setError('');
+            setCallAlert('');
+            setCallAlertToastOpen(false);
             setIncomingConnection(false);
             setIncomingRing(null);
             stopRingtone();
@@ -1444,7 +1470,15 @@ export default function App() {
             )
           );
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => {
+          const msg = err.message;
+          if (appModeRef.current === 'family' && isCallFailureUserAlert(msg)) {
+            setCallAlert(msg);
+            setCallAlertToastOpen(false);
+            return;
+          }
+          setError(msg);
+        },
     });
     p2pRef.current.setLocalIdentity({
       userId: identityRef.current.id,
@@ -2703,7 +2737,7 @@ export default function App() {
       <div className="family-app-shell">
         {error && (
           <div
-            className={`app-toast app-toast--error${incomingRing ? '' : ' app-toast--above-nav'}`}
+            className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
             role="alert"
           >
             <span className="app-toast__text">{error}</span>
@@ -2711,6 +2745,22 @@ export default function App() {
               type="button"
               className="app-toast__close icon-btn"
               onClick={() => setError('')}
+              aria-label="Закрыть"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        {callAlertToastOpen && callAlert && (
+          <div
+            className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
+            role="alert"
+          >
+            <span className="app-toast__text">{callAlert}</span>
+            <button
+              type="button"
+              className="app-toast__close icon-btn"
+              onClick={() => setCallAlertToastOpen(false)}
               aria-label="Закрыть"
             >
               <X size={16} />
@@ -2736,6 +2786,10 @@ export default function App() {
           geoSource={
             settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
           }
+          callAlertActive={Boolean(callAlert)}
+          onCallAlertReveal={() => {
+            if (callAlert) setCallAlertToastOpen(true);
+          }}
           isAdmin={isAdmin}
           onOpenAdmin={() => setAdminOpen(true)}
           banned={isBanned}

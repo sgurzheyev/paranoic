@@ -10,6 +10,7 @@ import {
   MapPin,
   MessageCircle,
   Phone,
+  PhoneOff,
   Radar,
   ShieldCheck,
   X,
@@ -80,6 +81,9 @@ type GlobeLobbyProps = {
   banned?: boolean;
   ghostMode: boolean;
   onGhostModeChange: (next: boolean) => void;
+  /** Индикатор ошибки дозвона (toast по клику). */
+  callAlertActive?: boolean;
+  onCallAlertReveal?: () => void;
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -220,6 +224,8 @@ export default function GlobeLobby({
   banned = false,
   ghostMode,
   onGhostModeChange,
+  callAlertActive = false,
+  onCallAlertReveal,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -844,7 +850,7 @@ export default function GlobeLobby({
       )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="pointer-events-auto flex items-center justify-between gap-3 px-4 py-4 sm:px-6">
+        <header className="pointer-events-auto relative flex items-center justify-between gap-3 px-4 py-4 sm:px-6">
           <button
             type="button"
             onClick={onBack}
@@ -852,6 +858,17 @@ export default function GlobeLobby({
           >
             <ArrowLeft size={16} /> Назад
           </button>
+          {callAlertActive && (
+            <button
+              type="button"
+              className="map-call-alert-btn"
+              aria-label="Показать уведомление о звонке"
+              title="Проблема с дозвоном"
+              onClick={() => onCallAlertReveal?.()}
+            >
+              <PhoneOff size={17} strokeWidth={2.2} />
+            </button>
+          )}
           <div className="relative flex items-center gap-2">
             {isAdmin && onOpenAdmin && (
               <button

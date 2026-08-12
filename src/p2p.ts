@@ -169,8 +169,30 @@ const ICE_SOFT_RESTART_DELAY_MS = 700;
 const WAIT_FOR_PEER_TIMEOUT_MS = 45_000;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
-const WAIT_FOR_PEER_TIMEOUT_ERROR =
+export const WAIT_FOR_PEER_TIMEOUT_MESSAGE =
   'Собеседник не ответил. Убедитесь, что он онлайн и открыл приложение.';
+
+const WAIT_FOR_PEER_TIMEOUT_ERROR = WAIT_FOR_PEER_TIMEOUT_MESSAGE;
+
+/** Ошибки дозвона / обрыва — на карте показываем индикатор, не авто-toast. */
+export function isCallFailureUserAlert(message: string): boolean {
+  const m = message.trim();
+  if (!m) return false;
+  if (
+    m === WAIT_FOR_PEER_TIMEOUT_MESSAGE ||
+    m === ICE_CONNECT_TIMEOUT_ERROR ||
+    m === 'Связь оборвалась. Переподключаемся…' ||
+    m === 'Не удалось связаться' ||
+    m === 'Вызов отклонён' ||
+    m === 'Звонок отклонён' ||
+    m === 'Сигналинг комнаты оборвался. Перезайдите по ссылке.'
+  ) {
+    return true;
+  }
+  return /не ответил|оборвал|таймаут соединения|не удалось начать звонок|не удалось принять звонок/i.test(
+    m
+  );
+}
 const MEDIA_WATCH_MS = 2_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
 const NETWORK_WATCH_MS = 2_000;
