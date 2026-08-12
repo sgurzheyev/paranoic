@@ -992,6 +992,15 @@ export default function App() {
     setError('');
   }, [appMode, error]);
 
+  /** ModeSelector / логин: не тащить ошибки WebRTC и дозвона из прошлых сессий. */
+  useEffect(() => {
+    if (appMode !== 'select') return;
+    setError('');
+    setCallAlert('');
+    setCallAlertToastOpen(false);
+    setLinkWarning('');
+  }, [appMode]);
+
   /** Не спамить «контакт не найден», если P2P уже connected. */
   useEffect(() => {
     if (!error) return;
@@ -2937,14 +2946,6 @@ export default function App() {
   if (appMode === 'select') {
     return (
       <>
-        {error && (
-          <div className="banner error" role="alert" style={{ position: 'relative', zIndex: 50 }}>
-            {error}
-            <button type="button" className="icon-btn" onClick={() => setError('')} aria-label="Закрыть">
-              <X size={16} />
-            </button>
-          </div>
-        )}
         {incomingRing && (
           <IncomingCallModal
             caller={incomingRing.from}
