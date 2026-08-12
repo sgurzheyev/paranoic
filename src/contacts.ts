@@ -148,9 +148,24 @@ export async function validateContactForCall(
     remote = await fetchProfileByUsername(usernameHint);
   }
 
+  if (!remote && usernameHint) {
+    const list = await loadContacts();
+    const cached = list.find(
+      (c) =>
+        c.id === contactId ||
+        (c.username && c.username.toLowerCase() === usernameHint.toLowerCase())
+    );
+    if (cached) {
+      return { ok: true, contact: cached, idChanged: false, skipped: true };
+    }
+    return { ok: false, reason: 'missing' };
+  }
+
   if (!remote) {
-    if (usernameHint) {
-      return { ok: false, reason: 'missing' };
+    const list = await loadContacts();
+    const cached = list.find((c) => c.id === contactId);
+    if (cached) {
+      return { ok: true, contact: cached, idChanged: false, skipped: true };
     }
     if (isPeerIdWithoutRequiredProfile(contactId)) {
       return { ok: true, contact: fallbackContact(), idChanged: false, skipped: true };

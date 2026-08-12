@@ -28,6 +28,7 @@ import {
   Globe2,
   UserCheck,
 } from 'lucide-react';
+import ContactListRow from './ContactListRow';
 import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
@@ -135,6 +136,7 @@ import {
   getOrCreateIdentity,
   personalInboxRoom,
   resolveMagicRoute,
+  shouldSkipModeSelector,
   updateIdentity,
   looksLikeUsername,
   type UserIdentity,
@@ -155,7 +157,7 @@ import {
   saveCallResidue,
 } from './callSessionCleanup';
 import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
-import { syncProfileToSupabase, resolveHandleToUserId } from './profile';
+import { syncProfileToSupabase, resolveHandleToUserId, fetchRemoteProfile } from './profile';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -203,6 +205,7 @@ export default function App() {
     } catch {
       /* */
     }
+    if (shouldSkipModeSelector()) return 'paranoic';
     return 'select';
   });
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
@@ -221,6 +224,8 @@ export default function App() {
   /** Family Mode: ошибка дозвона — индикатор в шапке карты, toast только по клику. */
   const [callAlert, setCallAlert] = useState('');
   const [callAlertToastOpen, setCallAlertToastOpen] = useState(false);
+  /** ICE / сеть просела — компактный toast, не блокирует UI. */
+  const [linkWarning, setLinkWarning] = useState('');
   const [magicLink, setMagicLink] = useState(() =>
     buildMagicLink(getOrCreateIdentity())
   );
@@ -269,7 +274,9 @@ export default function App() {
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
-  const [mainTab, setMainTab] = useState<LiquidNavTab>('chats');
+  const [mainTab, setMainTab] = useState<LiquidNavTab>(() =>
+    shouldSkipModeSelector() && !getMagicTargetFromUrl() ? 'contacts' : 'chats'
+  );
   const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
   /** Режим заметки: голос или видео-кружочек. */
   const [noteMode, setNoteMode] = useState<NoteMode>('video');
@@ -309,6 +316,8 @@ export default function App() {
   const noteCancelArmedRef = useRef(false);
   /** Защита от параллельных startMediaNote (двойной pointerdown). */
   const noteStartingRef = useRef(false);
+  /** getUserMedia в процессе — отмена до создания noteSession. */
+  const pendingNoteStreamRef = useRef<MediaStream | null>(null);
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
@@ -720,6 +729,45 @@ export default function App() {
     clearCallResidueState();
   }, []);
 
+  /** Magic link: резолв хоста и имя до join — гость видит «Подключаемся к [Имя]». */
+  useEffect(() => {
+    const urlHandle = getMagicTargetFromUrl();
+    if (!urlHandle) return;
+    let cancelled = false;
+    void (async () => {
+      const me = identityRef.current;
+      const resolvedId = await resolveHandleToUserId(urlHandle);
+      if (cancelled || !resolvedId || resolvedId === me.id) return;
+
+      guestPeerIdRef.current = resolvedId;
+      setGuestPeerId(resolvedId);
+      setHostingSelf(false);
+
+      const captured = await captureHostFromMagicLink({
+        hostId: resolvedId,
+        myUserId: me.id,
+        urlHandle,
+      });
+      if (cancelled) return;
+      if (captured) {
+        setContacts(await loadContacts());
+        setPeerLabel(captured.name);
+        setPeerAvatarUrl(captured.avatarUrl || '');
+        setPeerColor(captured.color);
+      } else {
+        const remote = await fetchRemoteProfile(resolvedId);
+        if (remote) {
+          setPeerLabel(remote.name);
+          setPeerAvatarUrl(remote.avatar_url || '');
+          setPeerColor(remote.color);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const onLeave = () => {
       if (p2pRef.current?.currentStatus === 'failed' || p2pRef.current?.currentStatus === 'disconnected') {
@@ -936,6 +984,16 @@ export default function App() {
     setError('');
   }, [appMode, error]);
 
+  /** Не спамить «контакт не найден», если P2P уже connected. */
+  useEffect(() => {
+    if (!error) return;
+    const live = getP2PSession();
+    if (live?.currentStatus !== 'connected') return;
+    if (/не найден|неактуален|удалён из записной/i.test(error)) {
+      setError('');
+    }
+  }, [error, p2pStatus]);
+
   useEffect(() => {
     secretKeyRef.current = secretKey;
   }, [secretKey]);
@@ -1042,6 +1100,7 @@ export default function App() {
           mirrorP2pStatus(status);
           if (status === 'connected') {
             setError('');
+            setLinkWarning('');
             setCallAlert('');
             setCallAlertToastOpen(false);
             setIncomingConnection(false);
@@ -1355,8 +1414,8 @@ export default function App() {
             }, 3200);
           }
         },
-        onMessageReaction: (id) => {
-          applyHeart(id, true);
+        onMessageReaction: (id, emoji) => {
+          applyHeart(id, emoji === '❤️');
         },
         onFileIncoming: (meta) => {
           setMessages((prev) => {
@@ -1468,6 +1527,13 @@ export default function App() {
                 ? { ...m, transferFailed: true, kind: 'file-transfer' }
                 : m
             )
+          );
+        },
+        onLinkDegraded: (degraded, message) => {
+          setLinkWarning(
+            degraded
+              ? message || 'Слабое соединение. Файлы могут не отправляться.'
+              : ''
           );
         },
         onError: (err) => {
@@ -1707,6 +1773,21 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const isLiveConnectedTo = (targetId: string) => {
+    const live = getP2PSession();
+    if (live?.currentStatus !== 'connected') return false;
+    return peerIdRef.current === targetId || guestPeerIdRef.current === targetId;
+  };
+
+  const quickChatContact = (c: Contact) => {
+    void connectToUser(c.id, c.name, { openChat: true });
+  };
+
+  const quickCallContact = (c: Contact) => {
+    pendingStartCallRef.current = true;
+    void connectToUser(c.id, c.name, { openChat: true });
+  };
+
   const connectToUser = async (
     targetUserId: string,
     label?: string,
@@ -1745,6 +1826,24 @@ export default function App() {
         setError(
           'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
         );
+        return;
+      }
+      if (validation.reason === 'missing' && isLiveConnectedTo(targetUserId)) {
+        const resolvedId = targetUserId;
+        const resolvedLabel = label || known?.name || 'Близкий';
+        setAppMode('paranoic');
+        setMainTab(opts?.openChat ? 'chats' : mainTab);
+        setScreen(opts?.openChat ? 'chat' : 'home');
+        setMessengerSidebarOpen(false);
+        setHostingSelf(false);
+        setGuestPeerId(resolvedId);
+        guestPeerIdRef.current = resolvedId;
+        saveCallResidue({ peerId: resolvedId, guestPeerId: resolvedId });
+        setMagicUserInUrl(known?.username || resolvedId);
+        const presence = presenceUsers.find((u) => u.userId === resolvedId);
+        setPeerAvatarUrl(presence?.avatarUrl || known?.avatarUrl || '');
+        setPeerColor(presence?.color || known?.color || '#60a5fa');
+        await setActivePeer(resolvedId, resolvedLabel);
         return;
       }
       const title = label || known?.name || targetUserId;
@@ -1901,6 +2000,34 @@ export default function App() {
             setError(
               'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
             );
+            return;
+          }
+          if (validation.reason === 'missing' && isLiveConnectedTo(target)) {
+            const callTarget = target;
+            saveCallResidue({ peerId: callTarget, guestPeerId: callTarget });
+            const callId = newCallId();
+            outboundCallIdRef.current = callId;
+            void upsertCallSession({
+              callId,
+              fromUserId: me.id,
+              toUserId: callTarget,
+              status: 'ringing',
+            });
+            void callInboxRef.current?.sendOffer(
+              callTarget,
+              {
+                id: me.id,
+                name: me.name,
+                username: me.username || '',
+                avatarUrl: me.avatarUrl || '',
+                color: me.color,
+              },
+              callId
+            );
+            await ensureP2P().startCall();
+            attachLocalVideo(null);
+            setCallExpanded(false);
+            setScreen('chat');
             return;
           }
           const title = peerLabel || known?.name || target;
@@ -2404,7 +2531,7 @@ export default function App() {
   const cancelMediaNote = useCallback(() => {
     noteCommitRef.current = false;
     noteReleasePendingRef.current = false;
-    noteCancelArmedRef.current = false;
+    noteCancelArmedRef.current = true;
     noteStartingRef.current = false;
     setNoteCancelArmed(false);
     unbindNotePointerListeners();
@@ -2412,6 +2539,12 @@ export default function App() {
 
     const session = noteSessionRef.current;
     noteSessionRef.current = null;
+
+    const pendingStream = pendingNoteStreamRef.current;
+    pendingNoteStreamRef.current = null;
+
+    setNoteRecording(null);
+
     if (session) {
       try {
         session.abort.abort();
@@ -2425,7 +2558,7 @@ export default function App() {
       }
       stopStream(session.stream);
     }
-    setNoteRecording(null);
+    stopStream(pendingStream);
   }, [unbindNotePointerListeners]);
 
   const finishMediaNote = useCallback(() => {
@@ -2460,9 +2593,11 @@ export default function App() {
       let stream: MediaStream | null = null;
       try {
         stream = await openNoteStream(mode);
+        pendingNoteStreamRef.current = stream;
 
         // Палец отпущен или отмена, пока ждали getUserMedia.
         if (noteReleasePendingRef.current || notePointerIdRef.current === null) {
+          pendingNoteStreamRef.current = null;
           stopStream(stream);
           setNoteRecording(null);
           noteCommitRef.current = false;
@@ -2485,6 +2620,7 @@ export default function App() {
           abort,
           stream,
         };
+        pendingNoteStreamRef.current = null;
         setNoteRecording({ stream, progress: 0 });
 
         // Отпустили в момент старта recorder.
@@ -2518,6 +2654,7 @@ export default function App() {
           void sendMedia(note.file, undefined, { mediaKind: note.mediaKind });
         });
       } catch (e) {
+        pendingNoteStreamRef.current = null;
         stopStream(stream);
         setError(
           e instanceof Error
@@ -2636,6 +2773,15 @@ export default function App() {
     void syncProfileToSupabase(next);
   };
 
+  const handleAccountRestored = (next: UserIdentity) => {
+    applyIdentity(next);
+    setAppMode('paranoic');
+    setMainTab('contacts');
+    setScreen('home');
+    setSessionEpoch((n) => n + 1);
+    void loadContacts().then(setContacts);
+  };
+
   const saveName = () => {
     const next = updateIdentity({ name: nameDraft.trim() || 'Я' });
     applyIdentity(next);
@@ -2727,7 +2873,10 @@ export default function App() {
             onReject={() => void declineMediaCall()}
           />
         )}
-        <ModeSelector onSelect={(mode) => setAppMode(mode)} />
+        <ModeSelector
+          onSelect={(mode) => setAppMode(mode)}
+          onAccountRestored={handleAccountRestored}
+        />
       </>
     );
   }
@@ -2765,6 +2914,11 @@ export default function App() {
             >
               <X size={16} />
             </button>
+          </div>
+        )}
+        {linkWarning && (
+          <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
+            <span className="app-toast__text">{linkWarning}</span>
           </div>
         )}
         {adminOpen && (
@@ -2910,6 +3064,12 @@ export default function App() {
         </div>
       )}
 
+      {linkWarning && (
+        <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
+          <span className="app-toast__text">{linkWarning}</span>
+        </div>
+      )}
+
       {uploadProgress !== null && (
         <div className="banner info">Отправка… {Math.round(uploadProgress * 100)}%</div>
       )}
@@ -2984,40 +3144,18 @@ export default function App() {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
                           return (
-                            <li key={c.id}>
-                              <button
-                                type="button"
-                                className="contact-row"
-                                onClick={() =>
-                                  void connectToUser(c.id, c.name, { openChat: true })
-                                }
-                              >
-                                <Avatar
-                                  name={c.name}
-                                  color={c.color}
-                                  avatarUrl={
-                                    c.avatarUrl ||
-                                    presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
-                                  }
-                                  size="sm"
-                                  online={online ? true : 'off'}
-                                />
-                                <span className="contact-info">
-                                  <span className="contact-name">
-                                    {c.name}
-                                    {trusted && (
-                                      <span className="trust-badge" title="Доверенный">
-                                        <UserCheck size={12} />
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span className="contact-status">
-                                    {online ? 'в сети' : 'не в сети'}
-                                  </span>
-                                </span>
-                                <MessageCircle size={18} className="contact-call" />
-                              </button>
-                            </li>
+                            <ContactListRow
+                              key={c.id}
+                              contact={c}
+                              online={online}
+                              trusted={trusted}
+                              avatarUrl={
+                                c.avatarUrl ||
+                                presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                              }
+                              onCall={() => quickCallContact(c)}
+                              onMessage={() => quickChatContact(c)}
+                            />
                           );
                         })}
                       </ul>
@@ -3044,46 +3182,21 @@ export default function App() {
                         {contacts.map((c) => {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
+                          const rowDisabled = connected && peerId === c.id;
                           return (
-                            <li key={c.id}>
-                              <button
-                                type="button"
-                                className="contact-row"
-                                onClick={() => void connectToUser(c.id, c.name)}
-                                disabled={connected && peerId === c.id}
-                              >
-                                <Avatar
-                                  name={c.name}
-                                  color={c.color}
-                                  avatarUrl={
-                                    c.avatarUrl ||
-                                    presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
-                                  }
-                                  size="sm"
-                                  online={online ? true : 'off'}
-                                />
-                                <span className="contact-info">
-                                  <span className="contact-name">
-                                    {c.name}
-                                    {trusted && (
-                                      <span className="trust-badge" title="Доверенный">
-                                        <UserCheck size={12} />
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span className="contact-status">
-                                    {trusted
-                                      ? online
-                                        ? 'доверенный · в сети'
-                                        : 'доверенный · не в сети'
-                                      : online
-                                        ? 'в сети'
-                                        : 'не в сети'}
-                                  </span>
-                                </span>
-                                <Phone size={18} className="contact-call" />
-                              </button>
-                            </li>
+                            <ContactListRow
+                              key={c.id}
+                              contact={c}
+                              online={online}
+                              trusted={trusted}
+                              disabled={rowDisabled}
+                              avatarUrl={
+                                c.avatarUrl ||
+                                presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
+                              }
+                              onCall={() => quickCallContact(c)}
+                              onMessage={() => quickChatContact(c)}
+                            />
                           );
                         })}
                       </ul>

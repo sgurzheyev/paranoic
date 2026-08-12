@@ -1,0 +1,90 @@
+import { useState } from 'react';
+import { LogIn } from 'lucide-react';
+import { normalizeUsername, type UserIdentity } from './identity';
+import { loginWithUsernamePassword } from './profile';
+
+type AccountLoginPanelProps = {
+  onRestored: (identity: UserIdentity) => void;
+  compact?: boolean;
+};
+
+/** Вход по username + password — восстановление user_id и профиля из Supabase. */
+export default function AccountLoginPanel({ onRestored, compact = false }: AccountLoginPanelProps) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setError('');
+    const handle = normalizeUsername(username);
+    if (!handle) {
+      setError('Введите никнейм');
+      return;
+    }
+    if (!password.trim()) {
+      setError('Введите пароль');
+      return;
+    }
+    setBusy(true);
+    try {
+      const restored = await loginWithUsernamePassword(handle, password);
+      if (!restored) {
+        setError('Неверный никнейм или пароль');
+        return;
+      }
+      setPassword('');
+      onRestored(restored);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось войти');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={`account-login-panel${compact ? ' account-login-panel--compact' : ''}`}>
+      {!compact && (
+        <p className="account-login-panel__title">
+          <LogIn size={15} aria-hidden />
+          Уже есть аккаунт?
+        </p>
+      )}
+      <div className="account-login-panel__row">
+        <div className="username-input-row account-login-panel__username">
+          <span className="username-at">@</span>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
+            placeholder="username"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            disabled={busy}
+          />
+        </div>
+        <input
+          type="password"
+          className="account-login-panel__password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Пароль"
+          disabled={busy}
+        />
+        <button
+          type="button"
+          className="account-login-panel__submit"
+          disabled={busy}
+          onClick={() => void submit()}
+        >
+          {busy ? '…' : 'Войти'}
+        </button>
+      </div>
+      {error && (
+        <p className="account-login-panel__error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}

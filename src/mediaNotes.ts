@@ -141,6 +141,21 @@ export function recordMediaNote(
     }
   };
 
+  const hardStopRecorder = () => {
+    cleanupTimers();
+    try {
+      if (recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    } catch {
+      try {
+        recorder.stop();
+      } catch {
+        /* */
+      }
+    }
+  };
+
   let settle: ((value: NoteRecording | null) => void) | null = null;
 
   const finish = (value: NoteRecording | null) => {
@@ -185,9 +200,8 @@ export function recordMediaNote(
     const onAbort = () => {
       discarded = true;
       chunks.length = 0;
-      if (recorder.state === 'recording' || recorder.state === 'paused') {
-        safeStop();
-      } else {
+      hardStopRecorder();
+      if (recorder.state === 'inactive') {
         finish(null);
       }
     };
@@ -230,9 +244,8 @@ export function recordMediaNote(
     cancel: () => {
       discarded = true;
       chunks.length = 0;
-      if (recorder.state === 'recording' || recorder.state === 'paused') {
-        safeStop();
-      } else {
+      hardStopRecorder();
+      if (recorder.state === 'inactive') {
         finish(null);
       }
     },

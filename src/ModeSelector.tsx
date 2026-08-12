@@ -1,11 +1,14 @@
 import { useState, type MouseEvent } from 'react';
 import { Globe2, Shield, X } from 'lucide-react';
+import AccountLoginPanel from './AccountLoginPanel';
 import ParanoicLogo from './ParanoicLogo';
+import type { UserIdentity } from './identity';
 
 export type AppModeChoice = 'paranoic' | 'family';
 
 type ModeSelectorProps = {
   onSelect: (mode: AppModeChoice) => void;
+  onAccountRestored?: (identity: UserIdentity) => void;
 };
 
 type ClientPlatform = 'android' | 'ios';
@@ -31,7 +34,7 @@ function hasStoreUrl(platform: ClientPlatform): boolean {
 /**
  * Стартовый экран: компактная сетка режимов + иконки нативных клиентов.
  */
-export default function ModeSelector({ onSelect }: ModeSelectorProps) {
+export default function ModeSelector({ onSelect, onAccountRestored }: ModeSelectorProps) {
   const [downloadHint, setDownloadHint] = useState<ClientPlatform | null>(null);
 
   const onDownloadClick = (platform: ClientPlatform, e: MouseEvent<HTMLAnchorElement>) => {
@@ -116,6 +119,15 @@ export default function ModeSelector({ onSelect }: ModeSelectorProps) {
             </svg>
           </a>
         </div>
+
+        {onAccountRestored && (
+          <AccountLoginPanel
+            onRestored={(identity) => {
+              onAccountRestored(identity);
+              onSelect('paranoic');
+            }}
+          />
+        )}
       </div>
 
       {downloadHint && (

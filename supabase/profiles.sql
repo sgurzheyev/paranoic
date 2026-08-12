@@ -16,7 +16,8 @@ create table if not exists public.profiles (
   role text not null default 'user',
   is_banned boolean not null default false,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  password_hash text
 );
 
 create unique index if not exists profiles_username_unique

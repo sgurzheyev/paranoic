@@ -1,9 +1,11 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { hashPassword, verifyPassword } from './passwordAuth';
 import {
   getOrCreateIdentity,
   isValidUuid,
   looksLikeUsername,
   normalizeUsername,
+  restoreIdentityFromProfile,
   type UserIdentity,
 } from './identity';
 
@@ -17,10 +19,16 @@ export type RemoteProfile = {
   avatar_url: string | null;
   theme_fon: string | null;
   username: string | null;
+  password_hash?: string | null;
   updated_at?: string;
   role?: string | null;
   is_banned?: boolean | null;
   created_at?: string | null;
+};
+
+export type SyncProfileOptions = {
+  /** Новый пароль — хэшируется и сохраняется в password_hash. */
+  password?: string;
 };
 
 const PROFILE_SELECT =
@@ -152,7 +160,10 @@ export function looksLikeUuid(value: string): boolean {
 }
 
 /** Upsert в таблицу `profiles` (если настроена). */
-export async function syncProfileToSupabase(identity: UserIdentity): Promise<void> {
+export async function syncProfileToSupabase(
+  identity: UserIdentity,
+  opts?: SyncProfileOptions
+): Promise<void> {
   if (!hasSupabaseConfig()) return;
   try {
     const username = identity.username || null;
@@ -163,7 +174,7 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
 
     const sb = getSupabase();
     // Не трогаем role / is_banned / created_at — ими управляет админка.
-    const row = {
+    const row: Record<string, unknown> = {
       id: identity.id,
       name: identity.name,
       color: identity.color,
@@ -172,6 +183,9 @@ export async function syncProfileToSupabase(identity: UserIdentity): Promise<voi
       username,
       updated_at: new Date().toISOString(),
     };
+    if (opts?.password?.trim()) {
+      row.password_hash = await hashPassword(opts.password);
+    }
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
     if (error) {
       if (/username|unique|duplicate/i.test(error.message)) {
@@ -303,4 +317,34 @@ export async function resolveHandleToUserId(handle: string): Promise<string | nu
 
   console.warn('[P2P_DEBUG] resolve failed — user not found', { handle: raw });
   return null;
+}
+
+/** Вход: username + password → восстановление user_id и профиля. */
+export async function loginWithUsernamePassword(
+  username: string,
+  password: string
+): Promise<UserIdentity | null> {
+  if (!hasSupabaseConfig()) {
+    throw new Error('Supabase не настроен — вход недоступен');
+  }
+  const handle = normalizeUsername(username);
+  if (!handle) return null;
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(PROFILES_TABLE)
+      .select(`${PROFILE_SELECT},password_hash`)
+      .ilike('username', handle)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as RemoteProfile;
+    if (!row.password_hash) return null;
+    const valid = await verifyPassword(password, row.password_hash);
+    if (!valid) return null;
+    return restoreIdentityFromProfile(row);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('Supabase')) throw e;
+    console.warn('[paranoic] login failed', e);
+    return null;
+  }
 }

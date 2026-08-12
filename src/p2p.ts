@@ -72,8 +72,10 @@ export type P2PHandlers = {
   onMessageDelivery?: (ids: string[], status: 'delivered' | 'read') => void;
   /** Пир печатает / перестал печатать. */
   onTyping?: (active: boolean) => void;
-  /** Реакция на сообщение (например ❤️). */
+  /** Реакция на сообщение (❤️ и т.д.). */
   onMessageReaction?: (id: string, emoji: string) => void;
+  /** Слабая связь / ICE disconnected — UI toast. */
+  onLinkDegraded?: (degraded: boolean, message?: string) => void;
 };
 
 type SignalJoin = { type: 'join'; peerId: string; userId?: string };
@@ -151,9 +153,9 @@ function logIceServers(source: string, servers: RTCIceServer[]): void {
   });
 }
 
-const FILE_CHUNK_BYTES = 64 * 1024;
+const FILE_CHUNK_BYTES = 32 * 1024;
 /** Высокий порог: не шлём следующий чанк, пока буфер DC выше. */
-const MAX_BUFFERED_AMOUNT = 256 * 1024;
+const MAX_BUFFERED_AMOUNT = 192 * 1024;
 /** Низкий порог для `bufferedamountlow` — возобновление отправки. */
 const BUFFERED_AMOUNT_LOW = 64 * 1024;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -280,7 +282,7 @@ function encodeFileChunk(id: string, index: number, payload: Uint8Array): ArrayB
   out.set(idBytes, 3);
   new DataView(out.buffer).setUint32(3 + idBytes.length, index, false);
   out.set(payload, headerLen);
-  return out.buffer;
+  return out.buffer.slice(0, out.byteLength);
 }
 
 function decodeFileChunk(data: ArrayBuffer): { id: string; index: number; payload: Uint8Array } | null {
@@ -439,6 +441,8 @@ export class P2PConnection {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private incomingFiles = new Map<string, IncomingFile>();
+  /** Чанки, пришедшие до file-meta (гонка каналов). */
+  private orphanFileChunks = new Map<string, { index: number; payload: Uint8Array }[]>();
   /** Исходящие передачи: ожидание ACK от получателя. */
   private fileAckState = new Map<string, FileAckState>();
   private outgoingTransfers = new Set<string>();
@@ -1061,6 +1065,9 @@ export class P2PConnection {
     encrypt: (data: ArrayBuffer) => Promise<{ cipher: string; iv: string }>,
     options?: { transferId?: string }
   ): Promise<string> {
+    if (!this.isFileChannelReady) {
+      await this.ensureFileChannel();
+    }
     if (!this.isReady || !this.channel) throw new Error('Соединение ещё не готово');
     if (file.size > MAX_FILE_BYTES) {
       throw new Error('Файл слишком большой (макс. 16 МБ)');
@@ -1072,10 +1079,11 @@ export class P2PConnection {
 
     pipe.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
 
+    const id = options?.transferId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const buffer = await file.arrayBuffer();
+    this.handlers.onFileProgress?.(id, 0.01);
     const { cipher, iv } = await encrypt(buffer);
     const cipherBytes = Uint8Array.from(atob(cipher), (c) => c.charCodeAt(0));
-    const id = options?.transferId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const chunkCount = Math.ceil(cipherBytes.length / FILE_CHUNK_BYTES) || 1;
 
     this.outgoingTransfers.add(id);
@@ -1094,11 +1102,11 @@ export class P2PConnection {
       this.handlers.onFileProgress?.(id, 0);
 
       for (let i = 0; i < chunkCount; i++) {
-        if (pipe.readyState !== 'open' || !this.isReady) {
+        const pipe = this.filePipe();
+        if (!pipe || pipe.readyState !== 'open' || !this.isReady) {
           throw new Error(FILE_TRANSFER_LOST);
         }
 
-        // Backpressure: не читаем/шлём следующий чанк, пока буфер DC полон.
         await waitForBufferDrain(pipe);
 
         const start = i * FILE_CHUNK_BYTES;
@@ -1109,20 +1117,17 @@ export class P2PConnection {
           throw new Error(FILE_TRANSFER_LOST);
         }
 
+        const sentRatio = (i + 1) / chunkCount;
+        this.handlers.onFileProgress?.(id, sentRatio);
+
         const needAck = (i + 1) % FILE_ACK_EVERY === 0 || i === chunkCount - 1;
         if (needAck) {
           await this.waitForFileAck(id, i);
-          this.handlers.onFileProgress?.(id, (i + 1) / chunkCount);
-        } else {
-          const acked = this.fileAckState.get(id)?.lastAcked ?? -1;
-          this.handlers.onFileProgress?.(
-            id,
-            Math.max(0, (acked + 1) / chunkCount)
-          );
         }
       }
 
-      await waitForBufferDrain(pipe);
+      const finalPipe = this.filePipe();
+      if (finalPipe) await waitForBufferDrain(finalPipe);
       if (!this.isReady) throw new Error(FILE_TRANSFER_LOST);
       this.sendControl({ t: 'file-done', id });
       this.handlers.onFileProgress?.(id, 1);
@@ -1846,6 +1851,7 @@ export class P2PConnection {
         size: Number(packet.size),
       });
       this.handlers.onFileProgress?.(packet.id, 0);
+      this.flushOrphanChunks(packet.id);
       return;
     }
 
@@ -1986,9 +1992,13 @@ export class P2PConnection {
           this.clearIceCheckTimeout();
           this.clearIceSoftRestartTimer();
           this.setSignalingStatus('Связь установлена!');
+          this.setLinkDegraded(false);
           break;
         case 'disconnected':
-          // Краткий просад / смена IP — мягкий ICE restart.
+          this.setLinkDegraded(
+            true,
+            'Слабое соединение. Файлы могут не отправляться.'
+          );
           this.scheduleIceSoftRestart();
           break;
         case 'failed':
@@ -2012,7 +2022,12 @@ export class P2PConnection {
         this.clearIceSoftRestartTimer();
         this.iceRestarting = false;
         this.iceRestartAttempts = 0;
+        this.setLinkDegraded(false);
       } else if (state === 'disconnected') {
+        this.setLinkDegraded(
+          true,
+          'Слабое соединение. Файлы могут не отправляться.'
+        );
         this.scheduleIceSoftRestart();
       } else if (state === 'failed') {
         this.clearIceCheckTimeout();
@@ -2285,6 +2300,73 @@ export class P2PConnection {
     if (this.networkQuality === quality) return;
     this.networkQuality = quality;
     this.handlers.onNetworkQuality?.(quality);
+    if (quality === 'poor' || quality === 'critical') {
+      this.setLinkDegraded(true, 'Слабое соединение. Файлы могут не отправляться.');
+    }
+  }
+
+  private linkWarningActive = false;
+
+  private setLinkDegraded(active: boolean, message?: string): void {
+    if (!active && !this.linkWarningActive) return;
+    this.linkWarningActive = active;
+    this.handlers.onLinkDegraded?.(
+      active,
+      message || 'Слабое соединение. Файлы могут не отправляться.'
+    );
+  }
+
+  private queueOrphanChunk(id: string, index: number, payload: Uint8Array): void {
+    const list = this.orphanFileChunks.get(id) ?? [];
+    list.push({ index, payload });
+    if (list.length > 2048) list.splice(0, list.length - 2048);
+    this.orphanFileChunks.set(id, list);
+  }
+
+  private flushOrphanChunks(id: string): void {
+    const pending = this.orphanFileChunks.get(id);
+    if (!pending?.length) return;
+    this.orphanFileChunks.delete(id);
+    for (const chunk of pending.sort((a, b) => a.index - b.index)) {
+      this.applyIncomingChunk(id, chunk.index, chunk.payload);
+    }
+  }
+
+  private applyIncomingChunk(id: string, index: number, payload: Uint8Array): void {
+    const file = this.incomingFiles.get(id);
+    if (!file || index >= file.expected) return;
+    if (!file.chunks[index]) {
+      file.chunks[index] = payload;
+    }
+
+    while (
+      file.contiguous + 1 < file.expected &&
+      file.chunks[file.contiguous + 1]
+    ) {
+      file.contiguous += 1;
+    }
+
+    const got = file.contiguous + 1;
+    this.handlers.onFileProgress?.(id, got / file.expected);
+
+    const dueAck =
+      file.contiguous >= 0 &&
+      file.contiguous > file.lastAckSent &&
+      (file.contiguous === file.expected - 1 ||
+        file.contiguous - file.lastAckSent >= FILE_ACK_EVERY);
+    if (dueAck && this.isReady) {
+      file.lastAckSent = file.contiguous;
+      try {
+        this.sendControl({
+          t: 'file-ack',
+          id,
+          upTo: file.contiguous,
+          msgId: this.newMsgId(),
+        });
+      } catch {
+        /* канал мог закрыться */
+      }
+    }
   }
 
   private async checkNetworkQuality(): Promise<void> {
@@ -2517,39 +2599,11 @@ export class P2PConnection {
     const chunk = decodeFileChunk(data);
     if (!chunk) return;
     const file = this.incomingFiles.get(chunk.id);
-    if (!file || chunk.index >= file.expected) return;
-    if (!file.chunks[chunk.index]) {
-      file.chunks[chunk.index] = chunk.payload;
+    if (!file) {
+      this.queueOrphanChunk(chunk.id, chunk.index, chunk.payload);
+      return;
     }
-
-    while (
-      file.contiguous + 1 < file.expected &&
-      file.chunks[file.contiguous + 1]
-    ) {
-      file.contiguous += 1;
-    }
-
-    const got = file.contiguous + 1;
-    this.handlers.onFileProgress?.(chunk.id, got / file.expected);
-
-    const dueAck =
-      file.contiguous >= 0 &&
-      file.contiguous > file.lastAckSent &&
-      (file.contiguous === file.expected - 1 ||
-        file.contiguous - file.lastAckSent >= FILE_ACK_EVERY);
-    if (dueAck && this.isReady) {
-      file.lastAckSent = file.contiguous;
-      try {
-        this.sendControl({
-          t: 'file-ack',
-          id: chunk.id,
-          upTo: file.contiguous,
-          msgId: this.newMsgId(),
-        });
-      } catch {
-        /* канал мог закрыться */
-      }
-    }
+    this.applyIncomingChunk(chunk.id, chunk.index, chunk.payload);
   }
 
   private bindChannel(channel: RTCDataChannel): void {

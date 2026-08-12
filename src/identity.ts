@@ -1,5 +1,7 @@
 /** Постоянная личность пользователя + магическая ссылка. */
 
+import { getRoomIdFromUrl } from './room';
+
 export type UserIdentity = {
   id: string;
   name: string;
@@ -126,6 +128,61 @@ function normalizeIdentity(raw: Partial<UserIdentity> & { id: string; name: stri
     avatarUrl: typeof raw.avatarUrl === 'string' ? raw.avatarUrl : '',
     themeFon: typeof raw.themeFon === 'string' && raw.themeFon ? raw.themeFon : DEFAULT_THEME_FON,
   };
+}
+
+/** PWA standalone (установленное приложение). */
+export function isPwaStandalone(): boolean {
+  try {
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (navigator as Navigator & { standalone?: boolean }).standalone === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Профиль уже настроен — не показывать стартовый lobby. */
+export function hasEstablishedProfile(identity: UserIdentity): boolean {
+  if (identity.username?.trim()) return true;
+  if (identity.avatarUrl?.trim()) return true;
+  if (identity.name.trim() && identity.name.trim() !== 'Я') return true;
+  return false;
+}
+
+/** Пропустить ModeSelector: PWA или сохранённый профиль (без magic/room в URL). */
+export function shouldSkipModeSelector(): boolean {
+  if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return false;
+  try {
+    const start = new URLSearchParams(window.location.search).get('start');
+    if (start === 'paranoic' || start === 'family') return false;
+  } catch {
+    /* */
+  }
+  if (isPwaStandalone()) return true;
+  return hasEstablishedProfile(getOrCreateIdentity());
+}
+
+/** Восстановить локальную identity из строки profiles (login / sync). */
+export function restoreIdentityFromProfile(profile: {
+  id: string;
+  name: string;
+  color?: string | null;
+  avatar_url?: string | null;
+  theme_fon?: string | null;
+  username?: string | null;
+}): UserIdentity {
+  const current = getOrCreateIdentity();
+  const next = normalizeIdentity({
+    id: profile.id,
+    name: profile.name || current.name,
+    username: profile.username || '',
+    color: profile.color || current.color,
+    avatarUrl: profile.avatar_url || '',
+    themeFon: profile.theme_fon || current.themeFon,
+  });
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
 }
 
 export function getOrCreateIdentity(): UserIdentity {

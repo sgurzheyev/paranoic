@@ -71,6 +71,8 @@ export default function ProfileModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [usernameHint, setUsernameHint] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordHint, setPasswordHint] = useState('');
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -163,6 +165,16 @@ export default function ProfileModal({
       if (userCheck.value) {
         await assertUsernameAvailable(userCheck.value, identity.id);
       }
+      if (password.trim()) {
+        if (password.trim().length < 4) {
+          setError('Пароль: минимум 4 символа');
+          return;
+        }
+        if (!userCheck.value) {
+          setError('Задайте никнейм перед установкой пароля');
+          return;
+        }
+      }
       const next = updateIdentity({
         name: name.trim() || 'Я',
         username: userCheck.value,
@@ -170,7 +182,8 @@ export default function ProfileModal({
         themeFon,
       });
       applyPrivacy({ ghostMode, ephemeral24h });
-      await syncProfileToSupabase(next);
+      await syncProfileToSupabase(next, password.trim() ? { password: password.trim() } : undefined);
+      if (password.trim()) setPassword('');
       onSaved(next);
       onClose();
     } catch (e) {
@@ -246,6 +259,25 @@ export default function ProfileModal({
           <p id="username-hint" className="profile-field-hint">
             {usernameHint || 'Латиница, цифры и _. Короткая ссылка без длинного ID.'}
           </p>
+        </label>
+
+        <label className="profile-field">
+          <span>Пароль (для входа на другом устройстве)</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setPasswordHint(
+                e.target.value.trim()
+                  ? 'Сохраните профиль — пароль будет записан в облако.'
+                  : 'Оставьте пустым, если не меняете пароль.'
+              );
+            }}
+            placeholder="Минимум 4 символа"
+            autoComplete="new-password"
+          />
+          <p className="profile-field-hint">{passwordHint || 'Нужен никнейм + пароль для восстановления аккаунта.'}</p>
         </label>
 
         <div className="profile-share-card">
