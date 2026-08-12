@@ -19,6 +19,7 @@ export default function AccountLoginPanel({
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState('');
 
   useEffect(() => {
     onLobbyEnter?.();
@@ -28,8 +29,14 @@ export default function AccountLoginPanel({
     return null;
   }
 
+  const showToast = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 3500);
+  };
+
   const handleLogin = async () => {
     setError('');
+    setToast('');
     const handle = normalizeUsername(username);
     if (!handle) {
       setError('Введите никнейм');
@@ -44,6 +51,10 @@ export default function AccountLoginPanel({
     try {
       const result = await loginWithUsernamePassword(handle, password);
       if (!result.ok) {
+        if (result.reason === 'password_mismatch') {
+          showToast('Неверный пароль');
+          return;
+        }
         setError(result.message);
         return;
       }
@@ -58,6 +69,15 @@ export default function AccountLoginPanel({
   };
 
   return (
+    <>
+      {toast && (
+        <div
+          className="app-toast app-toast--error app-toast--top app-toast--visible account-login-toast"
+          role="alert"
+        >
+          <span className="app-toast__text">{toast}</span>
+        </div>
+      )}
     <div className={`account-login-panel${compact ? ' account-login-panel--compact' : ''}`}>
       {!compact && (
         <p className="account-login-panel__title">
@@ -107,5 +127,6 @@ export default function AccountLoginPanel({
         </p>
       )}
     </div>
+    </>
   );
 }

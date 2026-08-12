@@ -3027,6 +3027,14 @@ textarea {
   color: #f5d0d6;
 }
 
+.account-login-toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  max-width: min(92vw, 420px);
+}
+
 .identity-meta {
   min-width: 0;
   flex: 1;

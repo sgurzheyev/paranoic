@@ -40,10 +40,14 @@ async function deriveHash(password: string, salt: Uint8Array): Promise<Uint8Arra
   return new Uint8Array(bits);
 }
 
-export async function hashPassword(password: string): Promise<string> {
+export async function hashPassword(
+  password: string,
+  opts?: { minLength?: number }
+): Promise<string> {
   const trimmed = password.trim();
-  if (trimmed.length < 4) {
-    throw new Error('Пароль: минимум 4 символа');
+  const minLength = opts?.minLength ?? 4;
+  if (trimmed.length < minLength) {
+    throw new Error(`Пароль: минимум ${minLength} символа`);
   }
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
   const hash = await deriveHash(trimmed, salt);
@@ -51,6 +55,15 @@ export async function hashPassword(password: string): Promise<string> {
   packed.set(salt);
   packed.set(hash, salt.length);
   return toBase64(packed);
+}
+
+/** Сравнение введённого пароля с полем password_hash (PBKDF2 или plain text). */
+export async function passwordsMatch(password: string, stored: string): Promise<boolean> {
+  const entered = password.trim();
+  const saved = stored?.trim() ?? '';
+  if (!entered || !saved) return false;
+  if (await verifyPassword(password, saved)) return true;
+  return entered === saved;
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {

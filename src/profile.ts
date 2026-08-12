@@ -1,6 +1,7 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { hashPassword, verifyPassword } from './passwordAuth';
+import { hashPassword, passwordsMatch } from './passwordAuth';
 import {
+  createUserId,
   getOrCreateIdentity,
   isValidUuid,
   looksLikeUsername,
@@ -334,55 +335,32 @@ export type LoginResult =
   | { ok: true; identity: UserIdentity }
   | { ok: false; reason: LoginFailureReason; message: string; detail?: string };
 
-async function fetchLoginProfile(
+async function hashPasswordForLogin(password: string): Promise<string> {
+  return hashPassword(password, { minLength: 1 });
+}
+
+/** SELECT * FROM profiles WHERE username = handle */
+async function fetchProfileRowByUsername(
   handle: string
 ): Promise<{ row: RemoteProfile | null; dbError: string | null }> {
   const sb = getSupabase();
+  const { data, error } = await sb
+    .from(PROFILES_TABLE)
+    .select('*')
+    .eq('username', handle)
+    .maybeSingle();
 
-  try {
-    const { data, error } = await sb.rpc('login_profile_by_username', {
-      p_username: handle,
-    });
-    if (!error && data) {
-      const row = (Array.isArray(data) ? data[0] : data) as RemoteProfile | undefined;
-      if (row?.id) {
-        console.log('[paranoic login] profile via RPC', { username: handle, userId: row.id });
-        return { row, dbError: null };
-      }
-    }
-    if (error) {
-      console.warn('[paranoic login] RPC login_profile_by_username failed — fallback to SELECT', {
-        code: error.code,
-        message: error.message,
-      });
-    }
-  } catch (e) {
-    console.warn('[paranoic login] RPC exception — fallback to SELECT', e);
+  if (error) {
+    console.error('[paranoic login] SELECT profiles', { username: handle, message: error.message });
+    return { row: null, dbError: error.message };
   }
+  return { row: (data as RemoteProfile | null) ?? null, dbError: null };
+}
 
-  const selectCols = `${PROFILE_SELECT},password_hash`;
-  const queries = [
-    () => sb.from(PROFILES_TABLE).select(selectCols).eq('username', handle).maybeSingle(),
-    () => sb.from(PROFILES_TABLE).select(selectCols).ilike('username', handle).maybeSingle(),
-  ];
-
-  for (const run of queries) {
-    const { data, error } = await run();
-    if (error) {
-      console.error('[paranoic login] DB SELECT error', {
-        username: handle,
-        code: error.code,
-        message: error.message,
-      });
-      return { row: null, dbError: error.message };
-    }
-    if (data) {
-      console.log('[paranoic login] profile via SELECT', { username: handle, userId: data.id });
-      return { row: data as RemoteProfile, dbError: null };
-    }
-  }
-
-  return { row: null, dbError: null };
+function finishLogin(row: RemoteProfile): LoginResult {
+  const identity = restoreIdentityFromProfile(row);
+  console.log('[paranoic login] success', { username: row.username, userId: identity.id });
+  return { ok: true, identity };
 }
 
 export async function loginWithUsernamePassword(
@@ -398,69 +376,95 @@ export async function loginWithUsernamePassword(
   }
 
   const handle = normalizeUsername(username);
+  const pwd = password.trim();
   if (!handle) {
     return { ok: false, reason: 'invalid_input', message: 'Введите никнейм' };
   }
-  if (!password.trim()) {
+  if (!pwd) {
     return { ok: false, reason: 'invalid_input', message: 'Введите пароль' };
   }
 
-  try {
-    const { row, dbError } = await fetchLoginProfile(handle);
+  const sb = getSupabase();
 
+  try {
+    const { row, dbError } = await fetchProfileRowByUsername(handle);
     if (dbError) {
       return {
         ok: false,
         reason: 'db_error',
-        message: 'Ошибка базы данных при входе. Проверьте Supabase и RLS.',
+        message: 'Ошибка базы данных при входе',
         detail: dbError,
       };
     }
 
+    // 1. Профиля нет — создаём
     if (!row) {
-      console.error('[paranoic login] User not found in DB', { username: handle });
-      return {
-        ok: false,
-        reason: 'user_not_found',
-        message: `Аккаунт @${handle} не найден. Создайте профиль заново: задайте никнейм и пароль в настройках.`,
-      };
+      const id = createUserId();
+      const passwordHash = await hashPasswordForLogin(pwd);
+      const { data: created, error: insertErr } = await sb
+        .from(PROFILES_TABLE)
+        .insert({
+          id,
+          username: handle,
+          name: handle,
+          password_hash: passwordHash,
+          color: getOrCreateIdentity().color,
+        })
+        .select('*')
+        .single();
+
+      if (insertErr || !created) {
+        console.error('[paranoic login] INSERT profile', insertErr?.message);
+        return {
+          ok: false,
+          reason: 'db_error',
+          message: insertErr?.message || 'Не удалось создать профиль',
+        };
+      }
+      return finishLogin(created as RemoteProfile);
     }
 
-    if (!row.password_hash?.trim()) {
-      console.error('[paranoic login] User found but password_hash is empty', {
-        username: handle,
-        userId: row.id,
-      });
-      return {
-        ok: false,
-        reason: 'no_password_set',
-        message: `У @${handle} ещё нет пароля. Откройте Paranoic Mode → Профиль → задайте пароль и сохраните.`,
-      };
+    const storedPassword = row.password_hash?.trim() ?? '';
+
+    // 2. Профиль есть, пароль пустой — записываем
+    if (!storedPassword) {
+      const passwordHash = await hashPasswordForLogin(pwd);
+      const { data: updated, error: updateErr } = await sb
+        .from(PROFILES_TABLE)
+        .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+        .eq('id', row.id)
+        .select('*')
+        .single();
+
+      if (updateErr || !updated) {
+        console.error('[paranoic login] UPDATE password', updateErr?.message);
+        return {
+          ok: false,
+          reason: 'db_error',
+          message: updateErr?.message || 'Не удалось сохранить пароль',
+        };
+      }
+      return finishLogin(updated as RemoteProfile);
     }
 
-    const valid = await verifyPassword(password, row.password_hash);
-    if (!valid) {
-      console.error('[paranoic login] Password mismatch', { username: handle, userId: row.id });
+    // 3. Профиль есть, пароль задан — сверяем
+    const matches = await passwordsMatch(pwd, storedPassword);
+    if (!matches) {
       return {
         ok: false,
         reason: 'password_mismatch',
-        message: 'Неверный пароль для этого никнейма.',
+        message: 'Неверный пароль',
       };
     }
 
-    const identity = restoreIdentityFromProfile(row);
-    console.log('[paranoic login] success', { username: handle, userId: identity.id });
-    return { ok: true, identity };
+    return finishLogin(row);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
     console.error('[paranoic login] unexpected error', detail);
-    if (e instanceof Error && e.message.includes('Supabase')) {
-      return { ok: false, reason: 'db_error', message: e.message, detail };
-    }
     return {
       ok: false,
       reason: 'db_error',
-      message: 'Не удалось войти. Смотрите консоль для деталей.',
+      message: detail || 'Не удалось войти',
       detail,
     };
   }
