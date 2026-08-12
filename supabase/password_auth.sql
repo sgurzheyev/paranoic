@@ -1,13 +1,15 @@
 /**
  * Пароль профиля (PBKDF2 hash, клиент) — восстановление user_id по username.
  * Run in Supabase SQL Editor after profiles.sql.
+ *
+ * Production column name: password (not password_hash).
  */
 
 alter table public.profiles
-  add column if not exists password_hash text;
+  add column if not exists password text;
 
-comment on column public.profiles.password_hash is
-  'PBKDF2-SHA256 hash (base64 salt+hash), задаётся клиентом при сохранении профиля.';
+comment on column public.profiles.password is
+  'PBKDF2-SHA256 hash (base64 salt+hash) or plain text, задаётся клиентом.';
 
 -- Явный SELECT для входа (anon) — на случай урезанных политик RLS в проде.
 drop policy if exists "profiles_login_select_anon" on public.profiles;
@@ -25,11 +27,9 @@ returns table (
   avatar_url text,
   theme_fon text,
   username text,
-  password_hash text,
-  updated_at timestamptz,
+  password text,
   role text,
-  is_banned boolean,
-  created_at timestamptz
+  is_banned boolean
 )
 language sql
 security definer
@@ -43,11 +43,9 @@ as $$
     p.avatar_url,
     p.theme_fon,
     p.username,
-    p.password_hash,
-    p.updated_at,
+    p.password,
     p.role,
-    p.is_banned,
-    p.created_at
+    p.is_banned
   from public.profiles p
   where lower(trim(p.username)) = lower(trim(p_username))
   limit 1;

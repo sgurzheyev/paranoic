@@ -3,7 +3,6 @@ import { Ban, RefreshCw, Search, Shield, Trash2, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
   deleteUserAccount,
-  formatRegisteredAt,
   listAllProfiles,
   setUserBanned,
   type AdminUserRow,
@@ -173,9 +172,6 @@ export default function AdminDashboard({ currentUserId, onClose }: AdminDashboar
                         )}
                       </div>
                       <p className="admin-user-id mono-box">{user.id}</p>
-                      <p className="admin-user-date">
-                        Регистрация: {formatRegisteredAt(user.created_at || user.updated_at)}
-                      </p>
                       {user.name && user.name !== 'Я' && (
                         <p className="admin-user-display">{user.name}</p>
                       )}

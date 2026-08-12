@@ -20,20 +20,27 @@ export type RemoteProfile = {
   avatar_url: string | null;
   theme_fon: string | null;
   username: string | null;
-  password_hash?: string | null;
-  updated_at?: string;
+  password?: string | null;
   role?: string | null;
   is_banned?: boolean | null;
-  created_at?: string | null;
 };
 
 export type SyncProfileOptions = {
-  /** Новый пароль — хэшируется и сохраняется в password_hash. */
+  /** Новый пароль — хэшируется и сохраняется в profiles.password. */
   password?: string;
 };
 
-const PROFILE_SELECT =
-  'id,name,color,avatar_url,theme_fon,username,updated_at,role,is_banned,created_at';
+/** Колонки profiles в production Supabase. */
+export const PROFILE_COLUMNS =
+  'id,name,color,avatar_url,theme_fon,username,role,is_banned,password';
+
+const PROFILE_SELECT = PROFILE_COLUMNS;
+
+/** Прочитать сохранённый пароль из строки profiles (колонка `password`). */
+export function readStoredPassword(row: Record<string, unknown> | RemoteProfile): string {
+  const raw = row.password;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_EDGE = 512;
@@ -174,7 +181,6 @@ export async function syncProfileToSupabase(
     }
 
     const sb = getSupabase();
-    // Не трогаем role / is_banned / created_at — ими управляет админка.
     const row: Record<string, unknown> = {
       id: identity.id,
       name: identity.name,
@@ -182,10 +188,9 @@ export async function syncProfileToSupabase(
       avatar_url: identity.avatarUrl || null,
       theme_fon: identity.themeFon || null,
       username,
-      updated_at: new Date().toISOString(),
     };
     if (opts?.password?.trim()) {
-      row.password_hash = await hashPassword(opts.password);
+      row.password = await hashPassword(opts.password);
     }
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
     if (error) {
@@ -346,7 +351,7 @@ async function fetchProfileRowByUsername(
   const sb = getSupabase();
   const { data, error } = await sb
     .from(PROFILES_TABLE)
-    .select('*')
+    .select(PROFILE_COLUMNS)
     .eq('username', handle)
     .maybeSingle();
 
@@ -400,17 +405,17 @@ export async function loginWithUsernamePassword(
     // 1. Профиля нет — создаём
     if (!row) {
       const id = createUserId();
-      const passwordHash = await hashPasswordForLogin(pwd);
+      const passwordStored = await hashPasswordForLogin(pwd);
       const { data: created, error: insertErr } = await sb
         .from(PROFILES_TABLE)
         .insert({
           id,
           username: handle,
           name: handle,
-          password_hash: passwordHash,
+          password: passwordStored,
           color: getOrCreateIdentity().color,
         })
-        .select('*')
+        .select(PROFILE_COLUMNS)
         .single();
 
       if (insertErr || !created) {
@@ -424,16 +429,16 @@ export async function loginWithUsernamePassword(
       return finishLogin(created as RemoteProfile);
     }
 
-    const storedPassword = row.password_hash?.trim() ?? '';
+    const storedPassword = readStoredPassword(row);
 
     // 2. Профиль есть, пароль пустой — записываем
     if (!storedPassword) {
-      const passwordHash = await hashPasswordForLogin(pwd);
+      const passwordStored = await hashPasswordForLogin(pwd);
       const { data: updated, error: updateErr } = await sb
         .from(PROFILES_TABLE)
-        .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+        .update({ password: passwordStored })
         .eq('id', row.id)
-        .select('*')
+        .select(PROFILE_COLUMNS)
         .single();
 
       if (updateErr || !updated) {

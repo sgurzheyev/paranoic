@@ -3,6 +3,9 @@
  *
  * Run in Supabase SQL Editor (Dashboard → SQL).
  * Then create a public Storage bucket named `avatars` (or rely on the insert below).
+ *
+ * PRODUCTION SCHEMA (source of truth):
+ *   id, avatar_url, username, is_banned, role, color, name, theme_fon, password
  */
 
 -- Profiles table
@@ -15,9 +18,7 @@ create table if not exists public.profiles (
   username text,
   role text not null default 'user',
   is_banned boolean not null default false,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  password_hash text
+  password text
 );
 
 create unique index if not exists profiles_username_unique

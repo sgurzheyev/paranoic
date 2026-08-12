@@ -1,12 +1,11 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { AVATARS_BUCKET, PROFILES_TABLE, type RemoteProfile } from './profile';
+import { AVATARS_BUCKET, PROFILES_TABLE, PROFILE_COLUMNS, type RemoteProfile } from './profile';
 
 export type ProfileRole = 'user' | 'admin';
 
 export type AdminUserRow = RemoteProfile & {
   role: ProfileRole;
   is_banned: boolean;
-  created_at: string | null;
 };
 
 export type MyAccessFlags = {
@@ -14,8 +13,7 @@ export type MyAccessFlags = {
   isBanned: boolean;
 };
 
-const PROFILE_ADMIN_SELECT =
-  'id,name,color,avatar_url,theme_fon,username,updated_at,role,is_banned,created_at';
+const PROFILE_ADMIN_SELECT = PROFILE_COLUMNS;
 
 function normalizeRole(raw: unknown): ProfileRole {
   return raw === 'admin' ? 'admin' : 'user';
@@ -29,10 +27,8 @@ function mapAdminRow(row: Record<string, unknown>): AdminUserRow {
     avatar_url: (row.avatar_url as string | null) ?? null,
     theme_fon: (row.theme_fon as string | null) ?? null,
     username: (row.username as string | null) ?? null,
-    updated_at: row.updated_at ? String(row.updated_at) : undefined,
     role: normalizeRole(row.role),
     is_banned: Boolean(row.is_banned),
-    created_at: row.created_at ? String(row.created_at) : null,
   };
 }
 
@@ -69,7 +65,7 @@ export async function listAllProfiles(): Promise<AdminUserRow[]> {
   const { data, error } = await sb
     .from(PROFILES_TABLE)
     .select(PROFILE_ADMIN_SELECT)
-    .order('created_at', { ascending: false });
+    .order('username', { ascending: true, nullsFirst: false });
   if (error) {
     throw new Error(error.message || 'Не удалось загрузить пользователей');
   }
@@ -82,10 +78,7 @@ export async function setUserBanned(userId: string, banned: boolean): Promise<vo
   const sb = getSupabase();
   const { error } = await sb
     .from(PROFILES_TABLE)
-    .update({
-      is_banned: banned,
-      updated_at: new Date().toISOString(),
-    })
+    .update({ is_banned: banned })
     .eq('id', userId);
   if (error) throw new Error(error.message || 'Не удалось изменить бан');
 }

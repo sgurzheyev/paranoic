@@ -57,7 +57,7 @@ export async function hashPassword(
   return toBase64(packed);
 }
 
-/** Сравнение введённого пароля с полем password_hash (PBKDF2 или plain text). */
+/** Сравнение введённого пароля с полем profiles.password (PBKDF2 или plain text). */
 export async function passwordsMatch(password: string, stored: string): Promise<boolean> {
   const entered = password.trim();
   const saved = stored?.trim() ?? '';
