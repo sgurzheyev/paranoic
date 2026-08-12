@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { Globe2, Shield, X } from 'lucide-react';
 import AccountLoginPanel from './AccountLoginPanel';
 import ParanoicLogo from './ParanoicLogo';
@@ -9,6 +9,8 @@ export type AppModeChoice = 'paranoic' | 'family';
 type ModeSelectorProps = {
   onSelect: (mode: AppModeChoice) => void;
   onAccountRestored?: (identity: UserIdentity) => void;
+  /** Сброс глобальных toast ошибок P2P при входе на стартовый экран. */
+  onLobbyEnter?: () => void;
 };
 
 type ClientPlatform = 'android' | 'ios';
@@ -34,8 +36,12 @@ function hasStoreUrl(platform: ClientPlatform): boolean {
 /**
  * Стартовый экран: компактная сетка режимов + иконки нативных клиентов.
  */
-export default function ModeSelector({ onSelect, onAccountRestored }: ModeSelectorProps) {
+export default function ModeSelector({ onSelect, onAccountRestored, onLobbyEnter }: ModeSelectorProps) {
   const [downloadHint, setDownloadHint] = useState<ClientPlatform | null>(null);
+
+  useEffect(() => {
+    onLobbyEnter?.();
+  }, [onLobbyEnter]);
 
   const onDownloadClick = (platform: ClientPlatform, e: MouseEvent<HTMLAnchorElement>) => {
     if (hasStoreUrl(platform)) return;
@@ -126,6 +132,7 @@ export default function ModeSelector({ onSelect, onAccountRestored }: ModeSelect
               onAccountRestored(identity);
               onSelect('paranoic');
             }}
+            onLobbyEnter={onLobbyEnter}
           />
         )}
       </div>

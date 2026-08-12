@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Phone,
   MessageCircle,
@@ -299,6 +299,8 @@ export default function App() {
   const secretKeyRef = useRef<CryptoKey | null>(null);
   const identityRef = useRef(identity);
   const appModeRef = useRef(appMode);
+  /** На стартовом экране / логине не показываем и не накапливаем ошибки WebRTC. */
+  const suppressGlobalErrorsRef = useRef(appMode === 'select');
   const peerIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -795,6 +797,20 @@ export default function App() {
     appModeRef.current = appMode;
   }, [appMode]);
 
+  const clearLobbyErrors = useCallback(() => {
+    setError('');
+    setCallAlert('');
+    setCallAlertToastOpen(false);
+    setLinkWarning('');
+  }, []);
+
+  /** ModeSelector / логin: сброс до отрисовки + блок повторных P2P toast. */
+  useLayoutEffect(() => {
+    suppressGlobalErrorsRef.current = appMode === 'select';
+    if (appMode !== 'select') return;
+    clearLobbyErrors();
+  }, [appMode, clearLobbyErrors]);
+
   useEffect(() => {
     peerMetaRef.current = {
       id: peerId || guestPeerId || '',
@@ -995,11 +1011,8 @@ export default function App() {
   /** ModeSelector / логин: не тащить ошибки WebRTC и дозвона из прошлых сессий. */
   useEffect(() => {
     if (appMode !== 'select') return;
-    setError('');
-    setCallAlert('');
-    setCallAlertToastOpen(false);
-    setLinkWarning('');
-  }, [appMode]);
+    clearLobbyErrors();
+  }, [appMode, clearLobbyErrors]);
 
   /** Не спамить «контакт не найден», если P2P уже connected. */
   useEffect(() => {
@@ -1547,6 +1560,7 @@ export default function App() {
           );
         },
         onLinkDegraded: (degraded, message) => {
+          if (suppressGlobalErrorsRef.current) return;
           setLinkWarning(
             degraded
               ? message || 'Слабое соединение. Файлы могут не отправляться.'
@@ -1554,6 +1568,7 @@ export default function App() {
           );
         },
         onError: (err) => {
+          if (suppressGlobalErrorsRef.current) return;
           const msg = err.message;
           if (appModeRef.current === 'family' && isCallFailureUserAlert(msg)) {
             setCallAlert(msg);
@@ -1761,7 +1776,9 @@ export default function App() {
       } catch (e) {
         if (!cancelled) {
           clearCallSessionResidue();
-          setError(e instanceof Error ? e.message : 'Не удалось войти');
+          if (!suppressGlobalErrorsRef.current) {
+            setError(e instanceof Error ? e.message : 'Не удалось войти');
+          }
           setP2pStatus('failed');
           setSignalingStatus('');
           setJoining(false);
@@ -2959,6 +2976,7 @@ export default function App() {
         <ModeSelector
           onSelect={(mode) => setAppMode(mode)}
           onAccountRestored={handleAccountRestored}
+          onLobbyEnter={clearLobbyErrors}
         />
       </>
     );

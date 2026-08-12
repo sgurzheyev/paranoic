@@ -1,19 +1,28 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LogIn } from 'lucide-react';
 import { hasSavedLoginSession, normalizeUsername, type UserIdentity } from './identity';
 import { loginWithUsernamePassword } from './profile';
 
 type AccountLoginPanelProps = {
   onRestored: (identity: UserIdentity) => void;
+  onLobbyEnter?: () => void;
   compact?: boolean;
 };
 
 /** Вход по username + password — восстановление user_id и профиля из Supabase. */
-export default function AccountLoginPanel({ onRestored, compact = false }: AccountLoginPanelProps) {
+export default function AccountLoginPanel({
+  onRestored,
+  onLobbyEnter,
+  compact = false,
+}: AccountLoginPanelProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    onLobbyEnter?.();
+  }, [onLobbyEnter]);
 
   if (hasSavedLoginSession()) {
     return null;
