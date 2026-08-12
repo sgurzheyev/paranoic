@@ -2700,8 +2700,23 @@ export default function App() {
 
   if (appMode === 'family') {
     return (
-      <>
-        {error && <div className="banner error">{error}</div>}
+      <div className="family-app-shell">
+        {error && (
+          <div
+            className={`app-toast app-toast--error${incomingRing ? '' : ' app-toast--above-nav'}`}
+            role="alert"
+          >
+            <span className="app-toast__text">{error}</span>
+            <button
+              type="button"
+              className="app-toast__close icon-btn"
+              onClick={() => setError('')}
+              aria-label="Закрыть"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
         {adminOpen && (
           <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
         )}
@@ -2764,7 +2779,7 @@ export default function App() {
             onProfile={() => goMainTab('profile')}
           />
         )}
-      </>
+      </div>
     );
   }
 

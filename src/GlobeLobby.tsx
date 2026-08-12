@@ -1013,10 +1013,10 @@ export default function GlobeLobby({
                   setLayersOpen(false);
                   setIsTargetingMode(true);
                 }}
-                title="Выбрать место для капсулы"
+                title="Выбрать место для Pin Memory"
               >
                 <Gem size={16} />
-                Капсула
+                Pin Memory
               </button>
               <button
                 type="button"
