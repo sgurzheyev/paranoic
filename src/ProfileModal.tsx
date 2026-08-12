@@ -3,6 +3,7 @@ import { Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
   buildMagicLink,
+  forcePersistSession,
   THEME_FON_PRESETS,
   updateIdentity,
   validateUsername,
@@ -183,8 +184,9 @@ export default function ProfileModal({
       });
       applyPrivacy({ ghostMode, ephemeral24h });
       await syncProfileToSupabase(next, password.trim() ? { password: password.trim() } : undefined);
+      const saved = password.trim() ? forcePersistSession(next) : next;
       if (password.trim()) setPassword('');
-      onSaved(next);
+      onSaved(saved);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить');

@@ -132,10 +132,14 @@ import {
 import {
   buildMagicLink,
   clearMagicParamFromUrl,
+  forcePersistSession,
   getMagicTargetFromUrl,
   getOrCreateIdentity,
+  getSavedLoginSession,
+  hasSavedLoginSession,
   personalInboxRoom,
   resolveMagicRoute,
+  restoreIdentityFromProfile,
   shouldSkipModeSelector,
   updateIdentity,
   looksLikeUsername,
@@ -275,9 +279,12 @@ export default function App() {
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
-  const [mainTab, setMainTab] = useState<LiquidNavTab>(() =>
-    shouldSkipModeSelector() && !getMagicTargetFromUrl() ? 'contacts' : 'chats'
-  );
+  const [mainTab, setMainTab] = useState<LiquidNavTab>(() => {
+    if (hasSavedLoginSession() || shouldSkipModeSelector()) {
+      if (!getMagicTargetFromUrl()) return 'contacts';
+    }
+    return 'chats';
+  });
   const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
   /** Режим заметки: голос или видео-кружочек. */
   const [noteMode, setNoteMode] = useState<NoteMode>('video');
@@ -2820,13 +2827,42 @@ export default function App() {
   };
 
   const handleAccountRestored = (next: UserIdentity) => {
-    applyIdentity(next);
+    const persisted = forcePersistSession(next);
+    applyIdentity(persisted);
     setAppMode('paranoic');
     setMainTab('contacts');
     setScreen('home');
     setSessionEpoch((n) => n + 1);
     void loadContacts().then(setContacts);
   };
+
+  /** Сохранённая сессия: не показываем login, сразу Paranoic → Контакты. */
+  useEffect(() => {
+    const session = getSavedLoginSession();
+    if (!session) return;
+
+    const current = getOrCreateIdentity();
+    if (current.id !== session.userId) {
+      void fetchRemoteProfile(session.userId).then((remote) => {
+        if (remote) {
+          applyIdentity(restoreIdentityFromProfile(remote));
+        } else {
+          applyIdentity(
+            forcePersistSession({
+              ...current,
+              id: session.userId,
+              username: session.username,
+            })
+          );
+        }
+      });
+    }
+
+    setAppMode((mode) => (mode === 'select' ? 'paranoic' : mode));
+    setMainTab('contacts');
+    setScreen('home');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveName = () => {
     const next = updateIdentity({ name: nameDraft.trim() || 'Я' });

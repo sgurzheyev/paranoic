@@ -54,10 +54,16 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  if (!stored?.trim()) return false;
+  if (!stored?.trim()) {
+    console.error('[paranoic login] verifyPassword: empty stored hash');
+    return false;
+  }
   try {
     const packed = fromBase64(stored);
-    if (packed.length !== SALT_BYTES + HASH_BYTES) return false;
+    if (packed.length !== SALT_BYTES + HASH_BYTES) {
+      console.error('[paranoic login] verifyPassword: invalid hash length', packed.length);
+      return false;
+    }
     const salt = packed.slice(0, SALT_BYTES);
     const expected = packed.slice(SALT_BYTES);
     const actual = await deriveHash(password.trim(), salt);
@@ -65,7 +71,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
     let diff = 0;
     for (let i = 0; i < actual.length; i++) diff |= actual[i]! ^ expected[i]!;
     return diff === 0;
-  } catch {
+  } catch (e) {
+    console.error('[paranoic login] verifyPassword: decode/derive failed', e);
     return false;
   }
 }

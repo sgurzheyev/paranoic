@@ -191,6 +191,9 @@ export async function syncProfileToSupabase(
       if (/username|unique|duplicate/i.test(error.message)) {
         throw new Error('Имя занято');
       }
+      if (opts?.password?.trim()) {
+        throw new Error(`Не удалось сохранить пароль: ${error.message}`);
+      }
       console.warn('[paranoic] profiles upsert', error.message);
     }
   } catch (e) {
@@ -320,31 +323,145 @@ export async function resolveHandleToUserId(handle: string): Promise<string | nu
 }
 
 /** Вход: username + password → восстановление user_id и профиля. */
+export type LoginFailureReason =
+  | 'user_not_found'
+  | 'no_password_set'
+  | 'password_mismatch'
+  | 'db_error'
+  | 'invalid_input';
+
+export type LoginResult =
+  | { ok: true; identity: UserIdentity }
+  | { ok: false; reason: LoginFailureReason; message: string; detail?: string };
+
+async function fetchLoginProfile(
+  handle: string
+): Promise<{ row: RemoteProfile | null; dbError: string | null }> {
+  const sb = getSupabase();
+
+  try {
+    const { data, error } = await sb.rpc('login_profile_by_username', {
+      p_username: handle,
+    });
+    if (!error && data) {
+      const row = (Array.isArray(data) ? data[0] : data) as RemoteProfile | undefined;
+      if (row?.id) {
+        console.log('[paranoic login] profile via RPC', { username: handle, userId: row.id });
+        return { row, dbError: null };
+      }
+    }
+    if (error) {
+      console.warn('[paranoic login] RPC login_profile_by_username failed — fallback to SELECT', {
+        code: error.code,
+        message: error.message,
+      });
+    }
+  } catch (e) {
+    console.warn('[paranoic login] RPC exception — fallback to SELECT', e);
+  }
+
+  const selectCols = `${PROFILE_SELECT},password_hash`;
+  const queries = [
+    () => sb.from(PROFILES_TABLE).select(selectCols).eq('username', handle).maybeSingle(),
+    () => sb.from(PROFILES_TABLE).select(selectCols).ilike('username', handle).maybeSingle(),
+  ];
+
+  for (const run of queries) {
+    const { data, error } = await run();
+    if (error) {
+      console.error('[paranoic login] DB SELECT error', {
+        username: handle,
+        code: error.code,
+        message: error.message,
+      });
+      return { row: null, dbError: error.message };
+    }
+    if (data) {
+      console.log('[paranoic login] profile via SELECT', { username: handle, userId: data.id });
+      return { row: data as RemoteProfile, dbError: null };
+    }
+  }
+
+  return { row: null, dbError: null };
+}
+
 export async function loginWithUsernamePassword(
   username: string,
   password: string
-): Promise<UserIdentity | null> {
+): Promise<LoginResult> {
   if (!hasSupabaseConfig()) {
-    throw new Error('Supabase не настроен — вход недоступен');
+    return {
+      ok: false,
+      reason: 'db_error',
+      message: 'Supabase не настроен — вход недоступен',
+    };
   }
+
   const handle = normalizeUsername(username);
-  if (!handle) return null;
+  if (!handle) {
+    return { ok: false, reason: 'invalid_input', message: 'Введите никнейм' };
+  }
+  if (!password.trim()) {
+    return { ok: false, reason: 'invalid_input', message: 'Введите пароль' };
+  }
+
   try {
-    const sb = getSupabase();
-    const { data, error } = await sb
-      .from(PROFILES_TABLE)
-      .select(`${PROFILE_SELECT},password_hash`)
-      .ilike('username', handle)
-      .maybeSingle();
-    if (error || !data) return null;
-    const row = data as RemoteProfile;
-    if (!row.password_hash) return null;
+    const { row, dbError } = await fetchLoginProfile(handle);
+
+    if (dbError) {
+      return {
+        ok: false,
+        reason: 'db_error',
+        message: 'Ошибка базы данных при входе. Проверьте Supabase и RLS.',
+        detail: dbError,
+      };
+    }
+
+    if (!row) {
+      console.error('[paranoic login] User not found in DB', { username: handle });
+      return {
+        ok: false,
+        reason: 'user_not_found',
+        message: `Аккаунт @${handle} не найден. Создайте профиль заново: задайте никнейм и пароль в настройках.`,
+      };
+    }
+
+    if (!row.password_hash?.trim()) {
+      console.error('[paranoic login] User found but password_hash is empty', {
+        username: handle,
+        userId: row.id,
+      });
+      return {
+        ok: false,
+        reason: 'no_password_set',
+        message: `У @${handle} ещё нет пароля. Откройте Paranoic Mode → Профиль → задайте пароль и сохраните.`,
+      };
+    }
+
     const valid = await verifyPassword(password, row.password_hash);
-    if (!valid) return null;
-    return restoreIdentityFromProfile(row);
+    if (!valid) {
+      console.error('[paranoic login] Password mismatch', { username: handle, userId: row.id });
+      return {
+        ok: false,
+        reason: 'password_mismatch',
+        message: 'Неверный пароль для этого никнейма.',
+      };
+    }
+
+    const identity = restoreIdentityFromProfile(row);
+    console.log('[paranoic login] success', { username: handle, userId: identity.id });
+    return { ok: true, identity };
   } catch (e) {
-    if (e instanceof Error && e.message.includes('Supabase')) throw e;
-    console.warn('[paranoic] login failed', e);
-    return null;
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('[paranoic login] unexpected error', detail);
+    if (e instanceof Error && e.message.includes('Supabase')) {
+      return { ok: false, reason: 'db_error', message: e.message, detail };
+    }
+    return {
+      ok: false,
+      reason: 'db_error',
+      message: 'Не удалось войти. Смотрите консоль для деталей.',
+      detail,
+    };
   }
 }

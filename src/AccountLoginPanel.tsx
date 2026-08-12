@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LogIn } from 'lucide-react';
-import { normalizeUsername, type UserIdentity } from './identity';
+import { hasSavedLoginSession, normalizeUsername, type UserIdentity } from './identity';
 import { loginWithUsernamePassword } from './profile';
 
 type AccountLoginPanelProps = {
@@ -15,7 +15,11 @@ export default function AccountLoginPanel({ onRestored, compact = false }: Accou
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const submit = async () => {
+  if (hasSavedLoginSession()) {
+    return null;
+  }
+
+  const handleLogin = async () => {
     setError('');
     const handle = normalizeUsername(username);
     if (!handle) {
@@ -26,16 +30,18 @@ export default function AccountLoginPanel({ onRestored, compact = false }: Accou
       setError('Введите пароль');
       return;
     }
+
     setBusy(true);
     try {
-      const restored = await loginWithUsernamePassword(handle, password);
-      if (!restored) {
-        setError('Неверный никнейм или пароль');
+      const result = await loginWithUsernamePassword(handle, password);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setPassword('');
-      onRestored(restored);
+      onRestored(result.identity);
     } catch (e) {
+      console.error('[paranoic login] handleLogin exception', e);
       setError(e instanceof Error ? e.message : 'Не удалось войти');
     } finally {
       setBusy(false);
@@ -61,6 +67,9 @@ export default function AccountLoginPanel({ onRestored, compact = false }: Accou
             autoCorrect="off"
             spellCheck={false}
             disabled={busy}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleLogin();
+            }}
           />
         </div>
         <input
@@ -70,12 +79,15 @@ export default function AccountLoginPanel({ onRestored, compact = false }: Accou
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Пароль"
           disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleLogin();
+          }}
         />
         <button
           type="button"
           className="account-login-panel__submit"
           disabled={busy}
-          onClick={() => void submit()}
+          onClick={() => void handleLogin()}
         >
           {busy ? '…' : 'Войти'}
         </button>

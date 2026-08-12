@@ -16,6 +16,14 @@ export type UserIdentity = {
 };
 
 const STORAGE_KEY = 'paranoic-identity-v1';
+const SESSION_KEY = 'paranoic-session-v1';
+
+export type SavedLoginSession = {
+  userId: string;
+  username: string;
+  peerId: string;
+  savedAt: string;
+};
 
 /** 3–24 символа: латиница/цифры/_, начинается с буквы. */
 export const USERNAME_PATTERN = /^[a-z][a-z0-9_]{2,23}$/;
@@ -150,7 +158,7 @@ export function hasEstablishedProfile(identity: UserIdentity): boolean {
   return false;
 }
 
-/** Пропустить ModeSelector: PWA или сохранённый профиль (без magic/room в URL). */
+/** Пропустить ModeSelector: PWA, сохранённая сессия входа или профиль (без magic/room в URL). */
 export function shouldSkipModeSelector(): boolean {
   if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return false;
   try {
@@ -159,8 +167,60 @@ export function shouldSkipModeSelector(): boolean {
   } catch {
     /* */
   }
+  if (hasSavedLoginSession()) return true;
   if (isPwaStandalone()) return true;
   return hasEstablishedProfile(getOrCreateIdentity());
+}
+
+/** Жёстко сохранить identity + сессию входа (userId / username / peerId). */
+export function forcePersistSession(identity: UserIdentity): UserIdentity {
+  const next = normalizeIdentity(identity);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  const session: SavedLoginSession = {
+    userId: next.id,
+    username: next.username,
+    peerId: next.id,
+    savedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  console.log('[paranoic login] session persisted', {
+    userId: session.userId,
+    username: session.username,
+    peerId: session.peerId,
+  });
+  return next;
+}
+
+export function hasSavedLoginSession(): boolean {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<SavedLoginSession>;
+    return Boolean(parsed.userId && parsed.username?.trim());
+  } catch {
+    return false;
+  }
+}
+
+export function getSavedLoginSession(): SavedLoginSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedLoginSession>;
+    if (!parsed.userId || !parsed.username?.trim()) return null;
+    return {
+      userId: parsed.userId,
+      username: parsed.username.trim(),
+      peerId: parsed.peerId || parsed.userId,
+      savedAt: parsed.savedAt || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearSavedLoginSession(): void {
+  localStorage.removeItem(SESSION_KEY);
 }
 
 /** Восстановить локальную identity из строки profiles (login / sync). */
@@ -181,8 +241,7 @@ export function restoreIdentityFromProfile(profile: {
     avatarUrl: profile.avatar_url || '',
     themeFon: profile.theme_fon || current.themeFon,
   });
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  return next;
+  return forcePersistSession(next);
 }
 
 export function getOrCreateIdentity(): UserIdentity {
