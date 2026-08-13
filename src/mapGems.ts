@@ -190,7 +190,17 @@ export async function uploadGemMedia(
     rawSession?.user?.id != null ? rawSession : await ensureAuthSession();
 
   const uid = session.user.id || 'anon';
-  return uploadFileToR2('map-gems', uid, file, { onProgress });
+  try {
+    return await uploadFileToR2('map-gems', uid, file, { onProgress });
+  } catch (err) {
+    const raw = err instanceof Error ? err : new Error(String(err));
+    const wrapped = new Error(
+      `uploadGemMedia failed (${file.type || 'unknown type'}, ${file.size} bytes): ${raw.message} | ${raw.stack ?? 'no stack'}`
+    );
+    wrapped.name = raw.name || 'GemUploadError';
+    wrapped.stack = raw.stack;
+    throw wrapped;
+  }
 }
 
 export type GemFeatureCollection = {

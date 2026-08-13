@@ -163,7 +163,7 @@ import {
   clearEphemeralGuestId,
   saveCallResidue,
 } from './callSessionCleanup';
-import { ANTARCTICA, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
+import { ANTARCTICA, GEO_BLOCKED_MESSAGE, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
 
 type AppMode = 'select' | AppModeChoice;
 type Screen = 'home' | 'chat' | 'call';
@@ -1112,9 +1112,8 @@ export default function App() {
           {
             onDenied: () => {
               if (cancelled) return;
-              setLinkWarning(
-                'Location access is blocked. Please allow location access in your browser settings to see your exact position.'
-              );
+              setLinkWarning(GEO_BLOCKED_MESSAGE);
+              alert(GEO_BLOCKED_MESSAGE);
             },
           }
         );

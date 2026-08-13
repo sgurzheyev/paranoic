@@ -23,6 +23,9 @@ const GEO_FALLBACK_MS = 7_000;
 
 export type GeoWatchHandle = { stop: () => void };
 
+export const GEO_BLOCKED_MESSAGE =
+  'Браузер блокирует GPS. Нажмите на иконку настроек в адресной строке браузера и разрешите доступ к геоданным.';
+
 export type WatchGeoOptions = {
   /** GPS permission denied by the user / browser. */
   onDenied?: () => void;
@@ -43,17 +46,39 @@ export function watchGeo(
 
   let settled = false;
   let watchId: number | null = null;
+  let deniedNotified = false;
 
   const emit = (point: GeoPoint) => {
     settled = true;
     onUpdate(point);
   };
 
+  const notifyDenied = () => {
+    if (deniedNotified) return;
+    deniedNotified = true;
+    opts?.onDenied?.();
+  };
+
   const fallbackTimer = window.setTimeout(() => {
     if (!settled) emit({ ...ANTARCTICA });
   }, GEO_FALLBACK_MS);
 
+  const onGeoError = (err: GeolocationPositionError) => {
+    window.clearTimeout(fallbackTimer);
+    if (err.code === err.PERMISSION_DENIED) {
+      notifyDenied();
+    }
+    emit({ ...ANTARCTICA });
+  };
+
   try {
+    navigator.geolocation.getCurrentPosition(
+      () => undefined,
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) notifyDenied();
+      },
+      { enableHighAccuracy: true, timeout: 8_000, maximumAge: 20_000 }
+    );
     watchId = navigator.geolocation.watchPosition(
       (pos) => {
         window.clearTimeout(fallbackTimer);
@@ -63,13 +88,7 @@ export function watchGeo(
           source: 'gps',
         });
       },
-      (err) => {
-        window.clearTimeout(fallbackTimer);
-        if (err.code === err.PERMISSION_DENIED) {
-          opts?.onDenied?.();
-        }
-        emit({ ...ANTARCTICA });
-      },
+      onGeoError,
       {
         enableHighAccuracy: true,
         timeout: 12_000,
@@ -78,6 +97,7 @@ export function watchGeo(
     );
   } catch {
     window.clearTimeout(fallbackTimer);
+    notifyDenied();
     emit({ ...ANTARCTICA });
   }
 

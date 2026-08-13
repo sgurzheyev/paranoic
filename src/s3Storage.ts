@@ -141,9 +141,75 @@ export async function uploadToR2(opts: UploadToR2Options): Promise<string> {
     if (total > 0) opts.onProgress(Math.min(1, loaded / total));
   });
 
-  await upload.done();
+  try {
+    await upload.done();
+  } catch (err) {
+    throw wrapR2UploadError(err, opts.key);
+  }
   opts.onProgress?.(1);
   return publicUrlForKey(opts.key);
+}
+
+function envFlag(name: string, secret = false): string {
+  const v = (import.meta.env[name] as string | undefined)?.trim();
+  if (!v) return `${name}=MISSING`;
+  if (secret) return `${name}=set(${v.length}ch)`;
+  return `${name}=${v}`;
+}
+
+function wrapR2UploadError(err: unknown, key: string): Error {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'n/a';
+  const cfg = readConfig();
+  const envDump = [
+    envFlag('VITE_R2_ACCOUNT_ID'),
+    envFlag('VITE_R2_ACCESS_KEY_ID', true),
+    envFlag('VITE_R2_SECRET_ACCESS_KEY', true),
+    envFlag('VITE_R2_BUCKET'),
+    envFlag('VITE_R2_PUBLIC_URL'),
+  ].join(', ');
+
+  const raw = err instanceof Error ? err : new Error(String(err));
+  const aws = err as {
+    name?: string;
+    message?: string;
+    stack?: string;
+    cause?: unknown;
+    $metadata?: { httpStatusCode?: number; requestId?: string; extendedRequestId?: string };
+  };
+  const cause =
+    aws.cause instanceof Error
+      ? `${aws.cause.name}: ${aws.cause.message}`
+      : aws.cause
+        ? String(aws.cause)
+        : '';
+  const http = aws.$metadata?.httpStatusCode;
+  const requestId = aws.$metadata?.requestId;
+  const fetchFail = /failed to fetch|networkerror|load failed|cors/i.test(
+    `${raw.name} ${raw.message} ${cause}`
+  );
+  const corsHint = fetchFail
+    ? `Likely CORS or blocked browser fetch to R2 S3 API (${cfg ? `https://${cfg.accountId}.r2.cloudflarestorage.com` : 'endpoint unknown'}). Add this origin (${origin}) to the bucket CORS rules (AllowedMethods PUT,POST,GET,HEAD; AllowedHeaders *).`
+    : '';
+
+  const detail = [
+    `R2 upload failed for key=${key}`,
+    `origin=${origin}`,
+    envDump,
+    `name=${raw.name}`,
+    `message=${raw.message}`,
+    http != null ? `http=${http}` : '',
+    requestId ? `requestId=${requestId}` : '',
+    cause ? `cause=${cause}` : '',
+    corsHint,
+    `stack=${raw.stack ?? 'none'}`,
+  ]
+    .filter(Boolean)
+    .join(' | ');
+
+  const wrapped = new Error(detail);
+  wrapped.name = raw.name || 'R2UploadError';
+  wrapped.stack = raw.stack;
+  return wrapped;
 }
 
 /** Presigned PUT URL (optional path for custom XHR uploads). */

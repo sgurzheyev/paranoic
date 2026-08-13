@@ -70,16 +70,19 @@ export default function MemoryGemComposer({
     setBusy(true);
     setError('');
     setProgress(0);
+    let step: 'idle' | 'upload' | 'save' = 'idle';
     try {
       let mediaUrl: string | null = null;
       if (type === 'photo' || type === 'video') {
         if (!file) throw new Error(type === 'photo' ? 'Выберите фото' : 'Выберите видео');
+        step = 'upload';
         setPhase('upload');
         mediaUrl = await uploadGemMedia(file, (ratio) => setProgress(ratio));
       }
       if (type === 'text' && !text.trim()) {
         throw new Error('Введите текст капсулы');
       }
+      step = 'save';
       setPhase('save');
       setProgress(1);
       const gem = await createMapGem({
@@ -93,7 +96,10 @@ export default function MemoryGemComposer({
       onCreated(gem);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сохранить');
+      const err = e instanceof Error ? e : new Error(String(e));
+      const detail = `[${step}] ${err.message} | ${err.stack ?? 'no stack'}`;
+      alert(detail);
+      setError(detail);
       setPhase('idle');
     } finally {
       setBusy(false);
