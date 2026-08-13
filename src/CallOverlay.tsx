@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Mic, MicOff, Paperclip, PhoneIncoming, PhoneOff } from 'lucide-react';
+import { ChevronDown, Mic, MicOff, Paperclip, PhoneIncoming, PhoneOff } from 'lucide-react';
 import type { CallState, NetworkQuality } from './p2p';
 
 type CallOverlayProps = {
@@ -22,14 +22,75 @@ type CallOverlayProps = {
 
 const CONTROLS_HIDE_MS = 4000;
 
+export function formatCallClock(elapsedMs: number): string {
+  const total = Math.max(0, Math.floor(elapsedMs / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+type ActiveCallBannerProps = {
+  visible: boolean;
+  peerLabel: string;
+  callState: CallState;
+  startedAt: number | null;
+  onOpen: () => void;
+  onHangUp: () => void;
+};
+
+/** Глобальная полоска активного звонка — только когда соединение реально идёт. */
+export function ActiveCallBanner({
+  visible,
+  peerLabel,
+  callState,
+  startedAt,
+  onOpen,
+  onHangUp,
+}: ActiveCallBannerProps) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!visible || callState !== 'in-call') return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [visible, callState]);
+
+  if (!visible) return null;
+
+  const status =
+    callState === 'in-call' && startedAt
+      ? formatCallClock(now - startedAt)
+      : 'Ожидание…';
+
+  return (
+    <div className="active-call-banner" role="status">
+      <button type="button" className="active-call-banner__main" onClick={onOpen}>
+        <span className="active-call-banner__peer">{peerLabel}</span>
+        <span className="active-call-banner__status">{status}</span>
+      </button>
+      <button
+        type="button"
+        className="active-call-banner__hangup"
+        onClick={onHangUp}
+        aria-label="Завершить звонок"
+      >
+        <PhoneOff size={16} />
+      </button>
+    </div>
+  );
+}
+
 /**
  * Полноэкранный видеозвонок: удалённый поток на весь экран, свой — PiP.
+ * Свёрнутый режим держит <video>, чтобы не терять стримы.
  */
 export default function CallOverlay({
   callState,
   peerLabel,
   screenSharing,
   networkQuality,
+  expanded,
+  onExpandedChange,
   localVideoRef,
   remoteVideoRef,
   onAccept,
@@ -50,16 +111,16 @@ export default function CallOverlay({
   }, [callState]);
 
   useEffect(() => {
-    if (!controlsVisible || callState === 'idle' || isRinging) return;
+    if (!expanded || !controlsVisible || callState === 'idle' || isRinging) return;
     const timer = window.setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_MS);
     return () => window.clearTimeout(timer);
-  }, [controlsVisible, callState, isRinging]);
+  }, [controlsVisible, callState, isRinging, expanded]);
 
   useEffect(() => {
     for (const el of [localVideoRef.current, remoteVideoRef.current]) {
       if (el?.srcObject) void el.play().catch(() => undefined);
     }
-  }, [callState, localVideoRef, remoteVideoRef]);
+  }, [callState, expanded, localVideoRef, remoteVideoRef]);
 
   const toggleControls = useCallback(() => {
     setControlsVisible((v) => !v);
@@ -88,11 +149,12 @@ export default function CallOverlay({
 
   return (
     <div
-      className={`call-overlay expanded${isRinging ? ' ringing' : ''}`}
-      role="dialog"
-      aria-label={isRinging ? 'Входящий звонок' : 'Видеозвонок'}
+      className={`call-overlay${expanded ? ' expanded' : ' keep-alive'}${isRinging ? ' ringing' : ''}`}
+      role={expanded ? 'dialog' : 'presentation'}
+      aria-hidden={!expanded}
+      aria-label={expanded ? (isRinging ? 'Входящий звонок' : 'Видеозвонок') : undefined}
     >
-      {isRinging ? (
+      {isRinging && expanded ? (
         <div className="incoming-media-card call-overlay-ring">
           <div className="avatar lg" style={{ background: 'var(--call)' }}>
             <PhoneIncoming size={28} />
@@ -109,7 +171,7 @@ export default function CallOverlay({
           </div>
         </div>
       ) : (
-        <div className="call-room" onClick={toggleControls}>
+        <div className="call-room" onClick={expanded ? toggleControls : undefined}>
           <video
             ref={remoteVideoRef}
             className={mainIsRemote ? 'call-video-main' : 'call-video-pip'}
@@ -123,46 +185,62 @@ export default function CallOverlay({
             playsInline
             muted
           />
-          <button
-            type="button"
-            className="call-pip-swap"
-            aria-label="Поменять видео местами"
-            onClick={swapStreams}
-          />
-
-          <div className={`call-room-chrome${controlsVisible ? ' is-visible' : ''}`}>
-            <p className="call-room-status">{statusText}</p>
-            <div
-              className="call-room-controls"
-              onClick={(e) => e.stopPropagation()}
-            >
+          {expanded && (
+            <>
               <button
                 type="button"
-                className={`call-room-btn${micMuted ? ' is-off' : ''}`}
-                onClick={onToggleMute}
-                aria-pressed={micMuted}
-                aria-label={micMuted ? 'Включить микрофон' : 'Выключить микрофон'}
-              >
-                {micMuted ? <MicOff size={22} /> : <Mic size={22} />}
-              </button>
-              <button
-                type="button"
-                className="call-room-btn"
-                onClick={onAttachFile}
-                aria-label="Отправить файл"
-              >
-                <Paperclip size={22} />
-              </button>
-              <button
-                type="button"
-                className="call-room-btn hangup"
-                onClick={onHangUp}
-                aria-label="Завершить звонок"
-              >
-                <PhoneOff size={22} />
-              </button>
-            </div>
-          </div>
+                className="call-pip-swap"
+                aria-label="Поменять видео местами"
+                onClick={swapStreams}
+              />
+              <div className={`call-room-chrome${controlsVisible ? ' is-visible' : ''}`}>
+                <div className="call-room-top">
+                  <button
+                    type="button"
+                    className="call-room-minimize"
+                    aria-label="Свернуть звонок"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onExpandedChange(false);
+                    }}
+                  >
+                    <ChevronDown size={22} />
+                  </button>
+                  <p className="call-room-status">{statusText}</p>
+                </div>
+                <div
+                  className="call-room-controls"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className={`call-room-btn${micMuted ? ' is-off' : ''}`}
+                    onClick={onToggleMute}
+                    aria-pressed={micMuted}
+                    aria-label={micMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+                  >
+                    {micMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="call-room-btn"
+                    onClick={onAttachFile}
+                    aria-label="Отправить файл"
+                  >
+                    <Paperclip size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    className="call-room-btn hangup"
+                    onClick={onHangUp}
+                    aria-label="Завершить звонок"
+                  >
+                    <PhoneOff size={22} />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

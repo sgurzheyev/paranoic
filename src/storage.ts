@@ -231,3 +231,67 @@ export function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
+
+export type LastMessagePreview = {
+  peerId: string;
+  snippet: string;
+  timeLabel: string;
+  createdAt: number;
+};
+
+/** Короткий сниппет последнего сообщения — как в Telegram. */
+export function formatMessageSnippet(row: StoredMessage): string {
+  if (row.kind === 'text') {
+    const text = (row.text || '').replace(/\s+/g, ' ').trim();
+    return text || 'Сообщение';
+  }
+  if (row.mediaKind === 'voice' || row.mediaMime?.startsWith('audio/')) return '🎤 Голос';
+  if (row.mediaKind === 'circle') return '📹 Видео';
+  if (row.mediaMime?.startsWith('image/')) return '📷 Фото';
+  if (row.mediaMime?.startsWith('video/')) return '📹 Видео';
+  return '📎 Файл';
+}
+
+function previewTimeLabel(row: StoredMessage): string {
+  if (typeof row.createdAt === 'number' && Number.isFinite(row.createdAt)) {
+    const d = new Date(row.createdAt);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  }
+  return row.time;
+}
+
+/** Последнее сообщение по каждому собеседнику (IndexedDB). */
+export async function loadLastMessagePreviews(
+  selfId: string
+): Promise<Record<string, LastMessagePreview>> {
+  const out: Record<string, LastMessagePreview> = {};
+  if (!selfId) return out;
+  try {
+    const keys = await messagesDb.keys();
+    for (const raw of keys) {
+      const key = String(raw);
+      const pair = parseChatKey(key);
+      if (!pair) continue;
+      const [a, b] = pair;
+      const peerId = a === selfId ? b : b === selfId ? a : null;
+      if (!peerId) continue;
+      const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
+      const last = history[history.length - 1];
+      if (!last) continue;
+      const snippet = formatMessageSnippet(last);
+      out[peerId] = {
+        peerId,
+        snippet: last.mine ? `Вы: ${snippet}` : snippet,
+        timeLabel: previewTimeLabel(last),
+        createdAt: typeof last.createdAt === 'number' ? last.createdAt : 0,
+      };
+    }
+  } catch {
+    /* */
+  }
+  return out;
+}

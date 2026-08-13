@@ -31,7 +31,7 @@ import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
 import AdminDashboard from './AdminDashboard';
-import CallOverlay from './CallOverlay';
+import CallOverlay, { ActiveCallBanner } from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
 import GuestDirectCall from './GuestDirectCall';
@@ -99,6 +99,7 @@ import {
   conversationId,
   formatFileSize,
   loadChatHistory,
+  loadLastMessagePreviews,
   loadMediaBlob,
   mediaStorageKey,
   purgeLegacyGlobalHistory,
@@ -107,6 +108,7 @@ import {
   purgeExpiredMessages,
   EPHEMERAL_TTL_MS,
   type DeliveryStatus,
+  type LastMessagePreview,
   type StoredMessage,
 } from './storage';
 import { loadSettings, saveSettings, type AppSettings } from './settings';
@@ -171,16 +173,6 @@ function toStored(message: ChatMessage): StoredMessage {
   const { mediaUrl: _url, transferProgress: _p, transferFailed: _f, ...stored } = message;
   return stored;
 }
-
-const FRIENDLY_STATUS: Record<P2PStatus, string> = {
-  idle: 'Пока никого нет',
-  'creating-offer': 'Создаём соединение…',
-  'waiting-answer': 'Ждём звонка по вашей ссылке…',
-  connecting: 'Соединяемся…',
-  connected: 'Вы на связи',
-  disconnected: 'Связь прервалась',
-  failed: 'Не получилось связаться',
-};
 
 function nowTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -274,6 +266,8 @@ export default function App() {
   } | null>(null);
   /** PiP свёрнут / развёрнут на весь экран. */
   const [callExpanded, setCallExpanded] = useState(false);
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
+  const [lastPreviews, setLastPreviews] = useState<Record<string, LastMessagePreview>>({});
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
@@ -807,6 +801,26 @@ export default function App() {
   useEffect(() => {
     if (appMode === 'family') setFamilyEntered(true);
   }, [appMode]);
+
+  useEffect(() => {
+    if (callState === 'in-call') {
+      setCallStartedAt((prev) => prev ?? Date.now());
+      return;
+    }
+    if (callState === 'idle' || callState === 'ending') {
+      setCallStartedAt(null);
+    }
+  }, [callState]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadLastMessagePreviews(identity.id).then((next) => {
+      if (!cancelled) setLastPreviews(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [identity.id, contacts, messages]);
 
   useEffect(() => {
     peerMetaRef.current = {
@@ -2111,7 +2125,7 @@ export default function App() {
             );
             await ensureP2P().startCall();
             attachLocalVideo(null);
-            setCallExpanded(false);
+            setCallExpanded(true);
             setScreen('chat');
             return;
           }
@@ -2159,7 +2173,7 @@ export default function App() {
       }
       await ensureP2P().startCall();
       attachLocalVideo(null);
-      setCallExpanded(false);
+      setCallExpanded(true);
       setScreen('chat');
     } catch (e) {
       clearCallSessionResidue();
@@ -2192,7 +2206,7 @@ export default function App() {
         setIncomingConnection(false);
         pendingRingAcceptRef.current = false;
         pendingAcceptCallerRef.current = null;
-        setCallExpanded(false);
+        setCallExpanded(true);
         setScreen('chat');
         return;
       }
@@ -2203,7 +2217,7 @@ export default function App() {
         setIncomingRing(null);
         pendingRingAcceptRef.current = false;
         pendingAcceptCallerRef.current = null;
-        setCallExpanded(false);
+        setCallExpanded(true);
         setScreen('chat');
         return;
       }
@@ -2221,7 +2235,7 @@ export default function App() {
       attachLocalVideo(stream);
       setIncomingRing(null);
       setIncomingConnection(false);
-      setCallExpanded(false);
+      setCallExpanded(true);
       setScreen('chat');
     } catch (e) {
       pendingRingAcceptRef.current = false;
@@ -2721,11 +2735,10 @@ export default function App() {
   };
 
   const connected = p2pStatus === 'connected';
+  const callLive = callState === 'calling' || callState === 'in-call';
+  const showCallBanner = callLive && !callExpanded && !incomingRing;
   const callUiOpen =
-    callExpanded ||
-    callState === 'calling' ||
-    callState === 'in-call' ||
-    (callState === 'ringing' && Boolean(incomingRing));
+    callExpanded || (callState === 'ringing' && Boolean(incomingRing));
   /** Bottom nav: на главных вкладках; скрыт в открытом чате, звонке и guest direct. */
   const showBottomNav =
     screen !== 'chat' &&
@@ -2745,6 +2758,15 @@ export default function App() {
     Boolean(activePeerId) &&
     !peerIsTrusted &&
     messages.some((m) => !m.mine);
+
+  const chatsOrdered = useMemo(() => {
+    return [...contacts].sort((a, b) => {
+      const ta = lastPreviews[a.id]?.createdAt ?? 0;
+      const tb = lastPreviews[b.id]?.createdAt ?? 0;
+      if (tb !== ta) return tb - ta;
+      return a.name.localeCompare(b.name, 'ru');
+    });
+  }, [contacts, lastPreviews]);
 
   const goMainTab = (tab: LiquidNavTab) => {
     setMainTab(tab);
@@ -2859,6 +2881,17 @@ export default function App() {
           />
         </div>
         <div className="family-app-overlays" aria-live="polite">
+          <ActiveCallBanner
+            visible={showCallBanner}
+            peerLabel={peerLabel}
+            callState={callState}
+            startedAt={callStartedAt}
+            onOpen={() => {
+              setAppMode('paranoic');
+              setCallExpanded(true);
+            }}
+            onHangUp={() => void cancelCall()}
+          />
           {error && (
             <div
               className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
@@ -2921,12 +2954,13 @@ export default function App() {
         )}
       </div>
       )}
-      {appMode === 'paranoic' && (
+      {appMode !== 'select' && (
     <div
       className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}${
         showBottomNav ? ' has-liquid-nav' : ''
-      }`}
+      }${appMode === 'family' ? ' is-dormant' : ''}`}
       style={shellStyle}
+      aria-hidden={appMode === 'family'}
     >
       {profileOpen && (
         <ProfileModal
@@ -2966,17 +3000,17 @@ export default function App() {
               Admin Panel
             </button>
           )}
-          <div className={`status-pill ${connected ? 'ok' : ''}`}>
-            <span className="status-dot" />
-            <span className="status-pill-text">
-              <span>{FRIENDLY_STATUS[p2pStatus]}</span>
-              {signalingStatus && !connected && (
-                <span className="signaling-debug">{signalingStatus}</span>
-              )}
-            </span>
-          </div>
         </div>
       </header>
+
+      <ActiveCallBanner
+        visible={showCallBanner}
+        peerLabel={peerLabel}
+        callState={callState}
+        startedAt={callStartedAt}
+        onOpen={() => setCallExpanded(true)}
+        onHangUp={() => void cancelCall()}
+      />
 
       {isBanned && (
         <div className="banner banned" role="alert">
@@ -3069,7 +3103,7 @@ export default function App() {
                       </p>
                     ) : (
                       <ul className="contacts-list">
-                        {contacts.map((c) => {
+                        {chatsOrdered.map((c) => {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
                           return (
@@ -3078,6 +3112,7 @@ export default function App() {
                               contact={c}
                               online={online}
                               trusted={trusted}
+                              preview={lastPreviews[c.id]}
                               avatarUrl={
                                 c.avatarUrl ||
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
@@ -3119,6 +3154,7 @@ export default function App() {
                               online={online}
                               trusted={trusted}
                               disabled={rowDisabled}
+                              preview={lastPreviews[c.id]}
                               avatarUrl={
                                 c.avatarUrl ||
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
@@ -3292,9 +3328,7 @@ export default function App() {
 
                     {!connected ? (
                       <p className="lead">
-                        {joining || signalingStatus
-                          ? signalingStatus || 'Ждём входящий звонок по вашей ссылке…'
-                          : 'Ссылка активна. Поделитесь ею — гости сохранят вас в контакты.'}
+                        Ссылка активна. Поделитесь ею — гости сохранят вас в контакты.
                       </p>
                     ) : (
                       <p className="lead">
@@ -3363,10 +3397,17 @@ export default function App() {
                             size="sm"
                             online={online ? true : 'off'}
                           />
-                          <span className="contact-info">
-                            <span className="contact-name">{c.name}</span>
-                            <span className="contact-status">
-                              {online ? 'в сети' : 'не в сети'}
+                          <span className="contact-info min-w-0 flex-1">
+                            <span className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="contact-name truncate">{c.name}</span>
+                              {lastPreviews[c.id]?.timeLabel ? (
+                                <span className="shrink-0 text-xs text-gray-400">
+                                  {lastPreviews[c.id]?.timeLabel}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="truncate text-sm text-gray-400">
+                              {lastPreviews[c.id]?.snippet || (online ? 'в сети' : 'не в сети')}
                             </span>
                           </span>
                         </button>
@@ -3736,7 +3777,19 @@ export default function App() {
         />
       )}
 
-      {!incomingRing && (
+      {showBottomNav && (
+        <LiquidNavigationBar
+          active={mainTab}
+          onChats={() => goMainTab('chats')}
+          onContacts={() => goMainTab('contacts')}
+          onSettings={() => goMainTab('settings')}
+          onProfile={() => goMainTab('profile')}
+        />
+      )}
+    </div>
+      )}
+
+      {!incomingRing && appMode !== 'select' && (
       <CallOverlay
         callState={callState === 'ringing' ? 'idle' : callState}
         peerLabel={peerLabel}
@@ -3756,16 +3809,6 @@ export default function App() {
       />
       )}
 
-      {showBottomNav && (
-        <LiquidNavigationBar
-          active={mainTab}
-          onChats={() => goMainTab('chats')}
-          onContacts={() => goMainTab('contacts')}
-          onSettings={() => goMainTab('settings')}
-          onProfile={() => goMainTab('profile')}
-        />
-      )}
-
       <input
         ref={fileInputRef}
         type="file"
@@ -3777,8 +3820,6 @@ export default function App() {
           e.target.value = '';
         }}
       />
-    </div>
-      )}
     </>
   );
 }

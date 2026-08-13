@@ -255,8 +255,14 @@ export default function GlobeLobby({
   onCallUserRef.current = onCallUser;
 
   const [mapReady, setMapReady] = useState(false);
-  const [mapBootDone, setMapBootDone] = useState(false);
-  const [splashGone, setSplashGone] = useState(false);
+  const [mapBootDone, setMapBootDone] = useState(() => {
+    try {
+      return sessionStorage.getItem('paranoic-map-booted') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [splashGone, setSplashGone] = useState(mapBootDone);
   const [tokenMissing, setTokenMissing] = useState(false);
   const [selected, setSelected] = useState<MapPerson | null>(null);
   const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
@@ -318,6 +324,16 @@ export default function GlobeLobby({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!mapBootDone) return;
+    if (!active) {
+      setSplashGone(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setSplashGone(true), 180);
+    return () => window.clearTimeout(timer);
+  }, [mapBootDone, active]);
 
   useEffect(() => {
     if (!gemNotice) return;
@@ -459,17 +475,37 @@ export default function GlobeLobby({
 
     map.on('load', () => {
       forceResize();
+      setMapBootDone(true);
+      try {
+        sessionStorage.setItem('paranoic-map-booted', '1');
+      } catch {
+        /* */
+      }
       requestAnimationFrame(() => {
         forceResize();
         requestAnimationFrame(forceResize);
       });
     });
 
+    const splashCap = window.setTimeout(() => {
+      setMapBootDone(true);
+      try {
+        sessionStorage.setItem('paranoic-map-booted', '1');
+      } catch {
+        /* */
+      }
+    }, 700);
+
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
       applyMapboxStandardNight(readyMap);
       forceResize();
       setMapReady(true);
       setMapBootDone(true);
+      try {
+        sessionStorage.setItem('paranoic-map-booted', '1');
+      } catch {
+        /* */
+      }
     });
 
     const ro =
@@ -490,6 +526,7 @@ export default function GlobeLobby({
     map.on('dragstart', markUserExploring);
 
     return () => {
+      window.clearTimeout(splashCap);
       map.off('dragstart', markUserExploring);
       cancelReady();
       ro?.disconnect();
@@ -876,7 +913,7 @@ export default function GlobeLobby({
         style={{ width: '100%', height: '100%', minHeight: '100vh' }}
       />
 
-      {!tokenMissing && !splashGone && (
+      {!tokenMissing && !splashGone && active && (
         <div
           className={`map-boot-splash${mapBootDone ? ' is-hiding' : ''}`}
           aria-hidden={mapBootDone}

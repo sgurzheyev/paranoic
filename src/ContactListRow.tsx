@@ -1,6 +1,7 @@
 import { Phone, UserCheck } from 'lucide-react';
 import Avatar from './Avatar';
 import type { Contact } from './contacts';
+import type { LastMessagePreview } from './storage';
 
 type ContactListRowProps = {
   contact: Contact;
@@ -8,20 +9,24 @@ type ContactListRowProps = {
   trusted: boolean;
   avatarUrl?: string;
   disabled?: boolean;
+  preview?: LastMessagePreview;
   onOpen: () => void;
   onCall: () => void;
 };
 
-/** Строка контакта: tap по карточке → чат, иконка справа → звонок. */
+/** Строка чата/контакта: имя, сниппет, время — как в Telegram. */
 export default function ContactListRow({
   contact,
   online,
   trusted,
   avatarUrl,
   disabled = false,
+  preview,
   onOpen,
   onCall,
 }: ContactListRowProps) {
+  const subtitle = preview?.snippet || (online ? 'в сети' : 'не в сети');
+
   return (
     <li className="contact-list-item">
       <button
@@ -38,16 +43,21 @@ export default function ContactListRow({
           size="sm"
           online={online ? true : 'off'}
         />
-        <span className="contact-info">
-          <span className="contact-name">
-            {contact.name}
-            {trusted && (
-              <span className="trust-badge" title="Доверенный">
-                <UserCheck size={12} />
-              </span>
-            )}
+        <span className="contact-info min-w-0 flex-1">
+          <span className="flex min-w-0 items-center justify-between gap-2">
+            <span className="contact-name min-w-0 truncate">
+              {contact.name}
+              {trusted && (
+                <span className="trust-badge" title="Доверенный">
+                  <UserCheck size={12} />
+                </span>
+              )}
+            </span>
+            {preview?.timeLabel ? (
+              <span className="shrink-0 text-xs text-gray-400">{preview.timeLabel}</span>
+            ) : null}
           </span>
-          <span className="contact-status">{online ? 'в сети' : 'не в сети'}</span>
+          <span className="truncate text-sm text-gray-400">{subtitle}</span>
         </span>
       </button>
       <button
