@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Gem, MapPin, X } from 'lucide-react';
+import { Box, Gem, Type, X } from 'lucide-react';
 import type { MapGem } from './mapGems';
 
 type ArFootprintsProps = {
   gems: MapGem[];
   onClose: () => void;
+  onSelectGem?: (gem: MapGem) => void;
 };
 
 type XrSystem = {
@@ -24,7 +25,7 @@ type XrSessionLike = {
  * AR Footprints: WebXR immersive-ar при поддержке,
  * иначе камера телефона (getUserMedia) для поиска меток.
  */
-export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
+export default function ArFootprints({ gems, onClose, onSelectGem }: ArFootprintsProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<'starting' | 'xr' | 'camera'>('starting');
@@ -69,15 +70,19 @@ export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
       } catch {
         if (!cancelled) {
           setMode('camera');
-          setError('Нет доступа к камере. Разрешите камеру или закройте AR — карта и звонки доступны.');
+          setError(
+            'Нет доступа к камере. Разрешите камеру или закройте AR — карта и звонки доступны.'
+          );
           setHint('Базовый режим без AR');
         }
       }
     };
 
     const start = async () => {
-      // Старые WebView / Safari без mediaDevices — сразу мягкий выход в UI.
-      if (!navigator.mediaDevices?.getUserMedia && !(navigator as Navigator & { xr?: XrSystem }).xr) {
+      if (
+        !navigator.mediaDevices?.getUserMedia &&
+        !(navigator as Navigator & { xr?: XrSystem }).xr
+      ) {
         setMode('camera');
         setError('AR и камера недоступны на этом устройстве. Используйте карту.');
         setHint('Базовый режим');
@@ -124,7 +129,7 @@ export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
     };
   }, [gems.length, onClose]);
 
-  const nearby = gems.slice(0, 5);
+  const nearby = gems.filter((g) => g.media_url || g.type === 'text').slice(0, 24);
 
   return (
     <div className="ar-footprints" role="dialog" aria-label="AR Footprints">
@@ -162,20 +167,37 @@ export default function ArFootprints({ gems, onClose }: ArFootprintsProps) {
       )}
 
       {nearby.length > 0 && (
-        <div className="ar-footprints-list">
-          <p className="ar-footprints-list-title">
-            <Gem size={14} /> Капсулы поблизости
+        <div className="ar-footprints-rail" aria-label="Капсулы поблизости">
+          <p className="ar-footprints-rail-title">
+            <Gem size={14} /> Капсулы
           </p>
-          {nearby.map((gem) => (
-            <div key={gem.id} className="ar-footprints-item">
-              <MapPin size={14} />
-              <span>
-                {gem.type === 'photo' ? 'Фото' : gem.type === 'video' ? 'Видео' : 'Текст'}
-                {' · '}
-                {gem.lat.toFixed(3)}, {gem.lng.toFixed(3)}
-              </span>
-            </div>
-          ))}
+          <div className="ar-footprints-thumbs">
+            {nearby.map((gem) => (
+              <button
+                key={gem.id}
+                type="button"
+                className="ar-footprints-thumb"
+                onClick={() => onSelectGem?.(gem)}
+                aria-label={
+                  gem.type === 'photo'
+                    ? 'Фото-капсула'
+                    : gem.type === 'video'
+                      ? 'Видео-капсула'
+                      : 'Текстовая капсула'
+                }
+              >
+                {gem.type === 'photo' && gem.media_url ? (
+                  <img src={gem.media_url} alt="" draggable={false} />
+                ) : gem.type === 'video' && gem.media_url ? (
+                  <video src={gem.media_url} muted playsInline preload="metadata" />
+                ) : (
+                  <span className="ar-footprints-thumb-fallback">
+                    <Type size={18} />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

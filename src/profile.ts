@@ -9,6 +9,7 @@ import {
   restoreIdentityFromProfile,
   type UserIdentity,
 } from './identity';
+import { hasR2Config, uploadToR2, buildObjectKey } from './s3Storage';
 
 export const AVATARS_BUCKET = 'avatars';
 export const PROFILES_TABLE = 'profiles';
@@ -92,27 +93,26 @@ export async function prepareAvatarBlob(file: File): Promise<{ blob: Blob; mime:
 }
 
 /**
- * Загружает аватар в Supabase Storage (`avatars/{userId}/avatar.jpg`)
+ * Загружает аватар в Cloudflare R2 (`avatars/{userId}/avatar.jpg`)
  * и возвращает публичный URL. При ошибке — data URL fallback.
  */
 export async function uploadAvatar(userId: string, file: File): Promise<string> {
   const { blob, mime } = await prepareAvatarBlob(file);
 
-  if (hasSupabaseConfig()) {
+  if (hasR2Config()) {
     try {
-      const sb = getSupabase();
-      const path = `${userId}/avatar.${extFromMime(mime)}`;
-      const { error } = await sb.storage.from(AVATARS_BUCKET).upload(path, blob, {
-        upsert: true,
-        contentType: mime,
-        cacheControl: '3600',
+      const key = buildObjectKey('avatars', userId, `avatar.${extFromMime(mime)}`, {
+        fixedName: 'avatar',
       });
-      if (error) throw error;
-
-      const { data } = sb.storage.from(AVATARS_BUCKET).getPublicUrl(path);
-      return `${data.publicUrl}?t=${Date.now()}`;
+      const url = await uploadToR2({
+        key,
+        body: blob,
+        contentType: mime,
+        cacheControl: 'public, max-age=3600',
+      });
+      return `${url}?t=${Date.now()}`;
     } catch (e) {
-      console.warn('[paranoic] avatar upload failed, using data URL', e);
+      console.warn('[paranoic] R2 avatar upload failed, using data URL', e);
     }
   }
 

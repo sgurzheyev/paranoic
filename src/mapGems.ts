@@ -1,9 +1,9 @@
 import {
   ensureAuthSession,
   getSupabase,
-  getSupabaseConfig,
   hasSupabaseConfig,
 } from './lib/supabase';
+import { hasR2Config, uploadFileToR2 } from './s3Storage';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
@@ -169,15 +169,18 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
 }
 
 /**
- * Загрузка фото/видео в Storage (`map-gems`) с прогрессом (XHR).
- * Путь и JWT — только из Auth session.
+ * Загрузка фото/видео капсулы в Cloudflare R2.
+ * Публичный URL сохраняется в map_gems.media_url (Supabase).
  */
 export async function uploadGemMedia(
   file: File,
   onProgress?: (ratio: number) => void
 ): Promise<string> {
-  const cfg = getSupabaseConfig();
-  if (!cfg) throw new Error('Supabase не настроен');
+  if (!hasR2Config()) {
+    throw new Error(
+      'Cloudflare R2 не настроен. Добавьте VITE_R2_* переменные окружения.'
+    );
+  }
 
   const sb = getSupabase();
   const {
@@ -186,56 +189,8 @@ export async function uploadGemMedia(
   const session =
     rawSession?.user?.id != null ? rawSession : await ensureAuthSession();
 
-  const uid = session.user.id;
-  const accessToken = session.access_token;
-  if (!uid || !accessToken) {
-    throw new Error('Сессия Auth отсутствует. Обновите страницу и попробуйте снова.');
-  }
-  const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
-  const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const endpoint = `${cfg.url.replace(/\/$/, '')}/storage/v1/object/${MAP_GEMS_BUCKET}/${path}`;
-
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', endpoint);
-    xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
-    xhr.setRequestHeader('apikey', cfg.anonKey);
-    xhr.setRequestHeader('x-upsert', 'false');
-    if (file.type) xhr.setRequestHeader('Content-Type', file.type);
-
-    xhr.upload.onprogress = (ev) => {
-      if (!ev.lengthComputable) return;
-      onProgress?.(Math.min(1, ev.loaded / Math.max(1, ev.total)));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(1);
-        resolve();
-        return;
-      }
-      let message = `Ошибка загрузки (${xhr.status})`;
-      try {
-        const parsed = JSON.parse(xhr.responseText) as { message?: string; error?: string };
-        message = parsed.message || parsed.error || message;
-      } catch {
-        /* */
-      }
-      if (/row-level security|policy|RLS|403|401/i.test(message) || xhr.status === 403) {
-        reject(
-          new Error(
-            'Storage RLS блокирует upload. Нужна политика INSERT для authenticated на bucket map-gems.'
-          )
-        );
-        return;
-      }
-      reject(new Error(message));
-    };
-    xhr.onerror = () => reject(new Error('Сеть оборвалась при загрузке'));
-    xhr.send(file);
-  });
-
-  const { data } = sb.storage.from(MAP_GEMS_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  const uid = session.user.id || 'anon';
+  return uploadFileToR2('map-gems', uid, file, { onProgress });
 }
 
 export type GemFeatureCollection = {

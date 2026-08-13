@@ -35,7 +35,7 @@ import {
   startGemPulse,
 } from './mapGemLayers';
 import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
-import MemoryGemPopup from './MemoryGemPopup';
+import MemoryGemDrawer from './MemoryGemDrawer';
 import MemoryGemComposer from './MemoryGemComposer';
 import SoftFeatureBoundary from './SoftFeatureBoundary';
 import AiBodyguardChat from './AiBodyguardChat';
@@ -51,7 +51,13 @@ const ArFootprints = lazy(() =>
   import('./ArFootprints').catch((err) => {
     console.warn('[P2P Audit] ArFootprints module failed to load', err);
     return {
-      default: function ArUnavailable({ onClose }: { gems: MapGem[]; onClose: () => void }) {
+      default: function ArUnavailable({
+        onClose,
+      }: {
+        gems: MapGem[];
+        onClose: () => void;
+        onSelectGem?: (gem: MapGem) => void;
+      }) {
         return (
           <div className="ar-footprints soft-feature-fallback" role="dialog" aria-label="AR недоступен">
             <p>AR не поддерживается на этом устройстве.</p>
@@ -264,7 +270,27 @@ export default function GlobeLobby({
   /** Пользователь сам двигал карту — не включаем авто-follow. */
   const userExploringRef = useRef(false);
 
-  openGemRef.current = (gem) => setOpenedGem(gem);
+  const flyToGem = (gem: MapGem) => {
+    const map = mapRef.current;
+    if (!map) return;
+    userExploringRef.current = false;
+    map.flyTo({
+      center: [gem.lng, gem.lat],
+      zoom: Math.max(map.getZoom(), FOCUS_ZOOM),
+      duration: 1400,
+      essential: true,
+      padding: { top: 80, bottom: 160, left: 320, right: 48 },
+    });
+  };
+
+  const openGemDrawer = (gem: MapGem) => {
+    setOpenedGem(gem);
+    setSelected(null);
+    setIsTargetingMode(false);
+    flyToGem(gem);
+  };
+
+  openGemRef.current = (gem) => openGemDrawer(gem);
 
   const contacts = useMemo(
     () => people.filter((p) => p.isContact && !p.isMe),
@@ -1148,7 +1174,14 @@ export default function GlobeLobby({
               </div>
             }
           >
-            <ArFootprints gems={gems} onClose={() => setArOpen(false)} />
+            <ArFootprints
+              gems={gems}
+              onClose={() => setArOpen(false)}
+              onSelectGem={(gem) => {
+                setArOpen(false);
+                openGemDrawer(gem);
+              }}
+            />
           </Suspense>
         </SoftFeatureBoundary>
       )}
@@ -1160,10 +1193,15 @@ export default function GlobeLobby({
         />
       )}
 
-      {openedGem && (
-        <MemoryGemPopup
-          gem={openedGem}
-          authorLabel={authorLabel(openedGem.author_id)}
+      {openedGem && gems.length > 0 && (
+        <MemoryGemDrawer
+          gems={gems}
+          activeId={openedGem.id}
+          authorLabel={authorLabel}
+          onActiveChange={(gem) => {
+            setOpenedGem(gem);
+            flyToGem(gem);
+          }}
           onClose={() => setOpenedGem(null)}
         />
       )}
