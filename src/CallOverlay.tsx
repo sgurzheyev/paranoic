@@ -1,25 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Maximize2,
-  Minimize2,
-  Monitor,
-  MonitorOff,
-  PhoneIncoming,
-  PhoneOff,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Mic, MicOff, Paperclip, PhoneIncoming, PhoneOff } from 'lucide-react';
 import type { CallState, NetworkQuality } from './p2p';
-
-function supportsScreenShare(): boolean {
-  try {
-    return !!(
-      typeof navigator !== 'undefined' &&
-      navigator.mediaDevices &&
-      typeof navigator.mediaDevices.getDisplayMedia === 'function'
-    );
-  } catch {
-    return false;
-  }
-}
 
 type CallOverlayProps = {
   callState: CallState;
@@ -34,88 +15,60 @@ type CallOverlayProps = {
   onDecline: () => void;
   onHangUp: () => void;
   onToggleScreenShare: () => void;
+  micMuted?: boolean;
+  onToggleMute?: () => void;
+  onAttachFile?: () => void;
 };
 
+const CONTROLS_HIDE_MS = 4000;
+
 /**
- * Плавающий PiP / полноэкранный звонок поверх чата.
+ * Полноэкранный видеозвонок: удалённый поток на весь экран, свой — PiP.
  */
 export default function CallOverlay({
   callState,
   peerLabel,
   screenSharing,
   networkQuality,
-  expanded,
-  onExpandedChange,
   localVideoRef,
   remoteVideoRef,
   onAccept,
   onDecline,
   onHangUp,
-  onToggleScreenShare,
+  micMuted = false,
+  onToggleMute,
+  onAttachFile,
 }: CallOverlayProps) {
-  const shellRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    origX: number;
-    origY: number;
-  } | null>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const canScreenShare = useMemo(() => supportsScreenShare(), []);
+  const [mainIsRemote, setMainIsRemote] = useState(true);
+  const [controlsVisible, setControlsVisible] = useState(true);
 
   const isRinging = callState === 'ringing';
-  const showExpanded = expanded || isRinging;
 
   useEffect(() => {
-    if (showExpanded) return;
-    // Сброс к дефолту при первом PiP, если ещё не двигали.
-    setPos((prev) => prev);
-  }, [showExpanded]);
+    setMainIsRemote(true);
+    setControlsVisible(true);
+  }, [callState]);
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (showExpanded) return;
-      if ((e.target as Element).closest('button, a, video')) return;
-      const el = shellRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const x = pos?.x ?? rect.left;
-      const y = pos?.y ?? rect.top;
-      dragRef.current = {
-        pointerId: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
-        origX: x,
-        origY: y,
-      };
-      el.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    },
-    [pos, showExpanded]
-  );
+  useEffect(() => {
+    if (!controlsVisible || callState === 'idle' || isRinging) return;
+    const timer = window.setTimeout(() => setControlsVisible(false), CONTROLS_HIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [controlsVisible, callState, isRinging]);
 
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== e.pointerId) return;
-    const el = shellRef.current;
-    const w = el?.offsetWidth ?? 200;
-    const h = el?.offsetHeight ?? 200;
-    const nx = Math.min(
-      Math.max(8, drag.origX + (e.clientX - drag.startX)),
-      window.innerWidth - w - 8
-    );
-    const ny = Math.min(
-      Math.max(8, drag.origY + (e.clientY - drag.startY)),
-      window.innerHeight - h - 8
-    );
-    setPos({ x: nx, y: ny });
+  useEffect(() => {
+    for (const el of [localVideoRef.current, remoteVideoRef.current]) {
+      if (el?.srcObject) void el.play().catch(() => undefined);
+    }
+  }, [callState, localVideoRef, remoteVideoRef]);
+
+  const toggleControls = useCallback(() => {
+    setControlsVisible((v) => !v);
   }, []);
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (dragRef.current?.pointerId === e.pointerId) {
-      dragRef.current = null;
-    }
+  const swapStreams = useCallback((e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    setMainIsRemote((v) => !v);
+    setControlsVisible(true);
   }, []);
 
   if (callState === 'idle') return null;
@@ -130,23 +83,12 @@ export default function CallOverlay({
             ? 'Слабая сеть — только аудио'
             : networkQuality === 'poor'
               ? 'Слабая сеть'
-              : 'Разговор идёт'
-        : 'Звонок';
-
-  const pipStyle: React.CSSProperties | undefined =
-    !showExpanded && pos
-      ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' }
-      : undefined;
+              : peerLabel
+        : peerLabel;
 
   return (
     <div
-      ref={shellRef}
-      className={`call-overlay ${showExpanded ? 'expanded' : 'pip'}${isRinging ? ' ringing' : ''}`}
-      style={pipStyle}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      className={`call-overlay expanded${isRinging ? ' ringing' : ''}`}
       role="dialog"
       aria-label={isRinging ? 'Входящий звонок' : 'Видеозвонок'}
     >
@@ -167,58 +109,61 @@ export default function CallOverlay({
           </div>
         </div>
       ) : (
-        <>
-          <div className="call-overlay-stage">
-            <div className="video-frame remote">
-              <video ref={remoteVideoRef} autoPlay playsInline />
-              <span className="video-label">{peerLabel}</span>
-            </div>
-            <div className="video-frame local">
-              <video ref={localVideoRef} autoPlay playsInline muted />
-              <span className="video-label">Вы</span>
-            </div>
-          </div>
+        <div className="call-room" onClick={toggleControls}>
+          <video
+            ref={remoteVideoRef}
+            className={mainIsRemote ? 'call-video-main' : 'call-video-pip'}
+            autoPlay
+            playsInline
+          />
+          <video
+            ref={localVideoRef}
+            className={`call-video-self ${mainIsRemote ? 'call-video-pip' : 'call-video-main'}`}
+            autoPlay
+            playsInline
+            muted
+          />
+          <button
+            type="button"
+            className="call-pip-swap"
+            aria-label="Поменять видео местами"
+            onClick={swapStreams}
+          />
 
-          <div className="call-overlay-bar">
-            <p className="call-overlay-status">{statusText}</p>
-            <div className="call-overlay-actions">
-              {!isRinging && (
-                <button
-                  type="button"
-                  className="call-glass-btn icon-only"
-                  onClick={() => onExpandedChange(!expanded)}
-                  aria-label={expanded ? 'Свернуть в окно' : 'На весь экран'}
-                  title={expanded ? 'Свернуть' : 'Развернуть'}
-                >
-                  {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-                </button>
-              )}
-              {callState === 'in-call' && canScreenShare && (
-                <button
-                  type="button"
-                  className={`call-glass-btn ${screenSharing ? 'active' : ''}`}
-                  onClick={onToggleScreenShare}
-                  aria-pressed={screenSharing}
-                >
-                  {screenSharing ? <MonitorOff size={18} /> : <Monitor size={18} />}
-                  {showExpanded ? (screenSharing ? 'Камера' : 'Экран') : null}
-                </button>
-              )}
+          <div className={`call-room-chrome${controlsVisible ? ' is-visible' : ''}`}>
+            <p className="call-room-status">{statusText}</p>
+            <div
+              className="call-room-controls"
+              onClick={(e) => e.stopPropagation()}
+            >
               <button
                 type="button"
-                className={`mega-btn hangup compact-hangup${callState === 'calling' ? ' is-cancelling' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onHangUp();
-                }}
-                title={callState === 'calling' ? 'Повесить трубку / Cancel' : undefined}
+                className={`call-room-btn${micMuted ? ' is-off' : ''}`}
+                onClick={onToggleMute}
+                aria-pressed={micMuted}
+                aria-label={micMuted ? 'Включить микрофон' : 'Выключить микрофон'}
               >
-                <PhoneOff size={showExpanded ? 28 : 20} />
-                {showExpanded ? (callState === 'calling' ? 'Отменить' : 'Завершить') : null}
+                {micMuted ? <MicOff size={22} /> : <Mic size={22} />}
+              </button>
+              <button
+                type="button"
+                className="call-room-btn"
+                onClick={onAttachFile}
+                aria-label="Отправить файл"
+              >
+                <Paperclip size={22} />
+              </button>
+              <button
+                type="button"
+                className="call-room-btn hangup"
+                onClick={onHangUp}
+                aria-label="Завершить звонок"
+              >
+                <PhoneOff size={22} />
               </button>
             </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );

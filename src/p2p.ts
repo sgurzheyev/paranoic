@@ -533,6 +533,26 @@ export class P2PConnection {
     return this.localStream;
   }
 
+  getRemoteStream(): MediaStream | null {
+    return this.remoteStream;
+  }
+
+  /** Включить / выключить локальный микрофон. Возвращает, включён ли звук. */
+  toggleMic(): boolean {
+    const tracks = this.localStream?.getAudioTracks() ?? [];
+    if (tracks.length === 0) return false;
+    const next = !tracks.some((t) => t.enabled);
+    for (const track of tracks) {
+      track.enabled = next;
+    }
+    return next;
+  }
+
+  isMicEnabled(): boolean {
+    const tracks = this.localStream?.getAudioTracks() ?? [];
+    return tracks.some((t) => t.enabled);
+  }
+
   get isSharingScreen(): boolean {
     return this.sharingScreen;
   }

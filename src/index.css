@@ -1398,12 +1398,13 @@ textarea {
   border-color: rgba(248, 113, 113, 0.65);
 }
 
-.media-note-overlay.cancel-armed .media-note-hint {
-  color: #fecaca;
+.chat-record-btn.locked {
+  background: linear-gradient(165deg, rgba(52, 211, 153, 0.4), rgba(255, 255, 255, 0.06));
+  border-color: rgba(52, 211, 153, 0.55);
 }
 
-.note-mode-toggle {
-  flex-shrink: 0;
+.media-note-overlay.cancel-armed .media-note-hint {
+  color: #fecaca;
 }
 
 .media-note-overlay {
@@ -1416,6 +1417,11 @@ textarea {
   background: rgba(6, 8, 12, 0.78);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
+  pointer-events: none;
+}
+
+.media-note-overlay.is-locked {
+  pointer-events: auto;
 }
 
 .media-note-stage {
@@ -1423,6 +1429,11 @@ textarea {
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  pointer-events: none;
+}
+
+.media-note-overlay.is-locked .media-note-stage {
+  pointer-events: auto;
 }
 
 .media-note-ring {
@@ -1478,7 +1489,15 @@ textarea {
   font-size: 0.92rem;
 }
 
-.media-note-cancel {
+.media-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.media-note-cancel,
+.media-note-send {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1494,6 +1513,12 @@ textarea {
   z-index: 2;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.media-note-send {
+  background: linear-gradient(165deg, rgba(155, 184, 232, 0.45), rgba(255, 255, 255, 0.08));
+  border-color: rgba(155, 184, 232, 0.55);
+  color: var(--text-strong);
 }
 
 .file-pending-card {
@@ -1898,15 +1923,142 @@ textarea {
 .call-overlay.expanded {
   position: fixed;
   inset: 0;
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 0;
+  background: #050608;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  touch-action: auto;
+  cursor: default;
+}
+
+.call-overlay.ringing {
+  place-items: center;
   padding: 20px;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
   background: rgba(8, 10, 14, 0.72);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  touch-action: auto;
-  cursor: default;
+}
+
+.call-room {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #050608;
+}
+
+.call-video-main {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #050608;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.call-video-pip {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+  width: min(32vw, 132px);
+  height: auto;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  background: #0b0d12;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.call-video-self.call-video-main,
+.call-video-self.call-video-pip {
+  transform: scaleX(-1);
+}
+
+.call-pip-swap {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+  width: min(32vw, 132px);
+  aspect-ratio: 3 / 4;
+  border: none;
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+  z-index: 6;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-room-chrome {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.28s ease;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.45) 0%, transparent 22%),
+    linear-gradient(0deg, rgba(0, 0, 0, 0.55) 0%, transparent 28%);
+}
+
+.call-room-chrome.is-visible {
+  opacity: 1;
+}
+
+.call-room-status {
+  margin: 0;
+  padding: max(20px, env(safe-area-inset-top)) 20px 0;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
+}
+
+.call-room-controls {
+  pointer-events: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 22px;
+  padding: 0 20px max(28px, env(safe-area-inset-bottom));
+}
+
+.call-room-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.call-room-btn.is-off {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.call-room-btn.hangup {
+  background: linear-gradient(160deg, #f87171 0%, #dc2626 100%);
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow: 0 10px 28px rgba(239, 68, 68, 0.4);
 }
 
 .call-overlay.ringing {

@@ -19,9 +19,6 @@ import {
   Timer,
   RefreshCw,
   PanelLeft,
-  Mic,
-  Video,
-  Camera,
   ShieldCheck,
   Shield,
   Ban,
@@ -39,7 +36,7 @@ import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
 import GuestDirectCall from './GuestDirectCall';
 import ParanoicLogo from './ParanoicLogo';
-import MediaNoteOverlay from './MediaNoteOverlay';
+import ChatRecordButton from './ChatRecordButton';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
   blockUser,
@@ -67,13 +64,7 @@ import {
   notifyIfHidden,
   DELIVERY_LABELS,
 } from './notify';
-import {
-  openNoteStream,
-  recordMediaNote,
-  stopStream,
-  inferMediaKind,
-  type NoteMode,
-} from './mediaNotes';
+import { inferMediaKind } from './mediaNotes';
 import {
   deriveKeyFromRoom,
   exportKey,
@@ -294,14 +285,7 @@ export default function App() {
     return 'chats';
   });
   const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
-  /** Режим заметки: голос или видео-кружочек. */
-  const [noteMode, setNoteMode] = useState<NoteMode>('video');
-  const [noteRecording, setNoteRecording] = useState<{
-    stream: MediaStream;
-    progress: number;
-  } | null>(null);
-  /** Slide-up / cancel zone — отмена при отпускании. */
-  const [noteCancelArmed, setNoteCancelArmed] = useState(false);
+  const [micMuted, setMicMuted] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -318,24 +302,6 @@ export default function App() {
   const mediaUrlsRef = useRef<Set<string>>(new Set());
   /** Исходящие File для «Повторить попытку» после обрыва. */
   const retrySendFilesRef = useRef<Map<string, File>>(new Map());
-  const noteSessionRef = useRef<{
-    stop: () => void;
-    cancel: () => void;
-    abort: AbortController;
-    stream: MediaStream;
-  } | null>(null);
-  /** true только если палец отпущен для отправки (не cancel). */
-  const noteCommitRef = useRef(false);
-  /** Отпустили палец до готовности getUserMedia / recorder. */
-  const noteReleasePendingRef = useRef(false);
-  const notePointerIdRef = useRef<number | null>(null);
-  const noteStartYRef = useRef(0);
-  const noteListenersBoundRef = useRef(false);
-  const noteCancelArmedRef = useRef(false);
-  /** Защита от параллельных startMediaNote (двойной pointerdown). */
-  const noteStartingRef = useRef(false);
-  /** getUserMedia в процессе — отмена до создания noteSession. */
-  const pendingNoteStreamRef = useRef<MediaStream | null>(null);
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
@@ -1834,6 +1800,9 @@ export default function App() {
   useEffect(() => {
     if (callState !== 'idle' && p2pRef.current) {
       attachLocalVideo(p2pRef.current.getLocalStream());
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = p2pRef.current.getRemoteStream();
+      }
     }
   }, [callState, callExpanded, attachLocalVideo]);
 
@@ -2086,6 +2055,7 @@ export default function App() {
 
   const startCall = async () => {
     setError('');
+    setMicMuted(false);
     void ensureNotifyPermission();
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
@@ -2321,7 +2291,9 @@ export default function App() {
     hangUpSession();
     p2pRef.current = null;
     attachLocalVideo(null);
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     setScreenSharing(false);
+    setMicMuted(false);
     setNetworkQuality('good');
     setCallExpanded(false);
     setJoining(false);
@@ -2655,224 +2627,16 @@ export default function App() {
     }
   };
 
-  const unbindNotePointerListeners = useCallback(() => {
-    if (!noteListenersBoundRef.current) return;
-    noteListenersBoundRef.current = false;
-    window.removeEventListener('pointerup', onNotePointerUpRef.current);
-    window.removeEventListener('pointercancel', onNotePointerCancelRef.current);
-    window.removeEventListener('pointermove', onNotePointerMoveRef.current);
-  }, []);
-
-  const onNotePointerUpRef = useRef((_e: PointerEvent) => undefined);
-  const onNotePointerCancelRef = useRef((_e: PointerEvent) => undefined);
-  const onNotePointerMoveRef = useRef((_e: PointerEvent) => undefined);
-
-  const cancelMediaNote = useCallback(() => {
-    noteCommitRef.current = false;
-    noteReleasePendingRef.current = false;
-    noteCancelArmedRef.current = true;
-    noteStartingRef.current = false;
-    setNoteCancelArmed(false);
-    unbindNotePointerListeners();
-    notePointerIdRef.current = null;
-
-    const session = noteSessionRef.current;
-    noteSessionRef.current = null;
-
-    const pendingStream = pendingNoteStreamRef.current;
-    pendingNoteStreamRef.current = null;
-
-    setNoteRecording(null);
-
-    if (session) {
-      try {
-        session.abort.abort();
-      } catch {
-        /* */
-      }
-      try {
-        session.cancel();
-      } catch {
-        /* */
-      }
-      stopStream(session.stream);
-    }
-    stopStream(pendingStream);
-  }, [unbindNotePointerListeners]);
-
-  const finishMediaNote = useCallback(() => {
-    // Отпустили палец → коммит (отправить, если запись успела набрать MIN_NOTE_MS).
-    noteCommitRef.current = true;
-    noteReleasePendingRef.current = true;
-    noteCancelArmedRef.current = false;
-    setNoteCancelArmed(false);
-    unbindNotePointerListeners();
-    notePointerIdRef.current = null;
-
-    const session = noteSessionRef.current;
-    if (session) {
-      session.stop();
-      return;
-    }
-    // Ещё нет сессии (ждём getUserMedia) — флаг releasePending обработает startMediaNote.
-  }, [unbindNotePointerListeners]);
-
-  const startMediaNote = useCallback(
-    async (mode: NoteMode) => {
-      if (!peerId || !secretKey) return;
-      if (noteSessionRef.current || noteStartingRef.current) return;
-      noteStartingRef.current = true;
-
-      noteCommitRef.current = false;
-      noteReleasePendingRef.current = false;
-      setError('');
-      setNoteCancelArmed(false);
-      noteCancelArmedRef.current = false;
-
-      let stream: MediaStream | null = null;
-      try {
-        stream = await openNoteStream(mode);
-        pendingNoteStreamRef.current = stream;
-
-        // Палец отпущен или отмена, пока ждали getUserMedia.
-        if (noteReleasePendingRef.current || notePointerIdRef.current === null) {
-          pendingNoteStreamRef.current = null;
-          stopStream(stream);
-          setNoteRecording(null);
-          noteCommitRef.current = false;
-          noteReleasePendingRef.current = false;
-          return;
-        }
-
-        const abort = new AbortController();
-        const session = recordMediaNote(stream, mode, {
-          signal: abort.signal,
-          onTick: (ratio) => {
-            setNoteRecording((prev) =>
-              prev ? { ...prev, progress: ratio } : { stream: stream!, progress: ratio }
-            );
-          },
-        });
-        noteSessionRef.current = {
-          stop: session.stop,
-          cancel: session.cancel,
-          abort,
-          stream,
-        };
-        pendingNoteStreamRef.current = null;
-        setNoteRecording({ stream, progress: 0 });
-
-        // Отпустили в момент старта recorder.
-        if (noteReleasePendingRef.current || notePointerIdRef.current === null) {
-          if (noteCommitRef.current && !noteCancelArmedRef.current) {
-            session.stop();
-          } else {
-            noteCommitRef.current = false;
-            session.cancel();
-            stopStream(stream);
-            noteSessionRef.current = null;
-            setNoteRecording(null);
-            return;
-          }
-        }
-
-        void session.result.then((note) => {
-          const shouldSend = noteCommitRef.current && !noteCancelArmedRef.current;
-          stopStream(stream);
-          if (noteSessionRef.current?.stream === stream) {
-            noteSessionRef.current = null;
-          }
-          setNoteRecording(null);
-          setNoteCancelArmed(false);
-          noteCancelArmedRef.current = false;
-          noteReleasePendingRef.current = false;
-          notePointerIdRef.current = null;
-          noteStartingRef.current = false;
-          unbindNotePointerListeners();
-          if (!shouldSend || !note) return;
-          void sendMedia(note.file, undefined, { mediaKind: note.mediaKind });
-        });
-      } catch (e) {
-        pendingNoteStreamRef.current = null;
-        stopStream(stream);
-        setError(
-          e instanceof Error
-            ? e.message
-            : mode === 'video'
-              ? 'Нет доступа к камере'
-              : 'Нет доступа к микрофону'
-        );
-        setNoteRecording(null);
-        noteSessionRef.current = null;
-        noteCommitRef.current = false;
-        noteReleasePendingRef.current = false;
-        unbindNotePointerListeners();
-        notePointerIdRef.current = null;
-      } finally {
-        // Если сессия жива — флаг снимет result.then; иначе снимаем сейчас.
-        if (!noteSessionRef.current) {
-          noteStartingRef.current = false;
-        }
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [peerId, secretKey, unbindNotePointerListeners]
-  );
-
-  // Pointer-слушатели на window — overlay не перехватывает pointerup (Telegram hold).
-  useEffect(() => {
-    onNotePointerMoveRef.current = (e: PointerEvent) => {
-      if (notePointerIdRef.current !== null && e.pointerId !== notePointerIdRef.current) {
-        return;
-      }
-      const dy = noteStartYRef.current - e.clientY;
-      const armed = dy > 64;
-      if (armed !== noteCancelArmedRef.current) {
-        noteCancelArmedRef.current = armed;
-        setNoteCancelArmed(armed);
-      }
-    };
-
-    onNotePointerUpRef.current = (e: PointerEvent) => {
-      if (notePointerIdRef.current !== null && e.pointerId !== notePointerIdRef.current) {
-        return;
-      }
-      const armed = noteCancelArmedRef.current || (noteStartYRef.current - e.clientY > 64);
-      unbindNotePointerListeners();
-      notePointerIdRef.current = null;
-      if (armed) {
-        cancelMediaNote();
-        return;
-      }
-      finishMediaNote();
-    };
-
-    onNotePointerCancelRef.current = (e: PointerEvent) => {
-      if (notePointerIdRef.current !== null && e.pointerId !== notePointerIdRef.current) {
-        return;
-      }
-      cancelMediaNote();
-    };
-  }, [cancelMediaNote, finishMediaNote, unbindNotePointerListeners]);
-
-  const bindNotePointerListeners = useCallback((pointerId: number, clientY: number) => {
-    notePointerIdRef.current = pointerId;
-    noteStartYRef.current = clientY;
-    noteCancelArmedRef.current = false;
-    setNoteCancelArmed(false);
-    if (noteListenersBoundRef.current) return;
-    noteListenersBoundRef.current = true;
-    window.addEventListener('pointerup', onNotePointerUpRef.current);
-    window.addEventListener('pointercancel', onNotePointerCancelRef.current);
-    window.addEventListener('pointermove', onNotePointerMoveRef.current);
-  }, []);
+  const toggleCallMic = () => {
+    const enabled = p2pRef.current?.toggleMic() ?? false;
+    setMicMuted(!enabled);
+  };
 
   useEffect(() => {
     return () => {
       stopRingtone();
-      cancelMediaNote();
     };
-  }, [cancelMediaNote]);
+  }, []);
 
   /** Разрешение на уведомления по первому жесту в приложении. */
   useEffect(() => {
@@ -3950,67 +3714,19 @@ export default function App() {
                   <Send size={22} />
                 </button>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    className="icon-btn note-mode-toggle"
-                    disabled={!peerId || !secretKey}
-                    onClick={() =>
-                      setNoteMode((m) => (m === 'video' ? 'voice' : 'video'))
-                    }
-                    aria-label={
-                      noteMode === 'video'
-                        ? 'Переключить на голосовое'
-                        : 'Переключить на видео-кружочек'
-                    }
-                    title={
-                      noteMode === 'video'
-                        ? 'Сейчас: видео · нажмите для микрофона'
-                        : 'Сейчас: голос · нажмите для камеры'
-                    }
-                  >
-                    {noteMode === 'video' ? <Video size={20} /> : <Mic size={20} />}
-                  </button>
-                  <button
-                    type="button"
-                    className={`chat-record-btn${noteRecording ? ' recording' : ''}${
-                      noteCancelArmed ? ' cancel-armed' : ''
-                    }`}
-                    disabled={!peerId || !secretKey}
-                    aria-label={
-                      noteMode === 'video'
-                        ? 'Удерживайте для видео-кружочка'
-                        : 'Удерживайте для голосового'
-                    }
-                    onPointerDown={(e) => {
-                      if (e.button !== 0 && e.pointerType === 'mouse') return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      // Не setPointerCapture: overlay перекрывает кнопку, ловит pointerup на window.
-                      bindNotePointerListeners(e.pointerId, e.clientY);
-                      void startMediaNote(noteMode);
-                    }}
-                    onContextMenu={(e) => e.preventDefault()}
-                  >
-                    {noteMode === 'video' ? <Camera size={22} /> : <Mic size={22} />}
-                  </button>
-                </>
+                <ChatRecordButton
+                  disabled={!peerId || !secretKey}
+                  onSend={(file, mediaKind) => {
+                    void sendMedia(file, undefined, { mediaKind });
+                  }}
+                  onError={(message) => setError(message)}
+                />
               )}
             </form>
             </div>
           </section>
         )}
       </main>
-
-      {noteRecording && (
-        <MediaNoteOverlay
-          mode={noteMode}
-          stream={noteRecording.stream}
-          progress={noteRecording.progress}
-          cancelArmed={noteCancelArmed}
-          onCancel={cancelMediaNote}
-        />
-      )}
 
       {incomingRing && (
         <IncomingCallModal
@@ -4034,6 +3750,9 @@ export default function App() {
         onDecline={() => void declineMediaCall()}
         onHangUp={() => void cancelCall()}
         onToggleScreenShare={() => void toggleScreenShare()}
+        micMuted={micMuted}
+        onToggleMute={toggleCallMic}
+        onAttachFile={() => fileInputRef.current?.click()}
       />
       )}
 

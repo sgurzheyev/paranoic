@@ -165,6 +165,47 @@ export function recordMediaNote(
     settle?.(value);
   };
 
+  const stopTimeout = (ms: number) => {
+    window.setTimeout(() => {
+      if (settled) return;
+      if (discarded) {
+        finish(null);
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < MIN_NOTE_MS || chunks.length === 0) {
+        finish(null);
+        return;
+      }
+      const type = (recorder.mimeType || mime).split(';')[0] || mime;
+      const blob = new Blob(chunks, { type });
+      if (blob.size < 32) {
+        finish(null);
+        return;
+      }
+      const ext = extensionForMime(type);
+      const mediaKind = mode === 'video' ? 'circle' : 'voice';
+      const name =
+        mode === 'video' ? `circle-${Date.now()}.${ext}` : `voice-${Date.now()}.${ext}`;
+      finish({
+        file: new File([blob], name, { type: blob.type || type }),
+        mediaKind,
+        durationMs: elapsed,
+      });
+    }, ms);
+  };
+
+  const requestStop = () => {
+    cleanupTimers();
+    try {
+      if (recorder.state === 'recording') recorder.requestData();
+    } catch {
+      /* */
+    }
+    safeStop();
+    stopTimeout(900);
+  };
+
   const result = new Promise<NoteRecording | null>((resolve) => {
     settle = resolve;
 
@@ -201,9 +242,7 @@ export function recordMediaNote(
       discarded = true;
       chunks.length = 0;
       hardStopRecorder();
-      if (recorder.state === 'inactive') {
-        finish(null);
-      }
+      stopTimeout(200);
     };
 
     if (options?.signal) {
@@ -232,22 +271,20 @@ export function recordMediaNote(
   tickTimer = setInterval(() => {
     const elapsed = Date.now() - startedAt;
     options?.onTick?.(Math.min(1, elapsed / MAX_NOTE_MS), elapsed);
-    if (elapsed >= MAX_NOTE_MS) safeStop();
+    if (elapsed >= MAX_NOTE_MS) requestStop();
   }, 100);
 
-  maxTimer = setTimeout(() => safeStop(), MAX_NOTE_MS + 50);
+  maxTimer = setTimeout(() => requestStop(), MAX_NOTE_MS + 50);
 
   return {
     stop: () => {
-      safeStop();
+      requestStop();
     },
     cancel: () => {
       discarded = true;
       chunks.length = 0;
       hardStopRecorder();
-      if (recorder.state === 'inactive') {
-        finish(null);
-      }
+      stopTimeout(200);
     },
     result,
   };

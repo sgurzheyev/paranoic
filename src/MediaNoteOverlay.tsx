@@ -1,23 +1,26 @@
 import { useEffect, useRef } from 'react';
-import { Mic, Video, X } from 'lucide-react';
+import { Lock, Mic, Send, Video, X } from 'lucide-react';
 import type { NoteMode } from './mediaNotes';
 
 type MediaNoteOverlayProps = {
   mode: NoteMode;
   stream: MediaStream;
   progress: number;
-  /** Палец ушёл вверх / в зону отмены (Telegram slide-to-cancel). */
   cancelArmed?: boolean;
+  locked?: boolean;
   onCancel: () => void;
+  onSend?: () => void;
 };
 
-/** Круглый превью-экран во время записи кружочка / голоса. */
+/** Превью записи кружочка / голоса. pointer-events: none, чтобы не фризить hold. */
 export default function MediaNoteOverlay({
   mode,
   stream,
   progress,
   cancelArmed = false,
+  locked = false,
   onCancel,
+  onSend,
 }: MediaNoteOverlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -36,7 +39,7 @@ export default function MediaNoteOverlay({
 
   return (
     <div
-      className={`media-note-overlay${cancelArmed ? ' cancel-armed' : ''}`}
+      className={`media-note-overlay${cancelArmed ? ' cancel-armed' : ''}${locked ? ' is-locked' : ''}`}
       role="dialog"
       aria-label="Запись сообщения"
     >
@@ -65,34 +68,45 @@ export default function MediaNoteOverlay({
             <>
               <X size={14} /> Отпустите, чтобы отменить
             </>
-          ) : mode === 'video' ? (
+          ) : locked ? (
             <>
-              <Video size={14} /> Удерживайте · отпустите, чтобы отправить
+              <Lock size={14} /> Запись зафиксирована
             </>
           ) : (
             <>
-              <Mic size={14} /> Удерживайте · отпустите, чтобы отправить
+              {mode === 'video' ? <Video size={14} /> : <Mic size={14} />}
+              Вверх — lock · влево — отмена
             </>
           )}
         </p>
-        <button
-          type="button"
-          className="media-note-cancel"
-          aria-label="Отмена"
-          onPointerDown={(e) => {
-            // Важно: pointerdown, не click — иначе pointer capture / hold глотает tap.
-            e.preventDefault();
-            e.stopPropagation();
-            onCancel();
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onCancel();
-          }}
-        >
-          <X size={18} /> Отмена
-        </button>
+        {locked && (
+          <div className="media-note-actions">
+            <button
+              type="button"
+              className="media-note-cancel"
+              aria-label="Отмена"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onCancel();
+              }}
+            >
+              <X size={18} /> Отмена
+            </button>
+            <button
+              type="button"
+              className="media-note-send"
+              aria-label="Отправить"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onSend?.();
+              }}
+            >
+              <Send size={16} /> Отправить
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
