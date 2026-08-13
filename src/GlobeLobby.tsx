@@ -385,6 +385,10 @@ export default function GlobeLobby({
         antialias: true,
         fadeDuration: 0,
         attributionControl: true,
+        cooperativeGestures: false,
+        dragPan: true,
+        touchZoomRotate: true,
+        touchPitch: true,
       });
     } catch (err) {
       console.error('[paranoic mapbox] не удалось создать Map', err);
@@ -900,7 +904,7 @@ export default function GlobeLobby({
       )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="map-top-bar pointer-events-auto relative flex items-center justify-center px-4 py-4 sm:px-6">
+        <header className="map-top-bar relative flex items-center justify-center px-4 py-4 sm:px-6">
           <div className="map-top-bar__left">
             <button
               type="button"
@@ -1009,7 +1013,7 @@ export default function GlobeLobby({
           )}
         </div>
 
-        <div className="map-chrome-bottom pointer-events-auto mt-auto flex flex-col gap-3 px-4 sm:px-6">
+        <div className="map-chrome-bottom mt-auto flex flex-col gap-3 px-4 sm:px-6">
           {isTargetingMode ? (
             <div className="flex flex-col items-center gap-3">
               <button

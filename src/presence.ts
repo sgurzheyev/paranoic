@@ -23,11 +23,19 @@ const GEO_FALLBACK_MS = 7_000;
 
 export type GeoWatchHandle = { stop: () => void };
 
+export type WatchGeoOptions = {
+  /** GPS permission denied by the user / browser. */
+  onDenied?: () => void;
+};
+
 /**
  * Непрерывный GPS через Geolocation API.
  * При отказе / таймауте / отсутствии API — Антарктида.
  */
-export function watchGeo(onUpdate: (point: GeoPoint) => void): GeoWatchHandle {
+export function watchGeo(
+  onUpdate: (point: GeoPoint) => void,
+  opts?: WatchGeoOptions
+): GeoWatchHandle {
   if (!navigator.geolocation) {
     onUpdate({ ...ANTARCTICA });
     return { stop: () => undefined };
@@ -55,8 +63,11 @@ export function watchGeo(onUpdate: (point: GeoPoint) => void): GeoWatchHandle {
           source: 'gps',
         });
       },
-      () => {
+      (err) => {
         window.clearTimeout(fallbackTimer);
+        if (err.code === err.PERMISSION_DENIED) {
+          opts?.onDenied?.();
+        }
         emit({ ...ANTARCTICA });
       },
       {

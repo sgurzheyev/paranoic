@@ -1103,11 +1103,21 @@ export default function App() {
         setGeo({ ...ANTARCTICA });
         void presence.updateLocation(ANTARCTICA.lat, ANTARCTICA.lng);
       } else {
-        const handle = watchGeo((point) => {
-          if (cancelled) return;
-          setGeo(point);
-          void presence.updateLocation(point.lat, point.lng);
-        });
+        const handle = watchGeo(
+          (point) => {
+            if (cancelled) return;
+            setGeo(point);
+            void presence.updateLocation(point.lat, point.lng);
+          },
+          {
+            onDenied: () => {
+              if (cancelled) return;
+              setLinkWarning(
+                'Location access is blocked. Please allow location access in your browser settings to see your exact position.'
+              );
+            },
+          }
+        );
         geoWatchBox.stop = () => handle.stop();
       }
 
