@@ -7,10 +7,10 @@ export const GEMS_POINT_LAYER = 'map-gems-point';
 export const GEMS_CLUSTER_LAYER = 'map-gems-clusters';
 export const GEMS_CLUSTER_COUNT_LAYER = 'map-gems-cluster-count';
 
-/** Золотая точка: rgba(255, 215, 0, 0.9) + blur-свечение. */
-const GOLD = 'rgba(255, 215, 0, 0.9)';
-const GOLD_GLOW = 'rgba(255, 215, 0, 0.5)';
-const GOLD_STROKE = 'rgba(255, 248, 200, 0.95)';
+/** Неоново-жёлтая точка для тёмной карты Mapbox. */
+const GOLD = '#fbbf24';
+const GOLD_GLOW = 'rgba(254, 240, 138, 0.55)';
+const GOLD_STROKE = '#fef08a';
 
 type GemPointGeom = { type: 'Point'; coordinates: [number, number] };
 
@@ -50,10 +50,10 @@ export function ensureGemLayers(map: MapboxMap): void {
     paint: {
       'circle-color': GOLD,
       'circle-radius': 7,
-      'circle-blur': 0.25,
-      'circle-stroke-width': 1.75,
+      'circle-blur': 0.12,
+      'circle-stroke-width': 2,
       'circle-stroke-color': GOLD_STROKE,
-      'circle-opacity': 0.95,
+      'circle-opacity': 1,
     },
   });
 
@@ -67,14 +67,14 @@ export function ensureGemLayers(map: MapboxMap): void {
       'circle-color': [
         'step',
         ['get', 'point_count'],
-        'rgba(255, 215, 0, 0.65)',
+        '#fbbf24',
         8,
-        'rgba(255, 196, 0, 0.75)',
+        '#f59e0b',
         25,
-        'rgba(255, 170, 0, 0.85)',
+        '#f59e0b',
       ],
       'circle-radius': ['step', ['get', 'point_count'], 18, 8, 24, 25, 32],
-      'circle-blur': 0.15,
+      'circle-blur': 0.1,
       'circle-stroke-width': 2,
       'circle-stroke-color': GOLD_STROKE,
     },
