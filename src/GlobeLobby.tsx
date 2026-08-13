@@ -900,26 +900,78 @@ export default function GlobeLobby({
       )}
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="pointer-events-auto relative flex items-center justify-between gap-3 px-4 py-4 sm:px-6">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
-          >
-            <ArrowLeft size={16} /> Назад
-          </button>
-          {callAlertActive && (
+        <header className="map-top-bar pointer-events-auto relative flex items-center justify-between gap-2 px-4 py-4 sm:gap-3 sm:px-6">
+          <div className="map-top-bar__left">
             <button
               type="button"
-              className="map-call-alert-btn"
-              aria-label="Показать уведомление о звонке"
-              title="Проблема с дозвоном"
-              onClick={() => onCallAlertReveal?.()}
+              onClick={onBack}
+              className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
             >
-              <PhoneOff size={17} strokeWidth={2.2} />
+              <ArrowLeft size={16} /> Назад
             </button>
-          )}
-          <div className="relative flex items-center gap-2">
+            {callAlertActive && (
+              <button
+                type="button"
+                className="map-call-alert-btn"
+                aria-label="Показать уведомление о звонке"
+                title="Проблема с дозвоном"
+                onClick={() => onCallAlertReveal?.()}
+              >
+                <PhoneOff size={17} strokeWidth={2.2} />
+              </button>
+            )}
+          </div>
+
+          <div className="map-top-bar__center">
+            <div className="relative">
+              <button
+                type="button"
+                className={`map-layers-btn${layersOpen ? ' open' : ''}`}
+                aria-expanded={layersOpen}
+                aria-label="Слои карты"
+                onClick={() => setLayersOpen((v) => !v)}
+              >
+                <Layers size={16} />
+                Слои
+              </button>
+              {layersOpen && (
+                <div className="map-layers-menu" role="menu">
+                  <p className="map-layers-menu-title">Слои карты</p>
+                  <label className="map-layers-toggle">
+                    <span>Контакты</span>
+                    <input
+                      type="checkbox"
+                      checked={showContacts}
+                      onChange={(e) => setShowContacts(e.target.checked)}
+                    />
+                    <span className="map-layers-switch" aria-hidden />
+                  </label>
+                  <label className="map-layers-toggle">
+                    <span>Капсулы памяти</span>
+                    <input
+                      type="checkbox"
+                      checked={showGems}
+                      onChange={(e) => setShowGems(e.target.checked)}
+                    />
+                    <span className="map-layers-switch" aria-hidden />
+                  </label>
+                  <label className="map-layers-toggle">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Ghost size={13} /> Режим Антарктиды
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={ghostMode}
+                      onChange={(e) => onGhostModeChange(e.target.checked)}
+                    />
+                    <span className="map-layers-switch" aria-hidden />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="map-top-bar__right">
             {isAdmin && onOpenAdmin && (
               <button
                 type="button"
@@ -928,50 +980,6 @@ export default function GlobeLobby({
               >
                 <ShieldCheck size={14} /> Admin Panel
               </button>
-            )}
-            <button
-              type="button"
-              className={`map-layers-btn${layersOpen ? ' open' : ''}`}
-              aria-expanded={layersOpen}
-              aria-label="Слои карты"
-              onClick={() => setLayersOpen((v) => !v)}
-            >
-              <Layers size={16} />
-              Слои
-            </button>
-            {layersOpen && (
-              <div className="map-layers-menu" role="menu">
-                <p className="map-layers-menu-title">Слои карты</p>
-                <label className="map-layers-toggle">
-                  <span>Контакты</span>
-                  <input
-                    type="checkbox"
-                    checked={showContacts}
-                    onChange={(e) => setShowContacts(e.target.checked)}
-                  />
-                  <span className="map-layers-switch" aria-hidden />
-                </label>
-                <label className="map-layers-toggle">
-                  <span>Капсулы памяти</span>
-                  <input
-                    type="checkbox"
-                    checked={showGems}
-                    onChange={(e) => setShowGems(e.target.checked)}
-                  />
-                  <span className="map-layers-switch" aria-hidden />
-                </label>
-                <label className="map-layers-toggle">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Ghost size={13} /> Режим Антарктиды
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={ghostMode}
-                    onChange={(e) => onGhostModeChange(e.target.checked)}
-                  />
-                  <span className="map-layers-switch" aria-hidden />
-                </label>
-              </div>
             )}
             <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
               Family Mode

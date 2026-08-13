@@ -3177,15 +3177,42 @@ textarea {
   margin-right: 0.75rem;
 }
 
+.map-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.map-top-bar__left,
+.map-top-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1 1 0;
+  z-index: 2;
+}
+
+.map-top-bar__right {
+  justify-content: flex-end;
+}
+
+.map-top-bar__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  z-index: 3;
+}
+
 .map-call-alert-btn {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  position: relative;
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 40px;
   height: 40px;
   border-radius: 999px;
@@ -3208,7 +3235,7 @@ textarea {
 }
 
 .map-call-alert-btn:hover {
-  transform: translate(-50%, -50%) scale(1.06);
+  transform: scale(1.06);
   border-color: rgba(248, 113, 113, 0.85);
   box-shadow:
     0 10px 26px rgba(220, 38, 38, 0.4),
@@ -4111,9 +4138,10 @@ textarea {
 }
 
 .map-layers-menu {
-  position: fixed;
-  top: calc(4.25rem + env(safe-area-inset-top, 0px));
-  right: max(1rem, env(safe-area-inset-right, 0px));
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 80;
   width: min(260px, 78vw);
   padding: 12px;
