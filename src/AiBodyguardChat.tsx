@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CloudOff, Radar, Send, Square, X } from 'lucide-react';
 import { useAiSecretary } from './useAiSecretary';
 
@@ -69,7 +70,7 @@ export default function AiBodyguardChat({
     }
   };
 
-  return (
+  return createPortal(
     <div className="ai-bodyguard-backdrop" role="presentation" onClick={onClose}>
       <div
         className="ai-bodyguard-card"
@@ -84,7 +85,7 @@ export default function AiBodyguardChat({
             </span>
             <div>
               <h2>ИИ-телохранитель</h2>
-              <p>Облачный gpt-4o-mini · видит карту, контакты и статус связи</p>
+              <p>Анализ обстановки…</p>
             </div>
           </div>
           <button type="button" className="icon-btn overlay-close" onClick={onClose} aria-label="Закрыть">
@@ -133,31 +134,28 @@ export default function AiBodyguardChat({
             e.preventDefault();
             void send();
           }}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Шёпотом в канал…"
-            disabled={loading}
             maxLength={2000}
             autoComplete="off"
+            autoFocus
           />
           {loading ? (
             <button type="button" className="ai-bodyguard-send" onClick={cancel} aria-label="Стоп">
               <Square size={16} />
             </button>
           ) : (
-            <button
-              type="submit"
-              className="ai-bodyguard-send"
-              disabled={!input.trim()}
-              aria-label="Отправить"
-            >
+            <button type="submit" className="ai-bodyguard-send" aria-label="Отправить">
               <Send size={16} />
             </button>
           )}
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

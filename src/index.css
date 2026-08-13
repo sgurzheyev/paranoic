@@ -5238,11 +5238,11 @@ textarea {
   border-color: rgba(252, 165, 165, 0.6);
 }
 
-/* Чат ИИ поверх карты — выше liquid-nav (z-index 45), с отступом под Tab Bar */
+/* Чат ИИ поверх карты — выше overlays (90) и liquid-nav (45). */
 .ai-bodyguard-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 110;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -5251,6 +5251,7 @@ textarea {
   background: rgba(3, 5, 10, 0.45);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
 }
 
 @media (min-width: 640px) {
@@ -5262,6 +5263,7 @@ textarea {
 
 .ai-bodyguard-card {
   position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 440px;
   max-height: min(78svh, 640px);
@@ -5278,6 +5280,7 @@ textarea {
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .ai-bodyguard-head {
@@ -5452,10 +5455,13 @@ textarea {
 }
 
 .ai-bodyguard-composer {
+  position: relative;
+  z-index: 2;
   display: flex;
   gap: 8px;
   padding: 12px 14px 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  pointer-events: auto;
 }
 
 .ai-bodyguard-composer input {
@@ -5469,6 +5475,9 @@ textarea {
   font: inherit;
   font-size: 0.9rem;
   outline: none;
+  pointer-events: auto;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ai-bodyguard-composer input:focus {
@@ -5487,6 +5496,7 @@ textarea {
   background: rgba(248, 113, 113, 0.22);
   color: #fecaca;
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .ai-bodyguard-send:disabled {
