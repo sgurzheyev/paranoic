@@ -33,6 +33,13 @@ create policy "map_gems_insert_author"
   to authenticated
   with check (author_id::text = auth.uid()::text);
 
+drop policy if exists "map_gems_delete_anon" on public.map_gems;
+drop policy if exists "map_gems_delete_author" on public.map_gems;
+create policy "map_gems_delete_author"
+  on public.map_gems for delete
+  to authenticated
+  using (author_id::text = auth.uid()::text);
+
 -- Storage: authenticated upload в map-gems
 drop policy if exists "map_gems_authenticated_upload" on storage.objects;
 create policy "map_gems_authenticated_upload"

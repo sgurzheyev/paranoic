@@ -35,6 +35,7 @@ import {
   startGemPulse,
 } from './mapGemLayers';
 import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
+import { getAuthUserId } from './lib/supabase';
 import MemoryGemDrawer from './MemoryGemDrawer';
 import MemoryGemComposer from './MemoryGemComposer';
 import SoftFeatureBoundary from './SoftFeatureBoundary';
@@ -91,6 +92,8 @@ type GlobeLobbyProps = {
   /** Индикатор ошибки дозвона (toast по клику). */
   callAlertActive?: boolean;
   onCallAlertReveal?: () => void;
+  /** Локальный identity.id — fallback, если Auth uid ещё не загружен. */
+  currentUserId?: string;
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -233,6 +236,7 @@ export default function GlobeLobby({
   onGhostModeChange,
   callAlertActive = false,
   onCallAlertReveal,
+  currentUserId = '',
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -264,6 +268,8 @@ export default function GlobeLobby({
   const [layersOpen, setLayersOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [authUserId, setAuthUserId] = useState(currentUserId);
+  const [gemNotice, setGemNotice] = useState('');
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
   /** Один раз при первой геолокации — не перезапускать flyTo при каждом GPS-тике. */
   const initialCenterAppliedRef = useRef(false);
@@ -298,6 +304,23 @@ export default function GlobeLobby({
   );
 
   const me = useMemo(() => people.find((p) => p.isMe), [people]);
+  useEffect(() => {
+    let cancelled = false;
+    void getAuthUserId()
+      .then((id) => {
+        if (!cancelled && id) setAuthUserId(id);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!gemNotice) return;
+    const t = window.setTimeout(() => setGemNotice(''), 3200);
+    return () => window.clearTimeout(t);
+  }, [gemNotice]);
 
   /** Empty Style: только Family contacts (+ вы), без незнакомцев. */
   const visiblePeople = useMemo(() => {
@@ -1209,13 +1232,36 @@ export default function GlobeLobby({
         <MemoryGemDrawer
           gems={gems}
           activeId={openedGem.id}
+          currentUserId={
+            [authUserId, currentUserId, me?.userId].find(
+              (id) => id && id === openedGem.author_id
+            ) ||
+            authUserId ||
+            currentUserId ||
+            me?.userId ||
+            ''
+          }
           authorLabel={authorLabel}
           onActiveChange={(gem) => {
             setOpenedGem(gem);
             flyToGem(gem);
           }}
           onClose={() => setOpenedGem(null)}
+          onDeleted={(gemId) => {
+            setOpenedGem(null);
+            setGems((prev) => prev.filter((g) => g.id !== gemId));
+            setGemNotice('Капсула удалена');
+          }}
         />
+      )}
+
+      {gemNotice && (
+        <div
+          className="app-toast app-toast--visible app-toast--success app-toast--above-nav pointer-events-auto"
+          role="status"
+        >
+          <span className="app-toast__text">{gemNotice}</span>
+        </div>
       )}
 
       {dropPoint && (

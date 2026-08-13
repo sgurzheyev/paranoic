@@ -3039,6 +3039,7 @@ export default function App() {
         <div className="family-map-stage">
           <GlobeLobby
             onBack={() => goMainTab('contacts')}
+            currentUserId={identity.id}
             people={mapPeople}
             geoSource={
               settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'

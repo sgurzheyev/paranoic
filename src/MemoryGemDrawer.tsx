@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
-import { ChevronLeft, ChevronRight, Gem, Type, X } from 'lucide-react';
-import { formatGemTime, type MapGem } from './mapGems';
+import { ChevronLeft, ChevronRight, Gem, Trash2, Type, X } from 'lucide-react';
+import { deleteMapGem, formatGemTime, type MapGem } from './mapGems';
 
 type MemoryGemDrawerProps = {
   gems: MapGem[];
   activeId: string;
+  currentUserId: string;
   authorLabel: (authorId: string) => string;
   onActiveChange: (gem: MapGem) => void;
   onClose: () => void;
+  onDeleted: (gemId: string) => void;
 };
 
 /**
@@ -17,13 +19,17 @@ type MemoryGemDrawerProps = {
 export default function MemoryGemDrawer({
   gems,
   activeId,
+  currentUserId,
   authorLabel,
   onActiveChange,
   onClose,
+  onDeleted,
 }: MemoryGemDrawerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const touchStartX = useRef<number | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const index = useMemo(() => {
     const i = gems.findIndex((g) => g.id === activeId);
@@ -33,6 +39,7 @@ export default function MemoryGemDrawer({
   const gem = gems[index] ?? null;
   const canPrev = index > 0;
   const canNext = index < gems.length - 1;
+  const canDelete = Boolean(currentUserId && gem && gem.author_id === currentUserId);
 
   const goTo = (nextIndex: number) => {
     const next = gems[nextIndex];
@@ -67,6 +74,10 @@ export default function MemoryGemDrawer({
     void v.play().catch(() => undefined);
   }, [gem?.id, gem?.media_url]);
 
+  useEffect(() => {
+    setDeleteError('');
+  }, [gem?.id]);
+
   if (!gem) return null;
 
   const typeLabel =
@@ -89,6 +100,24 @@ export default function MemoryGemDrawer({
     setDragOffset(0);
     if (delta > 64) goPrev();
     else if (delta < -64) goNext();
+  };
+
+  const handleDelete = async () => {
+    if (!canDelete || deleting) return;
+    if (!window.confirm('Удалить эту капсулу безвозвратно? Файл и запись будут стерты.')) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteMapGem(gem);
+      onDeleted(gem.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Не удалось удалить капсулу';
+      setDeleteError(msg);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -119,9 +148,23 @@ export default function MemoryGemDrawer({
               </p>
             </div>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
-            <X size={18} />
-          </button>
+          <div className="memory-gem-head-actions">
+            {canDelete && (
+              <button
+                type="button"
+                className="icon-btn memory-gem-delete-btn"
+                onClick={() => void handleDelete()}
+                disabled={deleting}
+                aria-label="Удалить капсулу"
+                title="Удалить капсулу"
+              >
+                <Trash2 size={18} />
+              </button>
+            )}
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="memory-gem-drawer__media">
@@ -165,24 +208,30 @@ export default function MemoryGemDrawer({
           </p>
         )}
 
+        {deleteError && (
+          <p className="memory-gem-error" role="alert">
+            {deleteError}
+          </p>
+        )}
+
         <div className="memory-gem-drawer__nav">
           <button
             type="button"
             className="memory-gem-drawer__nav-btn"
             onClick={goPrev}
-            disabled={!canPrev}
+            disabled={!canPrev || deleting}
             aria-label="Предыдущая капсула"
           >
             <ChevronLeft size={18} />
           </button>
           <span className="memory-gem-drawer__counter">
-            {index + 1} / {gems.length}
+            {deleting ? 'Удаляем…' : `${index + 1} / ${gems.length}`}
           </span>
           <button
             type="button"
             className="memory-gem-drawer__nav-btn"
             onClick={goNext}
-            disabled={!canNext}
+            disabled={!canNext || deleting}
             aria-label="Следующая капсула"
           >
             <ChevronRight size={18} />

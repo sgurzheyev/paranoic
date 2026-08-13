@@ -350,6 +350,11 @@ textarea {
   background: rgba(28, 22, 10, 0.94);
 }
 
+.app-toast--success {
+  border-color: rgba(94, 234, 212, 0.45);
+  color: #99f6e4;
+}
+
 .app-toast--top {
   top: calc(0.65rem + env(safe-area-inset-top, 0px));
   bottom: auto;
@@ -3888,6 +3893,28 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.memory-gem-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.memory-gem-delete-btn {
+  color: #fecaca;
+}
+
+.memory-gem-delete-btn:hover {
+  background: rgba(244, 63, 94, 0.18);
+  border-color: rgba(251, 113, 133, 0.45);
+  color: #fda4af;
+}
+
+.memory-gem-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .memory-gem-title-row {

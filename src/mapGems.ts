@@ -1,9 +1,15 @@
 import {
   ensureAuthSession,
+  getAuthUserId,
   getSupabase,
   hasSupabaseConfig,
 } from './lib/supabase';
-import { hasR2Config, uploadFileToR2 } from './s3Storage';
+import {
+  deleteR2Object,
+  hasR2Config,
+  objectKeyFromPublicUrl,
+  uploadFileToR2,
+} from './s3Storage';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
@@ -200,6 +206,49 @@ export async function uploadGemMedia(
     wrapped.name = raw.name || 'GemUploadError';
     wrapped.stack = raw.stack;
     throw wrapped;
+  }
+}
+
+/**
+ * Удаляет капсулу: сначала объект в R2 (если есть media_url), затем строку map_gems.
+ * Только автор (`author_id` === auth.uid()).
+ */
+export async function deleteMapGem(gem: MapGem): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+
+  const uid = await getAuthUserId();
+  if (uid !== gem.author_id) {
+    throw new Error('Можно удалить только свою капсулу');
+  }
+
+  if (gem.media_url) {
+    const key = objectKeyFromPublicUrl(gem.media_url);
+    if (!key) {
+      throw new Error(`Не удалось определить ключ R2: ${gem.media_url}`);
+    }
+    await deleteR2Object(key);
+  }
+
+  const sb = getSupabase();
+  const { error, data } = await sb
+    .from(MAP_GEMS_TABLE)
+    .delete()
+    .eq('id', gem.id)
+    .eq('author_id', uid)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    const msg = error.message || 'Не удалось удалить капсулу';
+    if (/row-level security|RLS/i.test(msg)) {
+      throw new Error(
+        'RLS блокирует удаление. Проверьте политику map_gems DELETE (author_id = auth.uid()).'
+      );
+    }
+    throw new Error(msg);
+  }
+  if (!data) {
+    throw new Error('Капсула не найдена или уже удалена');
   }
 }
 

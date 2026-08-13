@@ -87,6 +87,33 @@ export function publicUrlForKey(key: string): string {
   return `${base}/${path}`;
 }
 
+/** Reverse a public media URL to the R2 object key (`map-gems/...`). */
+export function objectKeyFromPublicUrl(mediaUrl: string): string | null {
+  const raw = mediaUrl.trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const path = decodeURIComponent(u.pathname.replace(/^\//, ''));
+    if (
+      path.startsWith('map-gems/') ||
+      path.startsWith('avatars/') ||
+      path.startsWith('media/')
+    ) {
+      return path;
+    }
+  } catch {
+    /* not an absolute URL */
+  }
+  const cfg = readConfig();
+  if (cfg) {
+    const base = cfg.publicUrl.replace(/\/$/, '');
+    if (raw.startsWith(`${base}/`)) {
+      return decodeURIComponent(raw.slice(base.length + 1).split('?')[0] ?? '');
+    }
+  }
+  return null;
+}
+
 /** Build object key: `{folder}/{ownerId}/{timestamp}-{rand}.{ext}` */
 export function buildObjectKey(
   folder: R2Folder,
@@ -231,19 +258,29 @@ export async function createPresignedUploadUrl(
 
 /** Best-effort delete (avatar overwrite / cleanup). */
 export async function deleteFromR2(key: string): Promise<void> {
-  if (!hasR2Config()) return;
-  const cfg = getR2Config();
-  const s3 = getS3Client();
   try {
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: cfg.bucket,
-        Key: key,
-      })
-    );
+    await deleteR2Object(key);
   } catch (e) {
     console.warn('[paranoic r2] delete failed', key, e);
   }
+}
+
+/** Permanently delete an object; throws on failure. */
+export async function deleteR2Object(key: string): Promise<void> {
+  if (!key.trim()) throw new Error('Пустой ключ R2');
+  if (!hasR2Config()) {
+    throw new Error(
+      'Cloudflare R2 не настроен. Добавьте VITE_R2_* переменные окружения.'
+    );
+  }
+  const cfg = getR2Config();
+  const s3 = getS3Client();
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+    })
+  );
 }
 
 /** Upload a File under a folder and return the public URL. */
