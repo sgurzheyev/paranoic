@@ -1,12 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
-import { ChevronLeft, ChevronRight, Gem, Trash2, Type, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from 'react';
+import { ChevronLeft, ChevronRight, Gem, Heart, Send, Trash2, Type, X } from 'lucide-react';
+import { initials } from './identity';
 import { deleteMapGem, formatGemTime, type MapGem } from './mapGems';
+import {
+  addGemComment,
+  fetchGemSocial,
+  subscribeGemSocial,
+  toggleGemLike,
+  type GemAuthorInfo,
+  type GemComment,
+} from './gemSocial';
 
 type MemoryGemDrawerProps = {
   gems: MapGem[];
   activeId: string;
   currentUserId: string;
   authorLabel: (authorId: string) => string;
+  resolveAuthor: (userId: string) => GemAuthorInfo;
   onActiveChange: (gem: MapGem) => void;
   onClose: () => void;
   onDeleted: (gemId: string) => void;
@@ -21,15 +31,24 @@ export default function MemoryGemDrawer({
   activeId,
   currentUserId,
   authorLabel,
+  resolveAuthor,
   onActiveChange,
   onClose,
   onDeleted,
 }: MemoryGemDrawerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const commentsRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef<number | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [liked, setLiked] = useState(false);
+  const [likeCount, setLikeCount] = useState(0);
+  const [likeBusy, setLikeBusy] = useState(false);
+  const [comments, setComments] = useState<GemComment[]>([]);
+  const [draft, setDraft] = useState('');
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [socialError, setSocialError] = useState('');
 
   const index = useMemo(() => {
     const i = gems.findIndex((g) => g.id === activeId);
@@ -40,6 +59,8 @@ export default function MemoryGemDrawer({
   const canPrev = index > 0;
   const canNext = index < gems.length - 1;
   const canDelete = Boolean(currentUserId && gem && gem.author_id === currentUserId);
+  const resolveAuthorRef = useRef(resolveAuthor);
+  resolveAuthorRef.current = resolveAuthor;
 
   const goTo = (nextIndex: number) => {
     const next = gems[nextIndex];
@@ -76,7 +97,68 @@ export default function MemoryGemDrawer({
 
   useEffect(() => {
     setDeleteError('');
+    setSocialError('');
+    setDraft('');
   }, [gem?.id]);
+
+  useEffect(() => {
+    if (!gem?.id) return;
+    let cancelled = false;
+    void fetchGemSocial(gem.id, currentUserId, resolveAuthorRef.current).then((snap) => {
+      if (cancelled) return;
+      setLiked(snap.liked);
+      setLikeCount(snap.likeCount);
+      setComments(snap.comments);
+    });
+    const stop = subscribeGemSocial(gem.id, {
+      onLikeChange: () => {
+        void fetchGemSocial(gem.id, currentUserId, resolveAuthorRef.current).then((snap) => {
+          if (cancelled) return;
+          setLiked(snap.liked);
+          setLikeCount(snap.likeCount);
+        });
+      },
+      onCommentInsert: (row) => {
+        const incoming: GemComment = {
+          id: String(row.id ?? ''),
+          gem_id: String(row.gem_id ?? gem.id),
+          user_id: String(row.user_id ?? ''),
+          content: String(row.content ?? ''),
+          created_at: String(row.created_at ?? new Date().toISOString()),
+          author: resolveAuthorRef.current(String(row.user_id ?? '')),
+        };
+        if (!incoming.id) return;
+        setComments((prev) => {
+          if (prev.some((c) => c.id === incoming.id)) return prev;
+          const optimistic = prev.findIndex(
+            (c) =>
+              c.id.startsWith('tmp-') &&
+              c.user_id === incoming.user_id &&
+              c.content === incoming.content
+          );
+          if (optimistic >= 0) {
+            const next = [...prev];
+            next[optimistic] = incoming;
+            return next;
+          }
+          return [...prev, incoming];
+        });
+      },
+      onCommentDelete: (id) => {
+        setComments((prev) => prev.filter((c) => c.id !== id));
+      },
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [gem?.id, currentUserId]);
+
+  useEffect(() => {
+    const el = commentsRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [comments.length]);
 
   if (!gem) return null;
 
@@ -120,14 +202,62 @@ export default function MemoryGemDrawer({
     }
   };
 
+  const handleLike = async () => {
+    if (!currentUserId || likeBusy) return;
+    const nextLiked = !liked;
+    setLiked(nextLiked);
+    setLikeCount((n) => Math.max(0, n + (nextLiked ? 1 : -1)));
+    setLikeBusy(true);
+    setSocialError('');
+    try {
+      const confirmed = await toggleGemLike(gem.id, liked);
+      setLiked(confirmed);
+    } catch (e) {
+      setLiked(liked);
+      setLikeCount((n) => Math.max(0, n + (nextLiked ? -1 : 1)));
+      setSocialError(e instanceof Error ? e.message : 'Не удалось обновить лайк');
+    } finally {
+      setLikeBusy(false);
+    }
+  };
+
+  const handleComment = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || commentBusy || !currentUserId) return;
+    const temp: GemComment = {
+      id: `tmp-${Date.now()}`,
+      gem_id: gem.id,
+      user_id: currentUserId,
+      content: text,
+      created_at: new Date().toISOString(),
+      author: resolveAuthor(currentUserId),
+    };
+    setComments((prev) => [...prev, temp]);
+    setDraft('');
+    setCommentBusy(true);
+    setSocialError('');
+    try {
+      const saved = await addGemComment(gem.id, text, resolveAuthor);
+      setComments((prev) => {
+        const withoutTemp = prev.filter((c) => c.id !== temp.id);
+        if (withoutTemp.some((c) => c.id === saved.id)) return withoutTemp;
+        return [...withoutTemp, saved];
+      });
+    } catch (err) {
+      setComments((prev) => prev.filter((c) => c.id !== temp.id));
+      setDraft(text);
+      setSocialError(err instanceof Error ? err.message : 'Не удалось отправить комментарий');
+    } finally {
+      setCommentBusy(false);
+    }
+  };
+
   return (
     <aside
       className="memory-gem-drawer"
       role="dialog"
       aria-label="Капсула памяти"
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
       style={
         dragOffset
           ? { transform: `translateX(calc(0px + ${dragOffset * 0.15}px))` }
@@ -167,7 +297,12 @@ export default function MemoryGemDrawer({
           </div>
         </div>
 
-        <div className="memory-gem-drawer__media">
+        <div
+          className="memory-gem-drawer__media"
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+        >
           {gem.type === 'photo' && gem.media_url && (
             <img
               src={gem.media_url}
@@ -208,9 +343,75 @@ export default function MemoryGemDrawer({
           </p>
         )}
 
-        {deleteError && (
+        <div
+          className="memory-gem-social"
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className={`memory-gem-like${liked ? ' is-liked' : ''}`}
+            onClick={() => void handleLike()}
+            disabled={!currentUserId || likeBusy}
+            aria-pressed={liked}
+            aria-label={liked ? 'Убрать лайк' : 'Нравится'}
+          >
+            <Heart size={16} fill={liked ? 'currentColor' : 'none'} />
+            <span>{likeCount}</span>
+          </button>
+
+          <div className="memory-gem-comments" ref={commentsRef}>
+            {comments.length === 0 ? (
+              <p className="memory-gem-comments__empty">Пока нет комментариев</p>
+            ) : (
+              comments.map((c) => (
+                <div key={c.id} className="memory-gem-comment">
+                  <span
+                    className="memory-gem-comment__avatar"
+                    style={{ background: c.author.avatarUrl ? '#1a1d28' : c.author.color || '#60a5fa' }}
+                  >
+                    {c.author.avatarUrl ? (
+                      <img src={c.author.avatarUrl} alt="" draggable={false} />
+                    ) : (
+                      initials(c.author.name)
+                    )}
+                  </span>
+                  <div className="memory-gem-comment__body">
+                    <p className="memory-gem-comment__meta">
+                      <strong>{c.author.name}</strong>
+                      <span>{formatGemTime(c.created_at)}</span>
+                    </p>
+                    <p className="memory-gem-comment__text">{c.content}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <form className="memory-gem-comment-form" onSubmit={(e) => void handleComment(e)}>
+            <input
+              className="memory-gem-comment-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Написать комментарий…"
+              maxLength={500}
+              disabled={commentBusy || !currentUserId}
+              aria-label="Комментарий"
+            />
+            <button
+              type="submit"
+              className="memory-gem-comment-send"
+              disabled={commentBusy || !draft.trim() || !currentUserId}
+              aria-label="Отправить"
+            >
+              <Send size={15} />
+            </button>
+          </form>
+        </div>
+
+        {(deleteError || socialError) && (
           <p className="memory-gem-error" role="alert">
-            {deleteError}
+            {deleteError || socialError}
           </p>
         )}
 

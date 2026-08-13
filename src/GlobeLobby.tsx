@@ -336,6 +336,17 @@ export default function GlobeLobby({
     return person?.name || authorId.slice(0, 10);
   };
 
+  const resolveAuthor = (userId: string) => {
+    const person = peopleRef.current.find((p) => p.userId === userId);
+    if (person?.isMe) {
+      return { name: 'Вы', avatarUrl: person.avatarUrl, color: person.color };
+    }
+    if (person) {
+      return { name: person.name, avatarUrl: person.avatarUrl, color: person.color };
+    }
+    return { name: userId.slice(0, 10), color: '#60a5fa' };
+  };
+
   selectedIdRef.current = selected?.userId ?? null;
 
   /** Плавный flyTo к GPS (или Антарктиде при Ghost Mode). */
@@ -1242,6 +1253,7 @@ export default function GlobeLobby({
             ''
           }
           authorLabel={authorLabel}
+          resolveAuthor={resolveAuthor}
           onActiveChange={(gem) => {
             setOpenedGem(gem);
             flyToGem(gem);
