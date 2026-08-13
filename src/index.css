@@ -3178,27 +3178,46 @@ textarea {
 }
 
 .map-top-bar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  justify-content: center;
+  min-height: 3.5rem;
 }
 
 .map-top-bar__left,
 .map-top-bar__right {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  min-width: 0;
-  flex: 1 1 0;
   z-index: 2;
+  max-width: calc(50% - 3.5rem);
+}
+
+.map-top-bar__left {
+  left: 1rem;
 }
 
 .map-top-bar__right {
+  right: 1rem;
   justify-content: flex-end;
 }
 
+@media (min-width: 640px) {
+  .map-top-bar__left {
+    left: 1.5rem;
+  }
+
+  .map-top-bar__right {
+    right: 1.5rem;
+  }
+}
+
 .map-top-bar__center {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3716,10 +3735,12 @@ textarea {
 .memory-gem-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 120;
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: 20px 20px calc(6.5rem + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   background: rgba(6, 8, 12, 0.62);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -3737,7 +3758,7 @@ textarea {
 
 .memory-gem-card {
   width: min(100%, 420px);
-  max-height: min(88svh, 640px);
+  max-height: min(calc(100svh - 8rem - env(safe-area-inset-bottom, 0px)), 640px);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -3767,6 +3788,22 @@ textarea {
 
 .memory-gem-card.composer {
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.memory-gem-composer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.memory-gem-composer-footer {
+  flex: 0 0 auto;
+  padding-top: 2px;
 }
 
 .memory-gem-head {

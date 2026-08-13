@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Gem, ImagePlus, Type, Video, X } from 'lucide-react';
 import {
   createMapGem,
@@ -108,7 +109,7 @@ export default function MemoryGemComposer({
           ? 'Сохраняем…'
           : 'Создать капсулу';
 
-  return (
+  return createPortal(
     <div className="memory-gem-backdrop" role="presentation" onClick={onClose}>
       <div
         className="memory-gem-card composer"
@@ -140,122 +141,132 @@ export default function MemoryGemComposer({
           </button>
         </div>
 
-        <div className="memory-gem-type-row">
-          <button
-            type="button"
-            className={`memory-gem-type-btn${type === 'photo' ? ' active' : ''}`}
-            onClick={() => pickType('photo')}
-            disabled={busy}
-          >
-            <ImagePlus size={15} />
-            Фото
-          </button>
-          <button
-            type="button"
-            className={`memory-gem-type-btn${type === 'video' ? ' active' : ''}`}
-            onClick={() => pickType('video')}
-            disabled={busy}
-          >
-            <Video size={15} />
-            Видео
-          </button>
-          <button
-            type="button"
-            className={`memory-gem-type-btn${type === 'text' ? ' active' : ''}`}
-            onClick={() => pickType('text')}
-            disabled={busy}
-          >
-            <Type size={15} />
-            Текст
-          </button>
-        </div>
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept={type === 'video' ? 'video/*' : 'image/*'}
-          hidden
-          onChange={(e) => {
-            onFile(e.target.files?.[0]);
-            e.target.value = '';
-          }}
-        />
-
-        {type === 'text' && (
-          <textarea
-            className="memory-gem-input"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Что хотите оставить в этом месте?"
-            maxLength={500}
-            rows={4}
-            disabled={busy}
-          />
-        )}
-
-        {(type === 'photo' || type === 'video') && (
-          <div className="memory-gem-file-block">
-            {previewUrl && type === 'photo' && (
-              <img src={previewUrl} alt="" className="memory-gem-preview" draggable={false} />
-            )}
-            {previewUrl && type === 'video' && (
-              <video
-                src={previewUrl}
-                className="memory-gem-preview"
-                muted
-                playsInline
-                loop
-                autoPlay
-              />
-            )}
+        <div className="memory-gem-composer-body">
+          <div className="memory-gem-type-row">
             <button
               type="button"
-              className="accept-file-btn"
-              onClick={() => fileRef.current?.click()}
+              className={`memory-gem-type-btn${type === 'photo' ? ' active' : ''}`}
+              onClick={() => pickType('photo')}
               disabled={busy}
             >
-              {type === 'photo' ? <ImagePlus size={16} /> : <Video size={16} />}
-              {file ? file.name : type === 'photo' ? 'Выбрать фото' : 'Выбрать видео'}
+              <ImagePlus size={15} />
+              Фото
             </button>
+            <button
+              type="button"
+              className={`memory-gem-type-btn${type === 'video' ? ' active' : ''}`}
+              onClick={() => pickType('video')}
+              disabled={busy}
+            >
+              <Video size={15} />
+              Видео
+            </button>
+            <button
+              type="button"
+              className={`memory-gem-type-btn${type === 'text' ? ' active' : ''}`}
+              onClick={() => pickType('text')}
+              disabled={busy}
+            >
+              <Type size={15} />
+              Текст
+            </button>
+          </div>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept={type === 'video' ? 'video/*' : 'image/*'}
+            hidden
+            onChange={(e) => {
+              onFile(e.target.files?.[0]);
+              e.target.value = '';
+            }}
+          />
+
+          {type === 'text' && (
             <textarea
               className="memory-gem-input"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder="Подпись (необязательно)"
-              maxLength={280}
-              rows={2}
+              placeholder="Что хотите оставить в этом месте?"
+              maxLength={500}
+              rows={4}
               disabled={busy}
             />
-          </div>
-        )}
+          )}
 
-        {busy && (
-          <div className="memory-gem-progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
-            <div className="memory-gem-progress-track">
-              <div
-                className="memory-gem-progress-fill"
-                style={{ width: `${Math.max(4, Math.round(progress * 100))}%` }}
+          {(type === 'photo' || type === 'video') && (
+            <div className="memory-gem-file-block">
+              {previewUrl && type === 'photo' && (
+                <img src={previewUrl} alt="" className="memory-gem-preview" draggable={false} />
+              )}
+              {previewUrl && type === 'video' && (
+                <video
+                  src={previewUrl}
+                  className="memory-gem-preview"
+                  muted
+                  playsInline
+                  loop
+                  autoPlay
+                />
+              )}
+              <button
+                type="button"
+                className="accept-file-btn"
+                onClick={() => fileRef.current?.click()}
+                disabled={busy}
+              >
+                {type === 'photo' ? <ImagePlus size={16} /> : <Video size={16} />}
+                {file ? file.name : type === 'photo' ? 'Выбрать фото' : 'Выбрать видео'}
+              </button>
+              <textarea
+                className="memory-gem-input"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Подпись (необязательно)"
+                maxLength={280}
+                rows={2}
+                disabled={busy}
               />
             </div>
-            <p className="memory-gem-progress-label">{progressLabel}</p>
-          </div>
-        )}
+          )}
 
-        {error && (
-          <p className="memory-gem-error" role="alert">
-            {error}
-          </p>
-        )}
+          {busy && (
+            <div
+              className="memory-gem-progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress * 100)}
+            >
+              <div className="memory-gem-progress-track">
+                <div
+                  className="memory-gem-progress-fill"
+                  style={{ width: `${Math.max(4, Math.round(progress * 100))}%` }}
+                />
+              </div>
+              <p className="memory-gem-progress-label">{progressLabel}</p>
+            </div>
+          )}
 
-        <button
-          type="button"
-          className="mega-btn primary compact"
-          disabled={busy || !type}
-          onClick={() => void save()}
-        >
-          {busy ? progressLabel : 'Сохранить капсулу'}
-        </button>
+          {error && (
+            <p className="memory-gem-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="memory-gem-composer-footer">
+          <button
+            type="button"
+            className="mega-btn primary compact"
+            disabled={busy || !type}
+            onClick={() => void save()}
+          >
+            {busy ? progressLabel : 'Сохранить капсулу'}
+          </button>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
