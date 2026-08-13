@@ -138,7 +138,7 @@ export default function MemoryGemComposer({
           </div>
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn overlay-close"
             onClick={onClose}
             aria-label="Закрыть"
             disabled={busy}

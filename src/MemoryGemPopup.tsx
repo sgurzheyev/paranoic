@@ -56,7 +56,7 @@ export default function MemoryGemPopup({
               </p>
             </div>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <button type="button" className="icon-btn overlay-close" onClick={onClose} aria-label="Закрыть">
             <X size={18} />
           </button>
         </div>

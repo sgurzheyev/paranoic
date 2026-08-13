@@ -269,6 +269,16 @@ textarea {
   isolation: isolate;
 }
 
+.family-app-shell.is-dormant {
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.family-app-shell.is-active {
+  z-index: 4;
+}
+
 .family-map-stage {
   position: absolute;
   inset: 0;
@@ -3190,9 +3200,10 @@ textarea {
 
 .map-top-bar {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
+  column-gap: 0.5rem;
   min-height: 3.5rem;
   pointer-events: none;
   flex-shrink: 0;
@@ -3215,14 +3226,12 @@ textarea {
 
 .map-top-bar__left,
 .map-top-bar__right {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   z-index: 2;
-  max-width: calc(50% - 3.5rem);
+  max-width: 100%;
   pointer-events: none;
 }
 
@@ -3234,21 +3243,19 @@ textarea {
 }
 
 .map-top-bar__left {
-  left: 1rem;
+  justify-self: start;
+  justify-content: flex-start;
 }
 
 .map-top-bar__right {
-  right: 1rem;
+  justify-self: end;
   justify-content: flex-end;
 }
 
 @media (min-width: 640px) {
-  .map-top-bar__left {
-    left: 1.5rem;
-  }
-
+  .map-top-bar__left,
   .map-top-bar__right {
-    right: 1.5rem;
+    gap: 0.75rem;
   }
 }
 
@@ -3260,6 +3267,7 @@ textarea {
   flex: 0 0 auto;
   z-index: 3;
   pointer-events: none;
+  margin-left: 0.75rem;
 }
 
 .map-top-bar__center button,
@@ -3344,7 +3352,7 @@ textarea {
   gap: 20px;
   background: #03050a;
   opacity: 1;
-  transition: opacity 0.55s ease;
+  transition: opacity 0.18s ease;
   pointer-events: auto;
 }
 
@@ -3839,6 +3847,7 @@ textarea {
 }
 
 .memory-gem-card {
+  position: relative;
   width: min(100%, 420px);
   max-height: min(calc(100svh - 8rem - env(safe-area-inset-bottom, 0px)), 640px);
   display: flex;
@@ -3889,10 +3898,27 @@ textarea {
 }
 
 .memory-gem-head {
+  position: static;
+  z-index: 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  padding-right: 3.25rem;
+}
+
+.overlay-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 50;
+  pointer-events: auto;
+}
+
+.memory-gem-head-actions.overlay-close {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .memory-gem-head-actions {
@@ -4632,12 +4658,13 @@ textarea {
 }
 
 .memory-gem-drawer__glass {
+  position: relative;
   pointer-events: auto;
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 14px max(16px, env(safe-area-inset-bottom));
+  padding: 16px 14px calc(6.5rem + env(safe-area-inset-bottom, 0px));
   background: rgba(12, 14, 20, 0.55);
   border-right: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow:
@@ -4646,6 +4673,22 @@ textarea {
   backdrop-filter: blur(28px) saturate(1.2);
   -webkit-backdrop-filter: blur(28px) saturate(1.2);
   overflow: hidden;
+}
+
+.memory-gem-head-scrim {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 8rem;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.9),
+    rgba(0, 0, 0, 0.4),
+    transparent
+  );
+  pointer-events: none;
+  z-index: 1;
 }
 
 .memory-gem-drawer__media {
@@ -4958,6 +5001,7 @@ textarea {
 }
 
 .ai-bodyguard-card {
+  position: relative;
   width: 100%;
   max-width: 440px;
   max-height: min(78svh, 640px);
@@ -4981,7 +5025,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 16px 12px;
+  padding: 16px 52px 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 

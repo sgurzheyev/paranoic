@@ -265,6 +265,7 @@ export default function MemoryGemDrawer({
       }
     >
       <div className="memory-gem-drawer__glass">
+        <div className="memory-gem-head-scrim" aria-hidden />
         <div className="memory-gem-head">
           <div className="memory-gem-title-row">
             <span className="memory-gem-icon" aria-hidden>
@@ -278,7 +279,7 @@ export default function MemoryGemDrawer({
               </p>
             </div>
           </div>
-          <div className="memory-gem-head-actions">
+          <div className="memory-gem-head-actions overlay-close">
             {canDelete && (
               <button
                 type="button"

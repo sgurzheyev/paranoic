@@ -215,6 +215,11 @@ export default function App() {
     if (shouldSkipModeSelector()) return 'paranoic';
     return 'select';
   });
+  const [familyEntered, setFamilyEntered] = useState(
+    () =>
+      new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search).get('start') ===
+      'family'
+  );
   const [secretKey, setSecretKey] = useState<CryptoKey | null>(null);
   const [keyString, setKeyString] = useState('');
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('idle');
@@ -832,6 +837,10 @@ export default function App() {
     if (appMode !== 'select') return;
     clearLobbyErrors();
   }, [appMode, clearLobbyErrors]);
+
+  useEffect(() => {
+    if (appMode === 'family') setFamilyEntered(true);
+  }, [appMode]);
 
   useEffect(() => {
     peerMetaRef.current = {
@@ -3011,33 +3020,35 @@ export default function App() {
       ? ({ background: identity.themeFon } as React.CSSProperties)
       : undefined;
 
-  if (appMode === 'select') {
-    return (
-      <>
-        {incomingRing && (
-          <IncomingCallModal
-            caller={incomingRing.from}
-            onAccept={() => {
-              setAppMode('paranoic');
-              void acceptMediaCall();
-            }}
-            onReject={() => void declineMediaCall()}
+  return (
+    <>
+      {appMode === 'select' && (
+        <>
+          {incomingRing && (
+            <IncomingCallModal
+              caller={incomingRing.from}
+              onAccept={() => {
+                setAppMode('paranoic');
+                void acceptMediaCall();
+              }}
+              onReject={() => void declineMediaCall()}
+            />
+          )}
+          <ModeSelector
+            onSelect={(mode) => setAppMode(mode)}
+            onAccountRestored={handleAccountRestored}
+            onLobbyEnter={clearLobbyErrors}
           />
-        )}
-        <ModeSelector
-          onSelect={(mode) => setAppMode(mode)}
-          onAccountRestored={handleAccountRestored}
-          onLobbyEnter={clearLobbyErrors}
-        />
-      </>
-    );
-  }
-
-  if (appMode === 'family') {
-    return (
-      <div className="family-app-shell">
+        </>
+      )}
+      {familyEntered && (
+      <div
+        className={`family-app-shell${appMode === 'family' ? ' is-active' : ' is-dormant'}`}
+        aria-hidden={appMode !== 'family'}
+      >
         <div className="family-map-stage">
           <GlobeLobby
+            active={appMode === 'family'}
             onBack={() => goMainTab('contacts')}
             currentUserId={identity.id}
             people={mapPeople}
@@ -3145,10 +3156,8 @@ export default function App() {
           />
         )}
       </div>
-    );
-  }
-
-  return (
+      )}
+      {appMode === 'paranoic' && (
     <div
       className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}${
         showBottomNav ? ' has-liquid-nav' : ''
@@ -4050,5 +4059,7 @@ export default function App() {
         }}
       />
     </div>
+      )}
+    </>
   );
 }

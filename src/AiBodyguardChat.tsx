@@ -87,7 +87,7 @@ export default function AiBodyguardChat({
               <p>Облачный gpt-4o-mini · видит карту, контакты и статус связи</p>
             </div>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <button type="button" className="icon-btn overlay-close" onClick={onClose} aria-label="Закрыть">
             <X size={20} />
           </button>
         </div>

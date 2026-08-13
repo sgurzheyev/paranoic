@@ -94,6 +94,8 @@ type GlobeLobbyProps = {
   onCallAlertReveal?: () => void;
   /** Локальный identity.id — fallback, если Auth uid ещё не загружен. */
   currentUserId?: string;
+  /** Карта остаётся смонтированной вне Family Mode — resize при возврате. */
+  active?: boolean;
 };
 
 const FOCUS_ZOOM = 6.2;
@@ -237,6 +239,7 @@ export default function GlobeLobby({
   callAlertActive = false,
   onCallAlertReveal,
   currentUserId = '',
+  active = true,
 }: GlobeLobbyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -456,19 +459,17 @@ export default function GlobeLobby({
 
     map.on('load', () => {
       forceResize();
-      // Повторный resize после layout (flex/absolute могут дать размер с задержкой).
       requestAnimationFrame(() => {
         forceResize();
         requestAnimationFrame(forceResize);
       });
-      window.setTimeout(forceResize, 120);
-      window.setTimeout(forceResize, 400);
     });
 
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
       applyMapboxStandardNight(readyMap);
       forceResize();
       setMapReady(true);
+      setMapBootDone(true);
     });
 
     const ro =
@@ -501,16 +502,12 @@ export default function GlobeLobby({
       markersRef.current.clear();
       map.remove();
       mapRef.current = null;
-      setMapReady(false);
-      setMapBootDone(false);
-      setSplashGone(false);
     };
     // me только для стартового центра при первом маунте
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Тёмный splash + однократный flyTo к GPS при первой загрузке. */
-  const bootFinalizedRef = useRef(false);
+  /** Однократный flyTo к GPS — не блокирует splash. */
   useEffect(() => {
     if (!mapReady || tokenMissing) return;
     if (geoSource === 'pending') return;
@@ -519,56 +516,30 @@ export default function GlobeLobby({
     const map = mapRef.current;
     if (!map) return;
 
-    let cancelled = false;
-    let moveEndHandler: (() => void) | null = null;
-    let idleHandler: (() => void) | null = null;
-
-    const finalize = () => {
-      if (cancelled || bootFinalizedRef.current) return;
-      bootFinalizedRef.current = true;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (!cancelled) setMapBootDone(true);
-        });
-      });
-    };
-
-    const waitIdle = () => {
-      if (cancelled) return;
-      idleHandler = () => {
-        map.off('idle', idleHandler!);
-        finalize();
-      };
-      map.once('idle', idleHandler);
-    };
-
+    initialCenterAppliedRef.current = true;
     if (geoSource === 'gps') {
       const self = peopleRef.current.find((p) => p.isMe);
-      if (!self) return;
-
-      initialCenterAppliedRef.current = true;
-      moveEndHandler = () => {
-        map.off('moveend', moveEndHandler!);
-        waitIdle();
-      };
-      map.flyTo({
+      if (!self) {
+        initialCenterAppliedRef.current = false;
+        return;
+      }
+      map.easeTo({
         center: [self.lng, self.lat],
         zoom: 4.5,
-        speed: 0.9,
+        duration: 700,
         essential: true,
       });
-      map.once('moveend', moveEndHandler);
-    } else {
-      initialCenterAppliedRef.current = true;
-      waitIdle();
     }
-
-    return () => {
-      cancelled = true;
-      if (moveEndHandler) map.off('moveend', moveEndHandler);
-      if (idleHandler) map.off('idle', idleHandler);
-    };
   }, [mapReady, geoSource, me, tokenMissing]);
+
+  useEffect(() => {
+    if (!active || !mapReady) return;
+    try {
+      mapRef.current?.resize();
+    } catch {
+      /* */
+    }
+  }, [active, mapReady]);
 
   /** Синхронизация HTML-маркеров аватарок (только Family / контакты). */
   useEffect(() => {
@@ -938,7 +909,7 @@ export default function GlobeLobby({
       )}
 
       <div className="family-map-ui-layer pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="map-top-bar relative flex items-center justify-center px-4 py-4 sm:px-6">
+        <header className="map-top-bar relative px-4 py-4 sm:px-6">
           <div className="map-top-bar__left">
             <button
               type="button"
