@@ -285,6 +285,7 @@ textarea {
   height: 100vh;
   height: 100dvh;
   touch-action: none;
+  pointer-events: none;
 }
 
 .family-app-overlays {
@@ -3162,6 +3163,7 @@ textarea {
   opacity: 0;
   transition: opacity 0.45s ease;
   touch-action: none;
+  pointer-events: auto;
 }
 
 .family-mapbox.is-visible {
@@ -3188,6 +3190,22 @@ textarea {
   justify-content: center;
   min-height: 3.5rem;
   pointer-events: none;
+  flex-shrink: 0;
+}
+
+/* Full-screen map UI shell: transparent areas pass events to Mapbox. */
+.family-map-ui-layer {
+  pointer-events: none;
+}
+
+.family-map-ui-layer .map-ui-hit,
+.family-map-ui-layer button,
+.family-map-ui-layer a,
+.family-map-ui-layer input,
+.family-map-ui-layer label,
+.family-map-ui-layer [role='menu'],
+.family-map-ui-layer [role='dialog'] {
+  pointer-events: auto;
 }
 
 .map-top-bar__left,
@@ -3200,6 +3218,13 @@ textarea {
   gap: 0.75rem;
   z-index: 2;
   max-width: calc(50% - 3.5rem);
+  pointer-events: none;
+}
+
+.map-top-bar__left .map-ui-hit,
+.map-top-bar__left button,
+.map-top-bar__right .map-ui-hit,
+.map-top-bar__right button {
   pointer-events: auto;
 }
 
@@ -3229,6 +3254,12 @@ textarea {
   justify-content: center;
   flex: 0 0 auto;
   z-index: 3;
+  pointer-events: none;
+}
+
+.map-top-bar__center button,
+.map-top-bar__center .map-layers-menu,
+.map-top-bar__center label {
   pointer-events: auto;
 }
 
@@ -3359,9 +3390,43 @@ textarea {
 .map-chrome-bottom {
   padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
   pointer-events: none;
+  flex-shrink: 0;
 }
 
-.map-chrome-bottom > * {
+.map-ui-panel {
+  pointer-events: auto;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.map-ui-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.map-ui-toolbar button {
+  pointer-events: auto;
+}
+
+.map-ui-toolbar__cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.map-ui-target-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.map-ui-target-actions button {
   pointer-events: auto;
 }
 

@@ -903,7 +903,7 @@ export default function GlobeLobby({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
+      <div className="family-map-ui-layer pointer-events-none absolute inset-0 z-10 flex flex-col">
         <header className="map-top-bar relative flex items-center justify-center px-4 py-4 sm:px-6">
           <div className="map-top-bar__left">
             <button
@@ -992,7 +992,7 @@ export default function GlobeLobby({
         </header>
 
         {banned && (
-          <div className="map-banned-banner pointer-events-auto">
+          <div className="map-banned-banner map-ui-hit">
             Аккаунт заблокирован — звонки и чат с карты недоступны.
           </div>
         )}
@@ -1015,7 +1015,7 @@ export default function GlobeLobby({
 
         <div className="map-chrome-bottom mt-auto flex flex-col gap-3 px-4 sm:px-6">
           {isTargetingMode ? (
-            <div className="flex flex-col items-center gap-3">
+            <div className="map-ui-target-actions">
               <button
                 type="button"
                 className="gem-target-confirm"
@@ -1035,7 +1035,7 @@ export default function GlobeLobby({
           ) : (
             <>
           {contacts.length > 0 && showContacts && (
-            <div className="overflow-x-auto rounded-2xl border border-white/15 bg-white/[0.07] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-[18px]">
+            <div className="map-ui-panel overflow-x-auto rounded-2xl border border-white/15 bg-white/[0.07] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-[18px]">
               <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
                 Близкие
               </p>
@@ -1082,11 +1082,11 @@ export default function GlobeLobby({
             </div>
           )}
 
-          <div className="flex items-end justify-between gap-3">
-            <div className="flex flex-col gap-2">
+          <div className="map-ui-toolbar">
+            <div className="map-ui-toolbar__cluster">
               <button
                 type="button"
-                className="memory-gem-fab pointer-events-auto"
+                className="memory-gem-fab"
                 disabled={banned}
                 onClick={() => {
                   setLayersOpen(false);
@@ -1099,7 +1099,7 @@ export default function GlobeLobby({
               </button>
               <button
                 type="button"
-                className="ai-radar-fab pointer-events-auto"
+                className="ai-radar-fab"
                 onClick={() => {
                   setLayersOpen(false);
                   setAiOpen(true);
@@ -1111,7 +1111,7 @@ export default function GlobeLobby({
                 Секретарь
               </button>
             </div>
-            <div className="flex flex-col items-end gap-2">
+            <div className="map-ui-toolbar__cluster items-end">
               <button
                 type="button"
                 className="ar-fab"
@@ -1122,7 +1122,7 @@ export default function GlobeLobby({
                 <Box size={22} />
                 <span>AR</span>
               </button>
-              <div className="flex flex-col gap-2">
+              <div className="map-ui-toolbar__cluster items-end">
                 <button
                   type="button"
                   aria-label="Моё местоположение"
