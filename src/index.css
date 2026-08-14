@@ -1478,6 +1478,11 @@ textarea {
   border-color: rgba(52, 211, 153, 0.55);
 }
 
+.is-media-blocked {
+  opacity: 0.42;
+  filter: grayscale(0.25);
+}
+
 .media-note-overlay.cancel-armed .media-note-hint {
   color: #fecaca;
 }

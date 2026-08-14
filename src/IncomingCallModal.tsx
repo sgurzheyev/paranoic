@@ -1,9 +1,11 @@
 import { Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
 import { callerDisplayName, type CallerInfo } from './callSignaling';
+import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 
 type IncomingCallModalProps = {
   caller: CallerInfo;
+  mediaBlocked?: boolean;
   onAccept: () => void;
   onReject: () => void;
 };
@@ -11,6 +13,7 @@ type IncomingCallModalProps = {
 /** Полноэкранный Caller ID (Liquid Glass) для входящего звонка. */
 export default function IncomingCallModal({
   caller,
+  mediaBlocked = false,
   onAccept,
   onReject,
 }: IncomingCallModalProps) {
@@ -52,9 +55,10 @@ export default function IncomingCallModal({
           </button>
           <button
             type="button"
-            className="incoming-call-accept"
+            className={`incoming-call-accept${mediaBlocked ? ' is-media-blocked' : ''}`}
             onClick={onAccept}
             aria-label="Принять"
+            title={mediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
           >
             <Phone size={28} />
             <span>Принять</span>

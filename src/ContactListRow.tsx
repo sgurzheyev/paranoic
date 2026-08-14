@@ -2,6 +2,7 @@ import { Phone, UserCheck } from 'lucide-react';
 import Avatar from './Avatar';
 import type { Contact } from './contacts';
 import type { LastMessagePreview } from './storage';
+import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 
 type ContactListRowProps = {
   contact: Contact;
@@ -9,6 +10,7 @@ type ContactListRowProps = {
   trusted: boolean;
   avatarUrl?: string;
   disabled?: boolean;
+  mediaBlocked?: boolean;
   preview?: LastMessagePreview;
   onOpen: () => void;
   onCall: () => void;
@@ -21,6 +23,7 @@ export default function ContactListRow({
   trusted,
   avatarUrl,
   disabled = false,
+  mediaBlocked = false,
   preview,
   onOpen,
   onCall,
@@ -62,8 +65,10 @@ export default function ContactListRow({
       </button>
       <button
         type="button"
-        className="contact-action-btn contact-action-btn--call"
+        className={`contact-action-btn contact-action-btn--call${mediaBlocked ? ' is-media-blocked' : ''}`}
         disabled={disabled}
+        aria-disabled={disabled || mediaBlocked}
+        title={mediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
         aria-label={`Позвонить ${contact.name}`}
         onClick={(e) => {
           e.stopPropagation();

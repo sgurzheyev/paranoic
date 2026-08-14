@@ -2,6 +2,13 @@
 
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import {
+  ensureCallMediaAccess,
+  getUserMediaForCall,
+  isMediaAccessError,
+  mediaErrorMessage,
+  toMediaAccessError,
+} from './mediaPermissions';
 
 export type P2PStatus =
   | 'idle'
@@ -800,6 +807,13 @@ export class P2PConnection {
       throw new Error('Сначала ответьте на входящий звонок');
     }
 
+    try {
+      await ensureCallMediaAccess();
+    } catch (e) {
+      this.setCallState('idle');
+      throw toMediaAccessError(e);
+    }
+
     this.setSignalingStatus('');
     this.setCallState('calling');
     const msgId = crypto.randomUUID();
@@ -875,7 +889,7 @@ export class P2PConnection {
       } catch {
         /* */
       }
-      throw e;
+      throw isMediaAccessError(e) ? toMediaAccessError(e) : e;
     }
   }
 
@@ -963,7 +977,9 @@ export class P2PConnection {
       this.handlers.onRemoteStream?.(this.remoteStream);
       return stream;
     } catch (e) {
-      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось обновить камеру'));
+      this.handlers.onError?.(
+        new Error(mediaErrorMessage(e, 'Не удалось обновить камеру'))
+      );
       return this.localStream;
     } finally {
       this.refreshingMedia = false;
@@ -1073,7 +1089,9 @@ export class P2PConnection {
         cam = stream.getVideoTracks()[0] ?? null;
         this.cameraVideoTrack = cam;
       } catch (e) {
-        this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось вернуть камеру'));
+        this.handlers.onError?.(
+          new Error(mediaErrorMessage(e, 'Не удалось вернуть камеру'))
+        );
         return;
       }
     } else {
@@ -1592,10 +1610,15 @@ export class P2PConnection {
     level: Exclude<VideoAdaptLevel, 'audio-only'> = 'high'
   ): Promise<MediaStream> {
     const prev = this.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: MEDIA_CONSTRAINTS.audio,
-      video: VIDEO_LEVEL_CONSTRAINTS[level],
-    });
+    let stream: MediaStream;
+    try {
+      stream = await getUserMediaForCall({
+        audio: MEDIA_CONSTRAINTS.audio,
+        video: VIDEO_LEVEL_CONSTRAINTS[level],
+      });
+    } catch (e) {
+      throw toMediaAccessError(e);
+    }
     this.localStream = stream;
     this.cameraVideoTrack = stream.getVideoTracks()[0] ?? null;
     prev?.getTracks().forEach((t) => {
@@ -1717,7 +1740,9 @@ export class P2PConnection {
       this.stopLocalMedia();
       this.handlers.onLocalStream?.(null);
       this.setCallState('idle');
-      this.handlers.onError?.(e instanceof Error ? e : new Error('Не удалось начать звонок'));
+      this.handlers.onError?.(
+        new Error(mediaErrorMessage(e, 'Не удалось начать звонок'))
+      );
     }
   }
 

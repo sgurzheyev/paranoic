@@ -1,5 +1,7 @@
 /** Запись видео-кружочков и голосовых заметок (MediaRecorder). */
 
+import { getUserMediaStrict, toMediaAccessError } from './mediaPermissions';
+
 export type NoteMode = 'voice' | 'video';
 export type MediaKind = 'file' | 'circle' | 'voice';
 
@@ -43,29 +45,33 @@ export function extensionForMime(mime: string): string {
 }
 
 export async function openNoteStream(mode: NoteMode): Promise<MediaStream> {
-  if (mode === 'video') {
-    return navigator.mediaDevices.getUserMedia({
+  try {
+    if (mode === 'video') {
+      return await getUserMediaStrict({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: {
+          facingMode: 'user',
+          width: { ideal: 480 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 24, max: 30 },
+        },
+      });
+    }
+    return await getUserMediaStrict({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video: {
-        facingMode: 'user',
-        width: { ideal: 480 },
-        height: { ideal: 480 },
-        frameRate: { ideal: 24, max: 30 },
-      },
+      video: false,
     });
+  } catch (e) {
+    throw toMediaAccessError(e);
   }
-  return navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-    video: false,
-  });
 }
 
 export function stopStream(stream: MediaStream | null | undefined): void {

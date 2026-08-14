@@ -26,6 +26,7 @@ import {
   whenMapStyleReady,
 } from './lib/mapbox';
 import ParanoicLogo from './ParanoicLogo';
+import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 import { ANTARCTICA, type PresenceUser } from './presence';
 import {
   bindGemInteractions,
@@ -92,6 +93,8 @@ type GlobeLobbyProps = {
   /** Индикатор ошибки дозвона (toast по клику). */
   callAlertActive?: boolean;
   onCallAlertReveal?: () => void;
+  /** Нет микрофона/API — кнопка «Позвонить» приглушена. */
+  callMediaBlocked?: boolean;
   /** Локальный identity.id — fallback, если Auth uid ещё не загружен. */
   currentUserId?: string;
   /** Карта остаётся смонтированной вне Family Mode — resize при возврате. */
@@ -238,6 +241,7 @@ export default function GlobeLobby({
   onGhostModeChange,
   callAlertActive = false,
   onCallAlertReveal,
+  callMediaBlocked = false,
   currentUserId = '',
   active = true,
 }: GlobeLobbyProps) {
@@ -1357,7 +1361,11 @@ export default function GlobeLobby({
               <button
                 type="button"
                 onClick={() => onCallUser(selected)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15"
+                title={callMediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
+                aria-disabled={callMediaBlocked}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15${
+                  callMediaBlocked ? ' is-media-blocked' : ''
+                }`}
               >
                 <Phone size={20} /> Позвонить
               </button>

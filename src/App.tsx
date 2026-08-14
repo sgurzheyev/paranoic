@@ -37,6 +37,12 @@ import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
 import GuestDirectCall from './GuestDirectCall';
 import ParanoicLogo from './ParanoicLogo';
 import ChatRecordButton from './ChatRecordButton';
+import {
+  MEDIA_ACCESS_DENIED_MESSAGE,
+  isCallMediaBlocked,
+  mediaErrorMessage,
+  useMediaDevicePresence,
+} from './mediaPermissions';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
   blockUser,
@@ -187,6 +193,8 @@ export default function App() {
     setSignalingStatus: mirrorSignalingStatus,
     hangUpSession,
   } = useP2P();
+  const mediaPresence = useMediaDevicePresence();
+  const callMediaBlocked = isCallMediaBlocked(mediaPresence);
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [appMode, setAppMode] = useState<AppMode>(() => {
@@ -1215,8 +1223,10 @@ export default function App() {
                   setCallExpanded(false);
                   setScreen('chat');
                 } catch (e) {
+                  pendingStartCallRef.current = false;
                   clearCallSessionResidue();
-                  setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
+                  setCallExpanded(false);
+                  setError(mediaErrorMessage(e, 'Не удалось начать звонок'));
                 }
               })();
               }
@@ -1277,7 +1287,11 @@ export default function App() {
                   setCallExpanded(false);
                   setScreen('chat');
                 } catch (e) {
-                  setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+                  pendingRingAcceptRef.current = false;
+                  pendingAcceptCallerRef.current = null;
+                  setIncomingRing(null);
+                  setCallExpanded(false);
+                  setError(mediaErrorMessage(e, 'Не удалось принять звонок'));
                 }
               })();
             }
@@ -1393,7 +1407,11 @@ export default function App() {
                 setCallExpanded(false);
                 setScreen('chat');
               } catch (e) {
-                setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+                pendingRingAcceptRef.current = false;
+                pendingAcceptCallerRef.current = null;
+                setIncomingRing(null);
+                setCallExpanded(false);
+                setError(mediaErrorMessage(e, 'Не удалось принять звонок'));
               }
             })();
           }
@@ -1917,6 +1935,10 @@ export default function App() {
     const liveConnected = isLiveConnectedTo(targetUserId);
 
     if (opts?.startCall) {
+      if (callMediaBlocked) {
+        setError(MEDIA_ACCESS_DENIED_MESSAGE);
+        return;
+      }
       pendingStartCallRef.current = true;
       if (liveConnected) {
         setAppMode('paranoic');
@@ -1945,6 +1967,10 @@ export default function App() {
   };
 
   const quickCallContact = (c: Contact) => {
+    if (callMediaBlocked) {
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
     void connectToLocalContact(c, { startCall: true, openChat: false });
   };
 
@@ -2017,6 +2043,10 @@ export default function App() {
     }
 
     if (opts?.startCall) {
+      if (callMediaBlocked) {
+        setError(MEDIA_ACCESS_DENIED_MESSAGE);
+        return;
+      }
       pendingStartCallRef.current = true;
     }
 
@@ -2081,6 +2111,10 @@ export default function App() {
     resetCallFailureUi();
     setError('');
     void ensureNotifyPermission();
+    if (callMediaBlocked) {
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
       return;
@@ -2106,6 +2140,11 @@ export default function App() {
     void ensureNotifyPermission();
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+      return;
+    }
+    if (callMediaBlocked) {
+      pendingStartCallRef.current = false;
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
     }
     try {
@@ -2209,8 +2248,10 @@ export default function App() {
       setCallExpanded(true);
       setScreen('chat');
     } catch (e) {
+      pendingStartCallRef.current = false;
       clearCallSessionResidue();
-      setError(e instanceof Error ? e.message : 'Не удалось начать звонок');
+      setCallExpanded(false);
+      setError(mediaErrorMessage(e, 'Не удалось начать звонок'));
     }
   };
 
@@ -2228,6 +2269,19 @@ export default function App() {
     stopRingtone();
     closeActiveNotification();
     void ensureNotifyPermission();
+    if (callMediaBlocked) {
+      pendingRingAcceptRef.current = false;
+      pendingAcceptCallerRef.current = null;
+      setIncomingRing(null);
+      setCallExpanded(false);
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      try {
+        await ensureP2P().declineCall();
+      } catch {
+        /* */
+      }
+      return;
+    }
     const ring = incomingRing;
     if (ring?.callId) {
       void updateCallSessionStatus(ring.callId, 'accepted');
@@ -2274,7 +2328,9 @@ export default function App() {
     } catch (e) {
       pendingRingAcceptRef.current = false;
       pendingAcceptCallerRef.current = null;
-      setError(e instanceof Error ? e.message : 'Не удалось принять звонок');
+      setIncomingRing(null);
+      setIncomingConnection(false);
+      setError(mediaErrorMessage(e, 'Не удалось принять звонок'));
       setCallExpanded(false);
       setScreen('chat');
     }
@@ -2853,6 +2909,7 @@ export default function App() {
           {incomingRing && (
             <IncomingCallModal
               caller={incomingRing.from}
+              mediaBlocked={callMediaBlocked}
               onAccept={() => {
                 setAppMode('paranoic');
                 void acceptMediaCall();
@@ -2882,6 +2939,7 @@ export default function App() {
               settings.ghostMode ? 'antarctica' : geo ? geo.source : 'pending'
             }
             callAlertActive={Boolean(callAlert)}
+            callMediaBlocked={callMediaBlocked}
             onCallAlertReveal={() => {
               if (callAlert) setCallAlertToastOpen(true);
             }}
@@ -2909,6 +2967,10 @@ export default function App() {
               if (isBannedRef.current) {
                 setError('Ваш аккаунт заблокирован. Звонки недоступны.');
                 setAppMode('paranoic');
+                return;
+              }
+              if (callMediaBlocked) {
+                setError(MEDIA_ACCESS_DENIED_MESSAGE);
                 return;
               }
               pendingStartCallRef.current = true;
@@ -2975,6 +3037,7 @@ export default function App() {
           {incomingRing && (
             <IncomingCallModal
               caller={incomingRing.from}
+              mediaBlocked={callMediaBlocked}
               onAccept={() => {
                 setAppMode('paranoic');
                 void acceptMediaCall();
@@ -3092,6 +3155,7 @@ export default function App() {
                 callState={callState}
                 connectionStatus={p2pStatus}
                 failure={callFailKind}
+                mediaBlocked={callMediaBlocked}
                 onCall={() => void guestCallHost()}
                 onCancel={() => void cancelCall()}
                 onBack={leaveGuestUi}
@@ -3112,8 +3176,16 @@ export default function App() {
                         <div className="mega-grid" style={{ marginTop: 12 }}>
                           <button
                             type="button"
-                            className="mega-btn call"
-                            onClick={() => void startCall()}
+                            className={`mega-btn call${callMediaBlocked ? ' is-media-blocked' : ''}`}
+                            title={callMediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
+                            aria-disabled={callMediaBlocked}
+                            onClick={() => {
+                              if (callMediaBlocked) {
+                                setError(MEDIA_ACCESS_DENIED_MESSAGE);
+                                return;
+                              }
+                              void startCall();
+                            }}
                           >
                             <Phone size={28} />
                             Позвонить
@@ -3160,6 +3232,7 @@ export default function App() {
                               }
                               onOpen={() => quickChatContact(c)}
                               onCall={() => quickCallContact(c)}
+                              mediaBlocked={callMediaBlocked}
                             />
                           );
                         })}
@@ -3202,6 +3275,7 @@ export default function App() {
                               }
                               onOpen={() => quickChatContact(c)}
                               onCall={() => quickCallContact(c)}
+                              mediaBlocked={callMediaBlocked}
                             />
                           );
                         })}
@@ -3503,10 +3577,18 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="icon-btn"
-                onClick={() => void startCall()}
+                className={`icon-btn${callMediaBlocked ? ' is-media-blocked' : ''}`}
+                onClick={() => {
+                  if (callMediaBlocked) {
+                    setError(MEDIA_ACCESS_DENIED_MESSAGE);
+                    return;
+                  }
+                  void startCall();
+                }}
                 aria-label="Позвонить"
+                title={callMediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
                 disabled={!connected}
+                aria-disabled={!connected || callMediaBlocked}
               >
                 <Phone size={20} />
               </button>
@@ -3813,6 +3895,7 @@ export default function App() {
       {incomingRing && (
         <IncomingCallModal
           caller={incomingRing.from}
+          mediaBlocked={callMediaBlocked}
           onAccept={() => void acceptMediaCall()}
           onReject={() => void declineMediaCall()}
         />

@@ -7,6 +7,12 @@ import {
   stopStream,
   type NoteMode,
 } from './mediaNotes';
+import {
+  MEDIA_ACCESS_DENIED_MESSAGE,
+  isRecordMediaBlocked,
+  mediaErrorMessage,
+  useMediaDevicePresence,
+} from './mediaPermissions';
 
 const HOLD_MS = 160;
 const LOCK_DY = 56;
@@ -41,6 +47,8 @@ export default function ChatRecordButton({
   onSendRef.current = onSend;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const mediaPresence = useMediaDevicePresence();
+  const recordBlocked = isRecordMediaBlocked(mediaPresence, false);
 
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerIdRef = useRef<number | null>(null);
@@ -209,13 +217,7 @@ export default function ChatRecordButton({
       setRecording(null);
       unbindWindowListeners();
       pointerIdRef.current = null;
-      onErrorRef.current?.(
-        e instanceof Error
-          ? e.message
-          : currentMode === 'video'
-            ? 'Нет доступа к камере'
-            : 'Нет доступа к микрофону'
-      );
+      onErrorRef.current?.(mediaErrorMessage(e, MEDIA_ACCESS_DENIED_MESSAGE));
     }
   }, [cleanupSession, unbindWindowListeners]);
 
@@ -307,6 +309,11 @@ export default function ChatRecordButton({
 
   const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled || e.button !== 0) return;
+    if (recordBlocked) {
+      e.preventDefault();
+      onErrorRef.current?.(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
     if (lockedRef.current) return;
     e.preventDefault();
     e.stopPropagation();
@@ -330,8 +337,10 @@ export default function ChatRecordButton({
         type="button"
         className={`chat-record-btn${recording ? ' recording' : ''}${
           cancelArmed ? ' cancel-armed' : ''
-        }${locked ? ' locked' : ''}`}
+        }${locked ? ' locked' : ''}${recordBlocked ? ' is-media-blocked' : ''}`}
         disabled={disabled}
+        aria-disabled={disabled || recordBlocked}
+        title={recordBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
         aria-label={
           mode === 'video'
             ? 'Тап — голос, удержание — видео'

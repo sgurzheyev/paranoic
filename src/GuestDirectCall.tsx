@@ -2,6 +2,7 @@ import type { MouseEvent } from 'react';
 import { ArrowLeft, Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
 import type { CallFailKind, CallState, P2PStatus, SignalingDebugStatus } from './p2p';
+import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 
 type GuestDirectCallProps = {
   hostName: string;
@@ -15,6 +16,7 @@ type GuestDirectCallProps = {
   /** P2P status — чтобы не крутить «Подключаемся» после failed. */
   connectionStatus?: P2PStatus;
   failure?: CallFailKind | null;
+  mediaBlocked?: boolean;
   onCall: () => void;
   onCancel: () => void;
   onBack: () => void;
@@ -41,6 +43,7 @@ export default function GuestDirectCall({
   callState,
   connectionStatus = 'idle',
   failure = null,
+  mediaBlocked = false,
   onCall,
   onCancel,
   onBack,
@@ -74,6 +77,10 @@ export default function GuestDirectCall({
   const handleMainClick = () => {
     if (failed) {
       onBack();
+      return;
+    }
+    if (mediaBlocked) {
+      onCall();
       return;
     }
     if (!inCall && !calling && !waiting) onCall();
@@ -117,9 +124,10 @@ export default function GuestDirectCall({
           type="button"
           className={`guest-direct-call-btn${waiting && !connected ? ' is-waiting' : ''}${
             calling ? ' is-active' : ''
-          }${failed ? ' is-failed' : ''}`}
+          }${failed ? ' is-failed' : ''}${mediaBlocked && !failed ? ' is-media-blocked' : ''}`}
           onClick={handleMainClick}
           disabled={inCall || isCancellable}
+          title={mediaBlocked && !failed ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
           aria-label={failed ? 'Назад' : label}
         >
           <span className="guest-direct-call-pulse" aria-hidden />
