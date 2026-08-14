@@ -177,23 +177,30 @@ export const WAIT_FOR_PEER_TIMEOUT_MESSAGE =
 const WAIT_FOR_PEER_TIMEOUT_ERROR = WAIT_FOR_PEER_TIMEOUT_MESSAGE;
 
 /** Ошибки дозвона / обрыва — на карте показываем индикатор, не авто-toast. */
-export function isCallFailureUserAlert(message: string): boolean {
+export type CallFailKind = 'offline' | 'declined';
+
+export function classifyCallFailure(message: string): CallFailKind | null {
   const m = message.trim();
-  if (!m) return false;
+  if (!m) return null;
+  if (m === 'Вызов отклонён' || m === 'Звонок отклонён') return 'declined';
   if (
     m === WAIT_FOR_PEER_TIMEOUT_MESSAGE ||
     m === ICE_CONNECT_TIMEOUT_ERROR ||
-    m === 'Связь оборвалась. Переподключаемся…' ||
     m === 'Не удалось связаться' ||
-    m === 'Вызов отклонён' ||
-    m === 'Звонок отклонён' ||
-    m === 'Сигналинг комнаты оборвался. Перезайдите по ссылке.'
+    m === 'Сигналинг комнаты оборвался. Перезайдите по ссылке.' ||
+    /не ответил|таймаут соединения|хост офлайн/i.test(m)
   ) {
-    return true;
+    return 'offline';
   }
-  return /не ответил|оборвал|таймаут соединения|не удалось начать звонок|не удалось принять звонок/i.test(
-    m
-  );
+  return null;
+}
+
+export function isCallFailureUserAlert(message: string): boolean {
+  const m = message.trim();
+  if (!m) return false;
+  if (classifyCallFailure(m)) return true;
+  if (m === 'Связь оборвалась. Переподключаемся…') return true;
+  return /оборвал|не удалось начать звонок|не удалось принять звонок/i.test(m);
 }
 const MEDIA_WATCH_MS = 2_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
@@ -793,6 +800,7 @@ export class P2PConnection {
       throw new Error('Сначала ответьте на входящий звонок');
     }
 
+    this.setSignalingStatus('');
     this.setCallState('calling');
     const msgId = crypto.randomUUID();
     this.sendCallControl({ t: 'call-invite', msgId });
@@ -1438,10 +1446,9 @@ export class P2PConnection {
     if (this.isHost) return;
 
     this.clearJoinRetry();
-    this.setSignalingStatus('Вызов отклонён');
+    this.setSignalingStatus('');
     this.setStatus('failed');
     this.handlers.onConnectionDeclined?.();
-    this.handlers.onError?.(new Error('Вызов отклонён'));
   }
 
   private async startAsOfferer(): Promise<void> {

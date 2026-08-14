@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, Mic, MicOff, Paperclip, PhoneIncoming, PhoneOff } from 'lucide-react';
-import type { CallState, NetworkQuality } from './p2p';
+import type { CallFailKind, CallState, NetworkQuality } from './p2p';
 
 type CallOverlayProps = {
   callState: CallState;
@@ -18,6 +18,7 @@ type CallOverlayProps = {
   micMuted?: boolean;
   onToggleMute?: () => void;
   onAttachFile?: () => void;
+  failure?: CallFailKind | null;
 };
 
 const CONTROLS_HIDE_MS = 4000;
@@ -99,6 +100,7 @@ export default function CallOverlay({
   micMuted = false,
   onToggleMute,
   onAttachFile,
+  failure = null,
 }: CallOverlayProps) {
   const [mainIsRemote, setMainIsRemote] = useState(true);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -132,7 +134,36 @@ export default function CallOverlay({
     setControlsVisible(true);
   }, []);
 
-  if (callState === 'idle') return null;
+  if (callState === 'idle' && !failure) return null;
+
+  if (failure) {
+    return (
+      <div
+        className="call-overlay expanded ringing"
+        role="dialog"
+        aria-label={failure === 'declined' ? 'Вызов отклонён' : 'Не удалось связаться'}
+      >
+        <div className="incoming-media-card call-overlay-ring">
+          <div className="avatar lg" style={{ background: 'var(--call)' }}>
+            <PhoneOff size={28} />
+          </div>
+          <h2 className="incoming-media-title">
+            {failure === 'declined' ? 'Собеседник отклонил вызов' : 'Не удалось связаться'}
+          </h2>
+          <p className="incoming-media-sub">
+            {failure === 'declined'
+              ? peerLabel
+              : 'Хост офлайн или ссылка неверна. Проверьте никнейм / ID.'}
+          </p>
+          <div className="incoming-call-actions row">
+            <button type="button" className="decline-call-btn large" onClick={onHangUp}>
+              Закрыть
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const statusText =
     callState === 'calling'

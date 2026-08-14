@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react';
 import { ArrowLeft, Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
-import type { CallState, P2PStatus } from './p2p';
+import type { CallFailKind, CallState, P2PStatus, SignalingDebugStatus } from './p2p';
 
 type GuestDirectCallProps = {
   hostName: string;
@@ -14,10 +14,20 @@ type GuestDirectCallProps = {
   callState: CallState;
   /** P2P status — чтобы не крутить «Подключаемся» после failed. */
   connectionStatus?: P2PStatus;
+  failure?: CallFailKind | null;
   onCall: () => void;
   onCancel: () => void;
   onBack: () => void;
 };
+
+const CONNECTING_SIGNALS = new Set<SignalingDebugStatus | string>([
+  'Подключаемся к сокетам...',
+  'Ожидаем собеседника...',
+  'Входящий вызов...',
+  'Собеседник найден, генерируем ключи...',
+  'Обмен маршрутами (ICE)...',
+  'Связь установлена!',
+]);
 
 /** Direct Call Mode — гость по магической ссылке, один большой CTA. */
 export default function GuestDirectCall({
@@ -30,33 +40,35 @@ export default function GuestDirectCall({
   signalingStatus,
   callState,
   connectionStatus = 'idle',
+  failure = null,
   onCall,
   onCancel,
   onBack,
 }: GuestDirectCallProps) {
   const inCall = callState === 'in-call';
   const calling = callState === 'calling';
-  const failed = connectionStatus === 'failed' || connectionStatus === 'disconnected';
+  const failed = Boolean(failure);
   const waitingConnection =
     connectionStatus === 'connecting' ||
     connectionStatus === 'creating-offer' ||
     connectionStatus === 'waiting-answer';
   const waiting =
     !failed &&
-    (joining ||
-      waitingConnection ||
-      Boolean(signalingStatus) ||
-      (!connected && !calling && !inCall));
+    (joining || waitingConnection || CONNECTING_SIGNALS.has(signalingStatus));
   const isCancellable = !inCall && !failed && (waiting || calling);
 
   const label = failed
-    ? 'Не удалось связаться'
+    ? failure === 'declined'
+      ? 'Собеседник отклонил вызов'
+      : 'Не удалось связаться'
     : inCall
       ? 'Разговор идёт…'
       : calling
         ? 'Звоним…'
         : waiting
-          ? signalingStatus || 'Подключаемся…'
+          ? CONNECTING_SIGNALS.has(signalingStatus)
+            ? signalingStatus
+            : 'Подключаемся…'
           : `ПОЗВОНИТЬ ${hostName.toUpperCase()}`;
 
   const handleMainClick = () => {
@@ -90,13 +102,15 @@ export default function GuestDirectCall({
         <p className="guest-direct-eyebrow">Прямой звонок</p>
         <h1 className="guest-direct-name">{hostName}</h1>
         <p className="guest-direct-hint">
-          {failed
-            ? 'Хост офлайн или ссылка неверна. Вернитесь и проверьте никнейм / ID.'
-            : connected
-              ? `Вы подключены к ${hostName}. Нажмите, чтобы позвонить.`
-              : waiting
-                ? `Вы подключаетесь к ${hostName}…`
-                : `Вы подключаетесь к ${hostName}`}
+          {failure === 'declined'
+            ? 'Собеседник отклонил вызов.'
+            : failure === 'offline'
+              ? 'Хост офлайн или ссылка неверна. Вернитесь и проверьте никнейм / ID.'
+              : connected
+                ? `Вы подключены к ${hostName}. Нажмите, чтобы позвонить.`
+                : waiting
+                  ? `Вы подключаетесь к ${hostName}…`
+                  : `Вы подключаетесь к ${hostName}`}
         </p>
 
         <button

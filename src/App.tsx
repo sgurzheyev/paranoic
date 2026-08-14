@@ -75,7 +75,9 @@ import {
 } from './crypto';
 import {
   P2PConnection,
+  classifyCallFailure,
   isCallFailureUserAlert,
+  type CallFailKind,
   type CallState,
   type NetworkQuality,
   type P2PStatus,
@@ -219,6 +221,7 @@ export default function App() {
   /** Family Mode: ошибка дозвона — индикатор в шапке карты, toast только по клику. */
   const [callAlert, setCallAlert] = useState('');
   const [callAlertToastOpen, setCallAlertToastOpen] = useState(false);
+  const [callFailKind, setCallFailKind] = useState<CallFailKind | null>(null);
   /** ICE / сеть просела — компактный toast, не блокирует UI. */
   const [linkWarning, setLinkWarning] = useState('');
   const [magicLink, setMagicLink] = useState(() =>
@@ -789,7 +792,17 @@ export default function App() {
     setCallAlert('');
     setCallAlertToastOpen(false);
     setLinkWarning('');
+    setCallFailKind(null);
   }, []);
+
+  const resetCallFailureUi = useCallback(() => {
+    setCallFailKind(null);
+    setError((prev) => (classifyCallFailure(prev) ? '' : prev));
+    setCallAlert('');
+    setCallAlertToastOpen(false);
+    setSignalingStatus('');
+    mirrorSignalingStatus('');
+  }, [mirrorSignalingStatus]);
 
   /** ModeSelector / логin: сброс до отрисовки + блок повторных P2P toast. */
   useLayoutEffect(() => {
@@ -907,7 +920,8 @@ export default function App() {
         stopRingtone();
         closeActiveNotification();
         outboundCallIdRef.current = null;
-        setError('Звонок отклонён');
+        setCallFailKind('declined');
+        setError('');
         void p2pRef.current?.hangUp();
         setCallState('idle');
       },
@@ -1153,6 +1167,7 @@ export default function App() {
             setLinkWarning('');
             setCallAlert('');
             setCallAlertToastOpen(false);
+            setCallFailKind(null);
             setIncomingConnection(false);
             setIncomingRing(null);
             stopRingtone();
@@ -1227,6 +1242,9 @@ export default function App() {
         onCallState: (state) => {
           setCallState(state);
           mirrorCallState(state);
+          if (state === 'calling' || state === 'in-call' || state === 'ringing') {
+            setCallFailKind(null);
+          }
           if (state === 'ringing') {
             setCallExpanded(true);
             const meta = peerMetaRef.current;
@@ -1290,6 +1308,7 @@ export default function App() {
         onScreenShare: (active) => setScreenSharing(active),
         onIncomingConnection: (info) => {
           setError('');
+          setCallFailKind(null);
           // Хост на стартовом экране — сразу в Paranoic, чтобы handshake был виден.
           setAppMode((m) => (m === 'select' ? 'paranoic' : m));
           console.log('[P2P_DEBUG] onIncomingConnection — auto-accept P2P link', info);
@@ -1336,7 +1355,8 @@ export default function App() {
         onConnectionDeclined: () => {
           setIncomingConnection(false);
           setIncomingRing(null);
-          setError('Вызов отклонён');
+          setCallFailKind('declined');
+          setError('');
           stopRingtone();
           closeActiveNotification();
         },
@@ -1379,8 +1399,9 @@ export default function App() {
           }
         },
         onCallDeclined: () => {
-          setError('Звонок отклонён');
-          setCallExpanded(false);
+          setCallFailKind('declined');
+          setError('');
+          setCallExpanded(true);
           setIncomingRing(null);
           outboundCallIdRef.current = null;
           stopRingtone();
@@ -1590,6 +1611,15 @@ export default function App() {
         onError: (err) => {
           if (suppressGlobalErrorsRef.current) return;
           const msg = err.message;
+          const kind = classifyCallFailure(msg);
+          if (kind) {
+            setCallFailKind(kind);
+            if (appModeRef.current === 'family') {
+              setCallAlert(msg);
+              setCallAlertToastOpen(false);
+            }
+            return;
+          }
           if (appModeRef.current === 'family' && isCallFailureUserAlert(msg)) {
             setCallAlert(msg);
             setCallAlertToastOpen(false);
@@ -2031,6 +2061,7 @@ export default function App() {
 
   /** Guest UI «Назад»: если уже на связи — только спрятать UI; иначе отменить join. */
   const leaveGuestUi = () => {
+    resetCallFailureUi();
     const live = getP2PSession();
     const connectedNow = live?.currentStatus === 'connected';
     const inCall =
@@ -2047,6 +2078,7 @@ export default function App() {
   };
 
   const guestCallHost = async () => {
+    resetCallFailureUi();
     setError('');
     void ensureNotifyPermission();
     if (isBannedRef.current) {
@@ -2068,6 +2100,7 @@ export default function App() {
   };
 
   const startCall = async () => {
+    resetCallFailureUi();
     setError('');
     setMicMuted(false);
     void ensureNotifyPermission();
@@ -2190,6 +2223,7 @@ export default function App() {
   };
 
   const acceptMediaCall = async () => {
+    resetCallFailureUi();
     setError('');
     stopRingtone();
     closeActiveNotification();
@@ -2315,6 +2349,7 @@ export default function App() {
     mirrorSignalingStatus('');
     setCallState('idle');
     setP2pStatus('idle');
+    setCallFailKind(null);
 
     if (guestPeerIdRef.current) {
       clearMagicParamFromUrl();
@@ -2736,9 +2771,14 @@ export default function App() {
 
   const connected = p2pStatus === 'connected';
   const callLive = callState === 'calling' || callState === 'in-call';
-  const showCallBanner = callLive && !callExpanded && !incomingRing;
+  const showCallBanner = callLive && !callExpanded && !incomingRing && !callFailKind;
+  const showErrorToast = Boolean(error) && !classifyCallFailure(error);
+  const guestCallScreen = Boolean(guestPeerId) && !connected;
+  const overlayFailure = guestCallScreen ? null : callFailKind;
   const callUiOpen =
-    callExpanded || (callState === 'ringing' && Boolean(incomingRing));
+    callExpanded ||
+    Boolean(overlayFailure) ||
+    (callState === 'ringing' && Boolean(incomingRing));
   /** Bottom nav: на главных вкладках; скрыт в открытом чате, звонке и guest direct. */
   const showBottomNav =
     screen !== 'chat' &&
@@ -2892,7 +2932,7 @@ export default function App() {
             }}
             onHangUp={() => void cancelCall()}
           />
-          {error && (
+          {showErrorToast && (
             <div
               className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
               role="alert"
@@ -3018,7 +3058,7 @@ export default function App() {
         </div>
       )}
 
-      {error && (
+      {showErrorToast && (
         <div className="banner error" role="alert">
           {error}
           <button type="button" className="icon-btn" onClick={() => setError('')} aria-label="Закрыть">
@@ -3051,6 +3091,7 @@ export default function App() {
                 signalingStatus={signalingStatus}
                 callState={callState}
                 connectionStatus={p2pStatus}
+                failure={callFailKind}
                 onCall={() => void guestCallHost()}
                 onCancel={() => void cancelCall()}
                 onBack={leaveGuestUi}
@@ -3806,6 +3847,7 @@ export default function App() {
         micMuted={micMuted}
         onToggleMute={toggleCallMic}
         onAttachFile={() => fileInputRef.current?.click()}
+        failure={overlayFailure}
       />
       )}
 
