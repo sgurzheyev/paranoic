@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, Mic, MicOff, Paperclip, PhoneIncoming, PhoneOff } from 'lucide-react';
+import { ChevronDown, Mic, MicOff, Paperclip, Phone, PhoneIncoming, PhoneOff } from 'lucide-react';
 import type { CallFailKind, CallState, NetworkQuality } from './p2p';
 
 type CallOverlayProps = {
@@ -32,21 +32,17 @@ export function formatCallClock(elapsedMs: number): string {
 
 type ActiveCallBannerProps = {
   visible: boolean;
-  peerLabel: string;
   callState: CallState;
   startedAt: number | null;
   onOpen: () => void;
-  onHangUp: () => void;
 };
 
-/** Глобальная полоска активного звонка — только когда соединение реально идёт. */
+/** Глобальная полоска: звонок идёт, пользователь ушёл с экрана видео. */
 export function ActiveCallBanner({
   visible,
-  peerLabel,
   callState,
   startedAt,
   onOpen,
-  onHangUp,
 }: ActiveCallBannerProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -58,26 +54,22 @@ export function ActiveCallBanner({
 
   if (!visible) return null;
 
-  const status =
-    callState === 'in-call' && startedAt
-      ? formatCallClock(now - startedAt)
-      : 'Ожидание…';
+  const clock =
+    callState === 'in-call' && startedAt ? formatCallClock(now - startedAt) : null;
 
   return (
-    <div className="active-call-banner" role="status">
-      <button type="button" className="active-call-banner__main" onClick={onOpen}>
-        <span className="active-call-banner__peer">{peerLabel}</span>
-        <span className="active-call-banner__status">{status}</span>
-      </button>
-      <button
-        type="button"
-        className="active-call-banner__hangup"
-        onClick={onHangUp}
-        aria-label="Завершить звонок"
-      >
-        <PhoneOff size={16} />
-      </button>
-    </div>
+    <button
+      type="button"
+      className="active-call-banner"
+      onClick={onOpen}
+      aria-label="Идёт звонок. Нажмите, чтобы вернуться к видео."
+    >
+      <Phone className="active-call-banner__icon" size={18} strokeWidth={2.4} aria-hidden />
+      <span className="active-call-banner__copy">
+        Идёт звонок. Нажмите, чтобы вернуться к видео.
+        {clock ? <span className="active-call-banner__timer">{clock}</span> : null}
+      </span>
+    </button>
   );
 }
 

@@ -2904,6 +2904,15 @@ export default function App() {
 
   return (
     <>
+      <ActiveCallBanner
+        visible={showCallBanner}
+        callState={callState}
+        startedAt={callStartedAt}
+        onOpen={() => {
+          if (appMode === 'select') setAppMode('paranoic');
+          setCallExpanded(true);
+        }}
+      />
       {appMode === 'select' && (
         <>
           {incomingRing && (
@@ -2983,17 +2992,6 @@ export default function App() {
           />
         </div>
         <div className="family-app-overlays" aria-live="polite">
-          <ActiveCallBanner
-            visible={showCallBanner}
-            peerLabel={peerLabel}
-            callState={callState}
-            startedAt={callStartedAt}
-            onOpen={() => {
-              setAppMode('paranoic');
-              setCallExpanded(true);
-            }}
-            onHangUp={() => void cancelCall()}
-          />
           {showErrorToast && (
             <div
               className={`app-toast app-toast--error app-toast--visible${incomingRing ? '' : ' app-toast--above-nav'}`}
@@ -3105,15 +3103,6 @@ export default function App() {
           )}
         </div>
       </header>
-
-      <ActiveCallBanner
-        visible={showCallBanner}
-        peerLabel={peerLabel}
-        callState={callState}
-        startedAt={callStartedAt}
-        onOpen={() => setCallExpanded(true)}
-        onHangUp={() => void cancelCall()}
-      />
 
       {isBanned && (
         <div className="banner banned" role="alert">
