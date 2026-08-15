@@ -1220,7 +1220,7 @@ export default function App() {
                     );
                   }
                   await p2pRef.current?.startCall();
-                  setCallExpanded(false);
+                  setCallExpanded(true);
                   setScreen('chat');
                 } catch (e) {
                   pendingStartCallRef.current = false;
@@ -1284,7 +1284,7 @@ export default function App() {
                   const stream = await p2pRef.current?.acceptCall();
                   if (stream) attachLocalVideo(stream);
                   setIncomingRing(null);
-                  setCallExpanded(false);
+                  setCallExpanded(true);
                   setScreen('chat');
                 } catch (e) {
                   pendingRingAcceptRef.current = false;
@@ -1296,7 +1296,7 @@ export default function App() {
               })();
             }
           } else if (state === 'in-call' || state === 'calling') {
-            setCallExpanded(false);
+            setCallExpanded(true);
             stopRingtone();
             closeActiveNotification();
             if (state === 'in-call') {
@@ -1404,7 +1404,7 @@ export default function App() {
                 const stream = await p2pRef.current?.acceptCall();
                 if (stream) attachLocalVideo(stream);
                 setIncomingRing(null);
-                setCallExpanded(false);
+                setCallExpanded(true);
                 setScreen('chat');
               } catch (e) {
                 pendingRingAcceptRef.current = false;
@@ -2315,6 +2315,7 @@ export default function App() {
         pendingRingAcceptRef.current = true;
         pendingAcceptCallerRef.current = ring.from;
         setIncomingRing(null);
+        setCallExpanded(true);
         setScreen('chat');
         return;
       }
