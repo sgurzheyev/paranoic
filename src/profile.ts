@@ -211,6 +211,24 @@ export async function syncProfileToSupabase(
   }
 }
 
+/** Сохранить FCM-токен устройства в profiles.fcm_token. */
+export async function saveFcmToken(userId: string, token: string): Promise<void> {
+  const id = userId.trim();
+  const fcmToken = token.trim();
+  if (!id || !fcmToken || !hasSupabaseConfig()) return;
+  try {
+    const { error } = await getSupabase()
+      .from(PROFILES_TABLE)
+      .update({ fcm_token: fcmToken })
+      .eq('id', id);
+    if (error) {
+      console.warn('[paranoic] fcm_token update', error.message);
+    }
+  } catch (e) {
+    console.warn('[paranoic] fcm_token sync skipped', e);
+  }
+}
+
 /**
  * Гарантирует строку в `profiles` (id / username / avatar_url).
  * Не вызывать при Drop a Gem — профиль создаёт триггер Auth / регистрация.

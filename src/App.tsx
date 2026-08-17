@@ -54,6 +54,7 @@ import {
   CallInbox,
   callerDisplayName,
   newCallId,
+  type CallOfferEvent,
   type CallerInfo,
 } from './callSignaling';
 import { upsertCallSession, updateCallSessionStatus, fetchRingingCallsForUser } from './callSessions';
@@ -158,6 +159,7 @@ import {
   type Contact,
 } from './contacts';
 import { syncProfileToSupabase, fetchRemoteProfile } from './profile';
+import { startNativePush } from './pushNotifications';
 import {
   clearCallResidueState,
   clearCallSessionResidue,
@@ -895,6 +897,29 @@ export default function App() {
     };
   }, [identity.id]);
 
+  const applyIncomingCallOffer = useCallback((offer: CallOfferEvent) => {
+    if (isBannedRef.current) return;
+    if (isBlocked(offer.from.id)) return;
+    setAppMode((m) => (m === 'select' ? 'paranoic' : m));
+    setIncomingConnection(false);
+    setPeerLabel(offer.from.name || callerDisplayName(offer.from));
+    setPeerAvatarUrl(offer.from.avatarUrl || '');
+    setPeerColor(offer.from.color || '#60a5fa');
+    peerMetaRef.current = {
+      id: offer.from.id,
+      label: offer.from.name || callerDisplayName(offer.from),
+      avatarUrl: offer.from.avatarUrl || '',
+      color: offer.from.color || '#60a5fa',
+    };
+    setIncomingRing({ callId: offer.callId, from: offer.from });
+    setCallExpanded(true);
+    startRingtone();
+    notifyIfHidden('Входящий звонок', {
+      body: `Вам звонит ${callerDisplayName(offer.from)}`,
+      tag: 'paranoic-call',
+    });
+  }, []);
+
   /** Постоянный слушатель call_offer на calls:{myId}. */
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
@@ -902,26 +927,7 @@ export default function App() {
     const inbox = new CallInbox({
       onOffer: (offer) => {
         if (cancelled) return;
-        if (isBannedRef.current) return;
-        if (isBlocked(offer.from.id)) return;
-        setAppMode((m) => (m === 'select' ? 'paranoic' : m));
-        setIncomingConnection(false);
-        setPeerLabel(offer.from.name || callerDisplayName(offer.from));
-        setPeerAvatarUrl(offer.from.avatarUrl || '');
-        setPeerColor(offer.from.color || '#60a5fa');
-        peerMetaRef.current = {
-          id: offer.from.id,
-          label: offer.from.name || callerDisplayName(offer.from),
-          avatarUrl: offer.from.avatarUrl || '',
-          color: offer.from.color || '#60a5fa',
-        };
-        setIncomingRing({ callId: offer.callId, from: offer.from });
-        setCallExpanded(true);
-        startRingtone();
-        notifyIfHidden('Входящий звонок', {
-          body: `Вам звонит ${callerDisplayName(offer.from)}`,
-          tag: 'paranoic-call',
-        });
+        applyIncomingCallOffer(offer);
       },
       onReject: () => {
         if (cancelled) return;
@@ -958,7 +964,25 @@ export default function App() {
       callInboxRef.current = null;
       void inbox.stop();
     };
-  }, [identity.id]);
+  }, [applyIncomingCallOffer, identity.id]);
+
+  /** Native FCM: permission, token → profiles.fcm_token, incoming-call payloads. */
+  useEffect(() => {
+    if (appMode === 'select') return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void startNativePush({
+      userId: identity.id,
+      onIncomingCall: applyIncomingCallOffer,
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else stop = cleanup;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [appMode, applyIncomingCallOffer, identity.id]);
 
   /** Fallback: poll call_sessions если Realtime offer потерялся в фоне. */
   useEffect(() => {
