@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Paranoic</string>
+    <string name="title_activity_main">Paranoic</string>
+    <string name="package_name">men.paranoic.app</string>
+    <string name="custom_url_scheme">men.paranoic.app</string>
+</resources>
