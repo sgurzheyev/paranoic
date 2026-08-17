@@ -16,6 +16,7 @@
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0",
+    "@capacitor/push-notifications": "^8.1.2",
     "@supabase/supabase-js": "^2.112.2",
     "@tailwindcss/vite": "^4.3.3",
     "localforage": "^1.10.0",
