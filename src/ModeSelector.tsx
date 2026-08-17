@@ -162,7 +162,7 @@ export default function ModeSelector({ onSelect, onAccountRestored, onLobbyEnter
             </h2>
             <p>
               Нативная сборка ещё не опубликована. Ссылка-заглушка:{' '}
-              <code>{resolveClientUrl(downloadHint)}</code>
+              <code>{downloadHint === 'android' ? 'paranoic' : resolveClientUrl(downloadHint)}</code>
             </p>
             <p>
               Чтобы протестировать звонки прямо сейчас, откройте{' '}
@@ -170,16 +170,26 @@ export default function ModeSelector({ onSelect, onAccountRestored, onLobbyEnter
               уже работает.
             </p>
             <div className="start-download-modal__actions">
-              <button
-                type="button"
-                className="start-download-modal__primary"
-                onClick={() => {
-                  setDownloadHint(null);
-                  onSelect('paranoic');
-                }}
-              >
-                Открыть Paranoic Mode
-              </button>
+              {downloadHint === 'android' ? (
+                <a
+                  href="/download/paranoic.apk"
+                  download="paranoic.apk"
+                  className="start-download-modal__primary"
+                >
+                  Скачать paranoic.apk
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  className="start-download-modal__primary"
+                  onClick={() => {
+                    setDownloadHint(null);
+                    onSelect('paranoic');
+                  }}
+                >
+                  Открыть Paranoic Mode
+                </button>
+              )}
               <button
                 type="button"
                 className="start-download-modal__ghost"
