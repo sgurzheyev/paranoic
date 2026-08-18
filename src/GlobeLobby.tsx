@@ -950,7 +950,7 @@ export default function GlobeLobby({
       )}
 
       <div className="family-map-ui-layer pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="map-top-bar relative px-4 py-4 sm:px-6">
+        <header className="map-top-bar relative px-4 pb-4 sm:px-6 pt-[calc(24px+env(safe-area-inset-top,0px))]">
           <div className="map-top-bar__left">
             <button
               type="button"
