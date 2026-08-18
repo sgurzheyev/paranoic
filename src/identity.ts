@@ -1,5 +1,6 @@
 /** Постоянная личность пользователя + магическая ссылка. */
 
+import { Capacitor } from '@capacitor/core';
 import { getRoomIdFromUrl } from './room';
 
 export type UserIdentity = {
@@ -281,6 +282,23 @@ export function updateIdentity(
   return next;
 }
 
+/** Публичный origin для ссылок профиля/инбокса. */
+export const PUBLIC_APP_ORIGIN = 'https://paranoic.men';
+
+export function appPublicOrigin(): string {
+  if (typeof window === 'undefined') return PUBLIC_APP_ORIGIN;
+  const host = window.location.hostname.toLowerCase();
+  const isLocalhost =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '[::1]' ||
+    host === '0.0.0.0';
+  if (isLocalhost || Capacitor.isNativePlatform()) {
+    return PUBLIC_APP_ORIGIN;
+  }
+  return window.location.origin;
+}
+
 /** Магическая ссылка: коротко ?u=username, иначе ?u=id */
 export function buildMagicLink(identityOrHandle: UserIdentity | string): string {
   const handle =
@@ -289,7 +307,7 @@ export function buildMagicLink(identityOrHandle: UserIdentity | string): string 
       : identityOrHandle.username
         ? identityOrHandle.username
         : identityOrHandle.id;
-  return `${window.location.origin}/?u=${encodeURIComponent(handle)}`;
+  return `${appPublicOrigin()}/?u=${encodeURIComponent(handle)}`;
 }
 
 export function getMagicTargetFromUrl(): string | null {

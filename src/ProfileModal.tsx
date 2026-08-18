@@ -85,9 +85,7 @@ export default function ProfileModal({
   // Короткая ссылка при заданном никнейме, иначе fallback на id.
   const shareLink = useMemo(() => {
     const u = previewIdentity.username;
-    return u
-      ? `${window.location.origin}/?u=${encodeURIComponent(u)}`
-      : `${window.location.origin}/?u=${encodeURIComponent(identity.id)}`;
+    return u ? buildMagicLink(u) : buildMagicLink(identity.id);
   }, [previewIdentity.username, identity.id]);
 
   useEffect(() => {
@@ -110,7 +108,7 @@ export default function ProfileModal({
         if (cancelled) return;
         setUsernameHint(
           free
-            ? `Свободен · ${window.location.origin}/?u=${check.value}`
+            ? `Свободен · ${buildMagicLink(check.value)}`
             : 'Имя занято'
         );
       });

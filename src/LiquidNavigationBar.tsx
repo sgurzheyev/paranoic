@@ -44,7 +44,7 @@ export default function LiquidNavigationBar({
   };
 
   return (
-    <nav className="liquid-nav" aria-label="Главная навигация">
+    <nav className="liquid-nav pb-[max(16px,env(safe-area-inset-bottom))]" aria-label="Главная навигация">
       <div className="liquid-nav-panel liquid-nav-panel--tabs4">
         <span
           className="liquid-nav-blob liquid-nav-blob--tabs4"
