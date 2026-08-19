@@ -131,27 +131,26 @@ export default function CallOverlay({
   if (failure) {
     return (
       <div
-        className="call-overlay expanded ringing"
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
         role="dialog"
+        aria-modal="true"
         aria-label={failure === 'declined' ? 'Вызов отклонён' : 'Не удалось связаться'}
       >
-        <div className="incoming-media-card call-overlay-ring">
-          <div className="avatar lg" style={{ background: 'var(--call)' }}>
-            <PhoneOff size={28} />
+        <div className="mx-auto w-full max-w-sm rounded-3xl border border-white/10 bg-neutral-900/90 p-6 text-center shadow-2xl">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-rose-500/30 bg-rose-500/20 text-rose-400">
+            <PhoneOff size={28} aria-hidden />
           </div>
-          <h2 className="incoming-media-title">
+          <h2 className="m-0 text-lg font-bold text-white">
             {failure === 'declined' ? 'Собеседник отклонил вызов' : 'Не удалось связаться'}
           </h2>
-          <p className="incoming-media-sub">
+          <p className="mt-2 mb-6 text-sm text-neutral-400">
             {failure === 'declined'
               ? peerLabel
               : 'Хост офлайн или ссылка неверна. Проверьте никнейм / ID.'}
           </p>
-          <div className="incoming-call-actions row">
-            <button type="button" className="decline-call-btn large" onClick={onHangUp}>
-              Закрыть
-            </button>
-          </div>
+          <button type="button" className="decline-call-btn large w-full" onClick={onHangUp}>
+            Закрыть
+          </button>
         </div>
       </div>
     );

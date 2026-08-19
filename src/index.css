@@ -5568,14 +5568,10 @@ textarea {
   z-index: 45;
   left: 1rem;
   right: 1rem;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  bottom: max(10px, env(safe-area-inset-bottom, 10px));
   display: flex;
   justify-content: center;
   pointer-events: none;
-}
-
-html.capacitor-android .liquid-nav {
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
 }
 
 .liquid-nav-panel {
@@ -5658,19 +5654,11 @@ html.capacitor-android .liquid-nav {
 }
 
 .app-shell.has-liquid-nav {
-  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(78px + max(10px, env(safe-area-inset-bottom, 10px)));
 }
 
 .app-shell.messenger-shell.has-liquid-nav {
-  padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
-}
-
-html.capacitor-android .app-shell.has-liquid-nav {
-  padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
-}
-
-html.capacitor-android .app-shell.messenger-shell.has-liquid-nav {
-  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(70px + max(10px, env(safe-area-inset-bottom, 10px)));
 }
 
 html.ar-active .liquid-nav,
