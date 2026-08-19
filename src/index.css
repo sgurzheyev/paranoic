@@ -4708,9 +4708,11 @@ textarea {
 .ar-footprints-video {
   position: absolute;
   inset: 0;
+  z-index: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  pointer-events: none;
 }
 
 .ar-footprints-veil {
@@ -4723,16 +4725,21 @@ textarea {
 }
 
 .ar-footprints-bar {
-  position: absolute;
-  top: max(16px, env(safe-area-inset-top, 0px));
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top, 16px));
   left: 0;
   right: 0;
-  z-index: 2;
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px;
+  pointer-events: auto !important;
+}
+
+.ar-footprints-bar > * {
+  pointer-events: auto;
 }
 
 .ar-footprints-title {
@@ -4772,6 +4779,8 @@ textarea {
   display: grid;
   place-items: center;
   cursor: pointer;
+  pointer-events: auto !important;
+  flex-shrink: 0;
 }
 
 .ar-footprints-error,
@@ -4849,14 +4858,16 @@ textarea {
   color: rgba(232, 234, 239, 0.9);
 }
 
+.ar-capsules-carousel,
 .ar-footprints-rail {
-  position: absolute;
+  position: fixed;
   left: 0;
   right: 0;
-  bottom: max(20px, env(safe-area-inset-bottom, 0px));
-  z-index: 50;
+  bottom: max(24px, env(safe-area-inset-bottom, 24px));
+  z-index: 9999;
   padding: 12px 0 16px;
   background: linear-gradient(180deg, transparent, rgba(5, 7, 12, 0.72) 40%);
+  pointer-events: auto !important;
 }
 
 .ar-footprints-rail-title {
@@ -4879,6 +4890,8 @@ textarea {
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  touch-action: pan-x;
+  pointer-events: auto;
 }
 
 .ar-footprints-thumbs::-webkit-scrollbar {
@@ -4897,6 +4910,8 @@ textarea {
   padding: 0;
   cursor: pointer;
   scroll-snap-align: start;
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .ar-footprints-thumb img,
@@ -4922,7 +4937,7 @@ textarea {
   top: 0;
   left: 0;
   bottom: 0;
-  z-index: 40;
+  z-index: 100;
   width: min(360px, 88vw);
   pointer-events: none;
   animation: memory-gem-drawer-in 0.34s cubic-bezier(0.22, 1, 0.36, 1);
@@ -4946,7 +4961,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 14px calc(6.5rem + env(safe-area-inset-bottom, 0px));
+  padding: calc(max(16px, env(safe-area-inset-top, 16px)) + 4.25rem) 14px
+    calc(1.25rem + env(safe-area-inset-bottom, 0px));
   background: rgba(12, 14, 20, 0.55);
   border-right: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow:
@@ -4955,6 +4971,26 @@ textarea {
   backdrop-filter: blur(28px) saturate(1.2);
   -webkit-backdrop-filter: blur(28px) saturate(1.2);
   overflow: hidden;
+}
+
+.memory-gem-drawer .memory-gem-head {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top, 16px));
+  left: 14px;
+  right: 14px;
+  z-index: 10;
+  pointer-events: auto;
+  padding-right: 0;
+}
+
+.memory-gem-drawer .memory-gem-head-actions.overlay-close {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+.memory-gem-drawer .memory-gem-head-scrim {
+  height: calc(max(16px, env(safe-area-inset-top, 16px)) + 6rem);
 }
 
 .memory-gem-head-scrim {
@@ -5637,7 +5673,8 @@ html.capacitor-android .app-shell.messenger-shell.has-liquid-nav {
   padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
 }
 
-html.ar-active .liquid-nav {
+html.ar-active .liquid-nav,
+html.memory-gem-active .liquid-nav {
   display: none !important;
 }
 

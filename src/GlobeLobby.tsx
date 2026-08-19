@@ -289,6 +289,13 @@ export default function GlobeLobby({
     };
   }, [arOpen]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('memory-gem-active', Boolean(openedGem));
+    return () => {
+      document.documentElement.classList.remove('memory-gem-active');
+    };
+  }, [openedGem]);
+
   const [authUserId, setAuthUserId] = useState(currentUserId);
   const [gemNotice, setGemNotice] = useState('');
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -1052,7 +1059,7 @@ export default function GlobeLobby({
           </div>
         )}
 
-        <div className="pointer-events-none mt-2 px-4 text-center sm:px-6">
+        <div className="pointer-events-none px-4 text-center sm:px-6">
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
             {isTargetingMode
               ? 'Двигайте карту — прицел в центре покажет место капсулы'

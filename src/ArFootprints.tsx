@@ -151,7 +151,12 @@ export default function ArFootprints({ gems, onClose, onSelectGem }: ArFootprint
             <p className="ar-footprints-hint">{hint}</p>
           </div>
         </div>
-        <button type="button" className="ar-footprints-close p-3" onClick={onClose} aria-label="Закрыть AR">
+        <button
+          type="button"
+          className="ar-footprints-close min-w-[48px] min-h-[48px] p-3"
+          onClick={onClose}
+          aria-label="Закрыть AR"
+        >
           <X size={18} />
         </button>
       </header>
@@ -167,7 +172,7 @@ export default function ArFootprints({ gems, onClose, onSelectGem }: ArFootprint
       )}
 
       {nearby.length > 0 && (
-        <div className="ar-footprints-rail" aria-label="Капсулы поблизости">
+        <div className="ar-capsules-carousel ar-footprints-rail" aria-label="Капсулы поблизости">
           <p className="ar-footprints-rail-title">
             <Gem size={14} /> Капсулы
           </p>
