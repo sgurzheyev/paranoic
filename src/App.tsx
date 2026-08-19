@@ -3100,7 +3100,7 @@ export default function App() {
       {adminOpen && (
         <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
-      <header className="app-header pt-[calc(24px+env(safe-area-inset-top,0px))]">
+      <header className="app-header">
         <div className="brand">
           <button
             type="button"

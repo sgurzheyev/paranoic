@@ -281,6 +281,14 @@ export default function GlobeLobby({
   const [layersOpen, setLayersOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('ar-active', arOpen);
+    return () => {
+      document.documentElement.classList.remove('ar-active');
+    };
+  }, [arOpen]);
+
   const [authUserId, setAuthUserId] = useState(currentUserId);
   const [gemNotice, setGemNotice] = useState('');
   const ghostMarkerRef = useRef<mapboxgl.Marker | null>(null);

@@ -126,9 +126,10 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
-  padding: 12px 14px;
-  padding-top: calc(24px + env(safe-area-inset-top, 0px));
+  box-sizing: border-box;
+  min-height: calc(3rem + env(safe-area-inset-top, 0px));
+  margin-bottom: 12px;
+  padding: max(8px, env(safe-area-inset-top, 0px)) 14px 8px;
   background: var(--glass);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -547,7 +548,7 @@ textarea {
 .call {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   flex: 1;
 }
 
@@ -3110,10 +3111,10 @@ textarea {
 }
 
 .contacts-panel {
-  margin-top: 8px;
+  margin-top: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 14px;
   position: relative;
   overflow: hidden;
@@ -4714,15 +4715,15 @@ textarea {
 
 .ar-footprints-bar {
   position: absolute;
-  top: 0;
+  top: max(16px, env(safe-area-inset-top, 0px));
   left: 0;
   right: 0;
   z-index: 2;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 16px;
+  padding: 0 16px;
 }
 
 .ar-footprints-title {
@@ -4752,8 +4753,9 @@ textarea {
 }
 
 .ar-footprints-close {
-  width: 42px;
-  height: 42px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 12px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(0, 0, 0, 0.35);
@@ -4842,8 +4844,8 @@ textarea {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: max(20px, env(safe-area-inset-bottom));
-  z-index: 2;
+  bottom: max(20px, env(safe-area-inset-bottom, 0px));
+  z-index: 50;
   padding: 12px 0 16px;
   background: linear-gradient(180deg, transparent, rgba(5, 7, 12, 0.72) 40%);
 }
@@ -5624,6 +5626,10 @@ html.capacitor-android .app-shell.has-liquid-nav {
 
 html.capacitor-android .app-shell.messenger-shell.has-liquid-nav {
   padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+html.ar-active .liquid-nav {
+  display: none !important;
 }
 
 /* ——— Guest Direct Call Mode ——— */

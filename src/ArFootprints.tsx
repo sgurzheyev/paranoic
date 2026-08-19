@@ -151,7 +151,7 @@ export default function ArFootprints({ gems, onClose, onSelectGem }: ArFootprint
             <p className="ar-footprints-hint">{hint}</p>
           </div>
         </div>
-        <button type="button" className="ar-footprints-close" onClick={onClose} aria-label="Закрыть AR">
+        <button type="button" className="ar-footprints-close p-3" onClick={onClose} aria-label="Закрыть AR">
           <X size={18} />
         </button>
       </header>
