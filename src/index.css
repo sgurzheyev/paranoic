@@ -78,7 +78,7 @@ textarea {
   flex-direction: column;
   max-width: 720px;
   margin: 0 auto;
-  padding: 16px 16px 28px;
+  padding-bottom: 28px;
   position: relative;
 }
 
@@ -88,7 +88,7 @@ textarea {
   height: 100svh;
   min-height: 100svh;
   margin: 0;
-  padding: 10px 12px 12px;
+  padding-bottom: 12px;
   overflow: hidden;
 }
 
@@ -127,9 +127,9 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   box-sizing: border-box;
-  min-height: calc(3rem + env(safe-area-inset-top, 0px));
-  margin-bottom: 12px;
-  padding: max(8px, env(safe-area-inset-top, 0px)) 14px 8px;
+  height: 3.5rem;
+  margin-bottom: 10px;
+  padding: 0.5rem 0.75rem;
   background: var(--glass);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -2500,7 +2500,7 @@ textarea {
 
 @media (min-width: 640px) {
   .app-shell {
-    padding: 28px 24px 40px;
+    padding-bottom: 40px;
   }
 
   .mega-btn.call {
@@ -3470,15 +3470,24 @@ textarea {
 }
 
 .map-top-bar {
-  position: relative;
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 12px));
+  left: 0;
+  right: 0;
+  z-index: 5;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   column-gap: 0.5rem;
-  min-height: 3.5rem;
-  padding-top: calc(24px + env(safe-area-inset-top, 0px));
+  min-height: 2.75rem;
+  padding: 0 1rem;
   pointer-events: none;
+}
+
+.map-top-bar-spacer {
   flex-shrink: 0;
+  height: calc(max(12px, env(safe-area-inset-top, 12px)) + 2.75rem);
+  pointer-events: none;
 }
 
 /* Full-screen map UI shell: transparent areas pass events to Mapbox. */

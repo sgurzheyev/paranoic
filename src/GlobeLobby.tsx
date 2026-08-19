@@ -958,7 +958,7 @@ export default function GlobeLobby({
       )}
 
       <div className="family-map-ui-layer pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="map-top-bar relative px-4 pb-4 sm:px-6 pt-[calc(24px+env(safe-area-inset-top,0px))]">
+        <header className="map-top-bar px-4 sm:px-6">
           <div className="map-top-bar__left">
             <button
               type="button"
@@ -1044,6 +1044,7 @@ export default function GlobeLobby({
             </div>
           </div>
         </header>
+        <div className="map-top-bar-spacer" aria-hidden />
 
         {banned && (
           <div className="map-banned-banner map-ui-hit">

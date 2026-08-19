@@ -3082,7 +3082,7 @@ export default function App() {
       )}
       {appMode !== 'select' && (
     <div
-      className={`app-shell themed${screen === 'chat' ? ' messenger-shell' : ''}${
+      className={`app-shell themed pt-[max(8px,env(safe-area-inset-top))] px-3${screen === 'chat' ? ' messenger-shell' : ''}${
         showBottomNav ? ' has-liquid-nav' : ''
       }${appMode === 'family' ? ' is-dormant' : ''}`}
       style={shellStyle}
@@ -3100,7 +3100,7 @@ export default function App() {
       {adminOpen && (
         <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
-      <header className="app-header">
+      <header className="app-header h-14 flex items-center py-2 px-3">
         <div className="brand">
           <button
             type="button"
