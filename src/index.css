@@ -5095,6 +5095,26 @@ textarea {
   display: block;
 }
 
+.memory-gem-media-fallback,
+.memory-gem-drawer__photo-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 110px;
+  font-size: 2rem;
+  line-height: 1;
+  background: radial-gradient(circle at 30% 20%, rgba(255, 215, 0, 0.25), rgba(20, 24, 36, 0.9));
+  color: #ffe08a;
+}
+
+.memory-gem-photo.memory-gem-media-fallback,
+.memory-gem-body .memory-gem-media-fallback {
+  min-height: 180px;
+  border-radius: 16px;
+}
+
 .memory-gem-drawer__text-card {
   display: flex;
   flex-direction: column;

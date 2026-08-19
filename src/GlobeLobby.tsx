@@ -39,6 +39,7 @@ import {
 import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
 import { fetchMemoryGems } from './memoryGems';
 import { buildGemMarkerElement } from './mapGemMarkers';
+import { configureGemImageElement } from './gemImage';
 import { getAuthUserId } from './lib/supabase';
 import MemoryGemDrawer from './MemoryGemDrawer';
 import MemoryGemComposer from './MemoryGemComposer';
@@ -765,6 +766,7 @@ export default function GlobeLobby({
             .querySelector('.map-gem-marker-img') as HTMLImageElement | null;
           if (gem.media_url && img && img.src !== gem.media_url) {
             img.src = gem.media_url;
+            configureGemImageElement(img, 'map-gem-marker-fallback');
           }
           continue;
         }

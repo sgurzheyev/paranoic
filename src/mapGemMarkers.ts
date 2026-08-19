@@ -1,4 +1,5 @@
 import type { MapGem } from './mapGems';
+import { configureGemImageElement, createGemFallbackElement } from './gemImage';
 
 /** Кастомный HTML-маркер капсулы: превью media_urls[0] / media_url. */
 export function buildGemMarkerElement(gem: MapGem, onOpen: () => void): HTMLButtonElement {
@@ -16,12 +17,10 @@ export function buildGemMarkerElement(gem: MapGem, onOpen: () => void): HTMLButt
     img.draggable = false;
     img.className = 'map-gem-marker-img';
     img.loading = 'lazy';
+    configureGemImageElement(img, 'map-gem-marker-fallback');
     btn.appendChild(img);
   } else {
-    const fallback = document.createElement('span');
-    fallback.className = 'map-gem-marker-fallback';
-    fallback.textContent = '💎';
-    btn.appendChild(fallback);
+    btn.appendChild(createGemFallbackElement('map-gem-marker-fallback'));
   }
 
   const ring = document.createElement('span');

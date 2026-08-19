@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type TouchEvent } from 'react';
 import { ChevronLeft, ChevronRight, Gem, Heart, Send, Trash2, Type, X } from 'lucide-react';
 import { initials } from './identity';
+import GemMediaImage from './GemMediaImage';
 import { deleteMapGem, formatGemTime, type MapGem } from './mapGems';
 import {
   addGemComment,
@@ -305,11 +306,10 @@ export default function MemoryGemDrawer({
           onTouchEnd={onTouchEnd}
         >
           {gem.type === 'photo' && gem.media_url && (
-            <img
+            <GemMediaImage
               src={gem.media_url}
-              alt=""
               className="memory-gem-drawer__photo"
-              draggable={false}
+              fallbackClassName="memory-gem-media-fallback memory-gem-drawer__photo-fallback"
             />
           )}
           {gem.type === 'video' && gem.media_url && (

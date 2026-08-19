@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Gem, X } from 'lucide-react';
+import GemMediaImage from './GemMediaImage';
 import { formatGemTime, type MapGem } from './mapGems';
 
 type MemoryGemPopupProps = {
@@ -63,12 +64,7 @@ export default function MemoryGemPopup({
 
         <div className="memory-gem-body">
           {gem.type === 'photo' && gem.media_url && (
-            <img
-              src={gem.media_url}
-              alt=""
-              className="memory-gem-photo"
-              draggable={false}
-            />
+            <GemMediaImage src={gem.media_url} className="memory-gem-photo" />
           )}
           {gem.type === 'video' && gem.media_url && (
             <video
