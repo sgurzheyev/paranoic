@@ -31,11 +31,14 @@ import { ANTARCTICA, type PresenceUser } from './presence';
 import {
   bindGemInteractions,
   ensureGemLayers,
+  GEMS_POINT_LAYER,
   setGemFeatures,
   setGemsLayerVisibility,
   startGemPulse,
 } from './mapGemLayers';
 import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
+import { fetchMemoryGems } from './memoryGems';
+import { buildGemMarkerElement } from './mapGemMarkers';
 import { getAuthUserId } from './lib/supabase';
 import MemoryGemDrawer from './MemoryGemDrawer';
 import MemoryGemComposer from './MemoryGemComposer';
@@ -248,6 +251,7 @@ export default function GlobeLobby({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  const gemMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
   const selectedIdRef = useRef<string | null>(null);
   const peopleRef = useRef(people);
   const onChatUserRef = useRef(onChatUser);
@@ -699,18 +703,93 @@ export default function GlobeLobby({
     }
   }, [gems, mapReady, showGems]);
 
-  /** Загрузка всех map_gems при инициализации карты. */
+  /** Загрузка map_gems + memory_gems при инициализации карты. */
   useEffect(() => {
     if (!mapReady) return;
     let cancelled = false;
     void (async () => {
-      const rows = await fetchAllMapGems();
-      if (!cancelled) setGems(rows);
+      const [legacy, memory] = await Promise.all([fetchAllMapGems(), fetchMemoryGems()]);
+      if (!cancelled) {
+        const byId = new Map<string, MapGem>();
+        for (const gem of [...legacy, ...memory]) byId.set(gem.id, gem);
+        setGems([...byId.values()]);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [mapReady]);
+
+  /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+
+    const MIN_ZOOM = 12;
+
+    const syncGemMarkers = () => {
+      const showHtml = showGems && map.getZoom() >= MIN_ZOOM;
+
+      if (map.getLayer(GEMS_POINT_LAYER)) {
+        try {
+          map.setLayoutProperty(
+            GEMS_POINT_LAYER,
+            'visibility',
+            showGems && !showHtml ? 'visible' : 'none'
+          );
+        } catch {
+          /* style busy */
+        }
+      }
+
+      if (!showHtml) {
+        for (const marker of gemMarkersRef.current.values()) marker.remove();
+        gemMarkersRef.current.clear();
+        return;
+      }
+
+      const nextIds = new Set(gems.map((g) => g.id));
+      for (const [id, marker] of gemMarkersRef.current) {
+        if (!nextIds.has(id)) {
+          marker.remove();
+          gemMarkersRef.current.delete(id);
+        }
+      }
+
+      for (const gem of gems) {
+        const existing = gemMarkersRef.current.get(gem.id);
+        if (existing) {
+          existing.setLngLat([gem.lng, gem.lat]);
+          const img = existing
+            .getElement()
+            .querySelector('.map-gem-marker-img') as HTMLImageElement | null;
+          if (gem.media_url && img && img.src !== gem.media_url) {
+            img.src = gem.media_url;
+          }
+          continue;
+        }
+
+        const el = buildGemMarkerElement(gem, () => {
+          if (!showGems) return;
+          openGemRef.current(gem);
+        });
+        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([gem.lng, gem.lat])
+          .addTo(map);
+        gemMarkersRef.current.set(gem.id, marker);
+      }
+    };
+
+    syncGemMarkers();
+    map.on('moveend', syncGemMarkers);
+    map.on('zoomend', syncGemMarkers);
+    return () => {
+      map.off('moveend', syncGemMarkers);
+      map.off('zoomend', syncGemMarkers);
+      for (const marker of gemMarkersRef.current.values()) marker.remove();
+      gemMarkersRef.current.clear();
+    };
+  }, [gems, mapReady, showGems]);
 
   /** Ghost-маркер в точке long-press. */
   useEffect(() => {

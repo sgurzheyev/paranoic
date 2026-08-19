@@ -25,3 +25,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+paranoic-release-key.jks
+android/key.properties
