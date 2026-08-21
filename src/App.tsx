@@ -105,7 +105,8 @@ import {
   resolveRoom,
   setMagicUserInUrl,
 } from './room';
-import { hasSupabaseConfig, signOutAndReset, waitForRealtimeAuth } from './lib/supabase';
+import { hasSupabaseConfig, peekAuthSession, pauseAuthBootstrap, signOutAndReset, waitForRealtimeAuth } from './lib/supabase';
+import AuthScreen from './AuthScreen';
 import {
   appendStoredMessage,
   conversationId,
@@ -203,7 +204,13 @@ export default function App() {
   const callMediaBlocked = isCallMediaBlocked(mediaPresence);
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  /** checking → login (AuthScreen) → ok (приложение). */
+  const [authGate, setAuthGate] = useState<'checking' | 'login' | 'ok'>(() =>
+    hasSupabaseConfig() ? 'checking' : 'ok'
+  );
   const [appMode, setAppMode] = useState<AppMode>(() => {
+    // Пока нет JWT — не стартуем Paranoic/Family (presence / Realtime).
+    if (hasSupabaseConfig()) return 'select';
     if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return 'paranoic';
     try {
       const start = new URLSearchParams(window.location.search).get('start');
@@ -361,23 +368,55 @@ export default function App() {
     screenRef.current = screen;
   }, [screen]);
 
-  /** Auth JWT + identity.id = auth.uid() для RLS. */
+  /** Постоянный Auth (никнейм + пароль). Без JWT — AuthScreen, без anonymous. */
   useEffect(() => {
-    if (!hasSupabaseConfig()) return;
+    if (!hasSupabaseConfig()) {
+      setAuthGate('ok');
+      return;
+    }
     let cancelled = false;
-    void ensureAuthBoundIdentity()
-      .then((next) => {
+    pauseAuthBootstrap(true);
+    void (async () => {
+      try {
+        const session = await peekAuthSession();
+        if (cancelled) return;
+        if (!session?.user?.id) {
+          setAuthGate('login');
+          return;
+        }
+        pauseAuthBootstrap(false);
+        const next = await ensureAuthBoundIdentity();
         if (cancelled) return;
         setIdentity(next);
         identityRef.current = next;
-      })
-      .catch((err) => {
-        console.warn('[paranoic auth] ensureAuthBoundIdentity', err);
-      });
+        setAuthGate('ok');
+      } catch (err) {
+        console.warn('[paranoic auth] session check', err);
+        if (!cancelled) setAuthGate('login');
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const handleAuthenticated = (next: UserIdentity) => {
+    const persisted = forcePersistSession(next);
+    applyIdentity(persisted);
+    setAuthGate('ok');
+    if (getMagicTargetFromUrl() || getRoomIdFromUrl()) {
+      setAppMode('paranoic');
+    } else if (getSavedLoginSession()) {
+      setAppMode('paranoic');
+      setMainTab('contacts');
+    } else {
+      setAppMode('select');
+      setMainTab('chats');
+    }
+    setScreen('home');
+    setSessionEpoch((n) => n + 1);
+    void loadContacts().then(setContacts);
+  };
 
   const onlineIds = useMemo(
     () => new Set(presenceUsers.filter((u) => u.online).map((u) => u.userId)),
@@ -953,6 +992,7 @@ export default function App() {
 
   /** Постоянный слушатель call_offer на calls:{myId} — только после Auth JWT. */
   useEffect(() => {
+    if (authGate !== 'ok') return;
     if (!hasSupabaseConfig()) return;
     let cancelled = false;
     const inbox = new CallInbox({
@@ -1001,7 +1041,7 @@ export default function App() {
       callInboxRef.current = null;
       void inbox.stop();
     };
-  }, [applyIncomingCallOffer, identity.id]);
+  }, [applyIncomingCallOffer, authGate, identity.id]);
 
   /** Native FCM: permission, token → profiles.fcm_token, incoming-call payloads. */
   useEffect(() => {
@@ -1132,6 +1172,7 @@ export default function App() {
 
   /** Presence + GPS (или Ghost Mode / Антарктида). */
   useEffect(() => {
+    if (authGate !== 'ok') return;
     if (appMode !== 'paranoic' && appMode !== 'family') return;
 
     let cancelled = false;
@@ -1203,7 +1244,7 @@ export default function App() {
       void presence.stop();
       if (presenceRef.current === presence) presenceRef.current = null;
     };
-  }, [appMode, identity.id, settings.ghostMode]);
+  }, [appMode, authGate, identity.id, settings.ghostMode]);
 
   /** Эфемерные сообщения: чистим IndexedDB каждые 5 мин и при включении настройки. */
   useEffect(() => {
@@ -1738,6 +1779,7 @@ export default function App() {
    * Инбокс держим и на стартовом экране (select), и на карте (family),
    * иначе гости по магической ссылке не достучатся до хоста. */
   useEffect(() => {
+    if (authGate !== 'ok') return;
     let cancelled = false;
 
     void (async () => {
@@ -1934,7 +1976,7 @@ export default function App() {
     };
     // ensureP2P через ref — иначе смена peerLabel рвёт гостевую сессию и «сбрасывает» роутинг
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appMode, sessionEpoch, guestPeerId, setActivePeer]);
+  }, [appMode, authGate, sessionEpoch, guestPeerId, setActivePeer]);
 
   useEffect(() => {
     if (callState !== 'idle' && p2pRef.current) {
@@ -2925,17 +2967,7 @@ export default function App() {
     void syncProfileToSupabase(next);
   };
 
-  const handleAccountRestored = (next: UserIdentity) => {
-    const persisted = forcePersistSession(next);
-    applyIdentity(persisted);
-    setAppMode('paranoic');
-    setMainTab('contacts');
-    setScreen('home');
-    setSessionEpoch((n) => n + 1);
-    void loadContacts().then(setContacts);
-  };
-
-  /** Log Out → стартовый экран (вход / новый аккаунт). */
+  /** Log Out → экран входа (никнейм + пароль). */
   const handleSignOut = async () => {
     stopRingtone();
     closeActiveNotification();
@@ -2954,9 +2986,10 @@ export default function App() {
     void callInboxRef.current?.stop();
     callInboxRef.current = null;
 
-    const next = await signOutAndReset({ startFreshAnonymous: true });
+    const next = await signOutAndReset();
     setIdentity(next);
     identityRef.current = next;
+    setAuthGate('login');
     setNameDraft(next.name);
     setContacts([]);
     setMessages([]);
@@ -2976,8 +3009,9 @@ export default function App() {
     setSessionEpoch((n) => n + 1);
   };
 
-  /** Сохранённая сессия: не показываем login, сразу Paranoic → Контакты. */
+  /** Сохранённая локальная сессия: после Auth сразу Paranoic → Контакты. */
   useEffect(() => {
+    if (authGate !== 'ok') return;
     const session = getSavedLoginSession();
     if (!session) return;
 
@@ -3002,7 +3036,7 @@ export default function App() {
     setMainTab('contacts');
     setScreen('home');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authGate]);
 
   const saveName = () => {
     const next = updateIdentity({ name: nameDraft.trim() || 'Я' });
@@ -3089,6 +3123,15 @@ export default function App() {
 
   return (
     <>
+      {authGate === 'checking' && (
+        <div className="auth-screen auth-screen--loading" aria-busy="true">
+          <div className="auth-screen__bg" aria-hidden />
+          <p className="auth-screen__loading-text">Проверяем сессию…</p>
+        </div>
+      )}
+      {authGate === 'login' && <AuthScreen onAuthenticated={handleAuthenticated} />}
+      {authGate === 'ok' && (
+    <>
       <ActiveCallBanner
         visible={showCallBanner}
         callState={callState}
@@ -3113,7 +3156,6 @@ export default function App() {
           )}
           <ModeSelector
             onSelect={(mode) => setAppMode(mode)}
-            onAccountRestored={handleAccountRestored}
             onLobbyEnter={clearLobbyErrors}
           />
         </>
@@ -4123,6 +4165,8 @@ export default function App() {
           e.target.value = '';
         }}
       />
+    </>
+      )}
     </>
   );
 }

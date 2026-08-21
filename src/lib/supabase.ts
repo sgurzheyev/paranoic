@@ -7,16 +7,11 @@ import {
   type UserIdentity,
 } from '../identity';
 import { clearCallSessionResidue, clearEphemeralGuestId } from '../callSessionCleanup';
-import { clearLocalChatsAndContacts } from '../storeContacts';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 let client: SupabaseClient | null = null;
-/** In-flight / completed bootstrap so getSupabase() can kick off anon auth once. */
-let authBootstrap: Promise<Session> | null = null;
-/** После Log Out не поднимаем anon сразу из getSupabase(), пока не вызовут ensureAuthSession. */
-let authBootstrapPaused = false;
 
 export function hasSupabaseConfig(): boolean {
   return Boolean(url && anonKey);
@@ -25,6 +20,11 @@ export function hasSupabaseConfig(): boolean {
 export function getSupabaseConfig(): { url: string; anonKey: string } | null {
   if (!url || !anonKey) return null;
   return { url, anonKey };
+}
+
+/** @deprecated No-op: getSupabase больше не автологинит. */
+export function pauseAuthBootstrap(_paused: boolean): void {
+  /* kept for callers during login/logout */
 }
 
 function createClientIfNeeded(): SupabaseClient {
@@ -65,6 +65,26 @@ export function logRealtimeStatus(channelName: string, extra?: Record<string, un
   };
 }
 
+/**
+ * Текущая сессия без создания anonymous-пользователя.
+ * null — нужен экран входа (никнейм + пароль).
+ */
+export async function peekAuthSession(): Promise<Session | null> {
+  if (!hasSupabaseConfig()) return null;
+  const sb = createClientIfNeeded();
+  const { data: first, error: sessionErr } = await sb.auth.getSession();
+  if (sessionErr) {
+    console.warn('[paranoic auth] getSession', sessionErr.message);
+  }
+  if (first.session?.user?.id) return first.session;
+
+  const { data: refreshed, error: refreshErr } = await sb.auth.refreshSession();
+  if (refreshErr) {
+    console.warn('[paranoic auth] refreshSession', refreshErr.message);
+  }
+  return refreshed.session?.user?.id ? refreshed.session : null;
+}
+
 /** Дождаться JWT / auth.uid() перед Realtime-каналами (presence, calls, room). */
 export async function waitForRealtimeAuth(label: string): Promise<Session> {
   const session = await ensureAuthSession();
@@ -77,59 +97,22 @@ export async function waitForRealtimeAuth(label: string): Promise<Session> {
 }
 
 /**
- * Ленивый клиент Supabase Realtime (signaling).
- * При первом вызове стартует anonymous sign-in (если нет сессии).
+ * Ленивый клиент Supabase.
+ * Не поднимает сессию сам — нужен login или ensureAuthSession().
  */
 export function getSupabase(): SupabaseClient {
-  const sb = createClientIfNeeded();
-  if (!authBootstrap && !authBootstrapPaused) {
-    authBootstrap = ensureAuthSession().catch((err) => {
-      authBootstrap = null;
-      console.warn('[paranoic auth] bootstrap', err);
-      throw err;
-    });
-  }
-  return sb;
+  return createClientIfNeeded();
 }
 
 /**
- * Гарантирует живую Auth-сессию перед запросами с RLS.
- * 1) getSession → 2) refreshSession → 3) signInAnonymously (реинит).
- * После успеха выравнивает local identity.id = auth.uid().
+ * Гарантирует живую Auth-сессию (никнейм + пароль).
+ * Без JWT — ошибка: нужен AuthScreen, anonymous больше не используется.
  */
 export async function ensureAuthSession(): Promise<Session> {
-  authBootstrapPaused = false;
-  const sb = createClientIfNeeded();
-
-  const { data: first, error: sessionErr } = await sb.auth.getSession();
-  if (sessionErr) {
-    console.warn('[paranoic auth] getSession', sessionErr.message);
-  }
-
-  let session = first.session;
+  const session = await peekAuthSession();
 
   if (!session?.user?.id) {
-    const { data: refreshed, error: refreshErr } = await sb.auth.refreshSession();
-    if (refreshErr) {
-      console.warn('[paranoic auth] refreshSession', refreshErr.message);
-    }
-    session = refreshed.session;
-  }
-
-  if (!session?.user?.id) {
-    // Нет JWT — anonymous sign-in, чтобы auth.uid() совпал с identity.id.
-    const { data: anon, error: anonErr } = await sb.auth.signInAnonymously();
-    if (anonErr) {
-      const hint = /anonymous|disabled|not enabled/i.test(anonErr.message)
-        ? ' Включите Anonymous Sign-Ins в Supabase → Authentication → Providers.'
-        : '';
-      throw new Error(`Сессия Auth отсутствует.${hint} ${anonErr.message}`.trim());
-    }
-    session = anon.session;
-  }
-
-  if (!session?.user?.id) {
-    throw new Error('Сессия Auth отсутствует. Обновите страницу и войдите снова.');
+    throw new Error('Нужен вход. Войдите по никнейму и паролю.');
   }
 
   console.log('[AUTH SESSION]', {
@@ -137,23 +120,30 @@ export async function ensureAuthSession(): Promise<Session> {
     anonymous: Boolean(session.user.is_anonymous),
     hasJwt: Boolean(session.access_token),
   });
-  const { identity: aligned, idChanged, previousId } = alignIdentityToAuthUidDetailed(
-    session.user.id
-  );
+  const { identity: aligned } = alignIdentityToAuthUidDetailed(session.user.id);
   if (aligned.id !== session.user.id) {
     console.error('[AUTH SESSION] identity.id still ≠ auth.uid()', {
       identityId: aligned.id,
       authUid: session.user.id,
     });
   }
-  if (idChanged && previousId) {
-    // Старый localStorage id ≠ новый JWT — не писать в чужие/мёртвые чаты.
-    await clearLocalChatsAndContacts();
+  // UUID постоянный — локальные контакты при перезаходе не сбрасываем.
+  let profileIdentity = aligned;
+  if (!aligned.username?.trim() && session.user.email) {
+    const { resolveUsernameFromEmail } = await import('../authCredentials');
+    const { updateIdentity, forcePersistSession } = await import('../identity');
+    const handle = await resolveUsernameFromEmail(session.user.email, session.user.id);
+    profileIdentity = forcePersistSession(
+      updateIdentity({
+        username: handle,
+        name: aligned.name !== 'Я' ? aligned.name : handle,
+      })
+    );
   }
-  // Физическая строка в profiles (иначе presence/звонки бьются о пустой SELECT).
-  // dynamic import — избегаем цикла supabase ↔ profile.
   const { bootstrapAuthProfile } = await import('../profile');
-  await bootstrapAuthProfile(session.user.id, aligned);
+  await bootstrapAuthProfile(session.user.id, profileIdentity, {
+    email: session.user.email ?? null,
+  });
   return session;
 }
 
@@ -173,23 +163,15 @@ export async function getAuthAccessToken(): Promise<string> {
 }
 
 export type SignOutOptions = {
-  /**
-   * true — сразу создать новую anonymous Auth-сессию (чистый аккаунт).
-   * false — только выйти; вход / новый аккаунт на стартовом экране.
-   */
+  /** @deprecated Anonymous больше нет — флаг игнорируется. */
   startFreshAnonymous?: boolean;
 };
 
 /**
- * Log Out / Switch Account: signOut + очистка локального профиля.
- * Возвращает identity для UI (пустой профиль или новый anon).
+ * Log Out: signOut + очистка локального профиля.
+ * Возвращает пустой identity; дальше показывается AuthScreen.
  */
-export async function signOutAndReset(opts?: SignOutOptions): Promise<UserIdentity> {
-  const startFresh = opts?.startFreshAnonymous !== false;
-
-  authBootstrap = null;
-  authBootstrapPaused = true;
-
+export async function signOutAndReset(_opts?: SignOutOptions): Promise<UserIdentity> {
   if (hasSupabaseConfig()) {
     try {
       await createClientIfNeeded().auth.signOut({ scope: 'local' });
@@ -206,12 +188,10 @@ export async function signOutAndReset(opts?: SignOutOptions): Promise<UserIdenti
     /* */
   }
 
-  if (startFresh && hasSupabaseConfig()) {
-    authBootstrapPaused = false;
-    const session = await ensureAuthSession();
-    authBootstrap = Promise.resolve(session);
-    return getOrCreateIdentity();
-  }
-
   return createFreshIdentity();
+}
+
+/** После успешного login/signUp. */
+export function markAuthBootstrapReady(_session: Session): void {
+  void getOrCreateIdentity();
 }

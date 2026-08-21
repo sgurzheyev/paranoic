@@ -385,7 +385,7 @@ export function alignIdentityToAuthUidDetailed(authUid: string): AlignIdentityRe
 }
 
 /**
- * Гарантирует Auth-сессию (signInAnonymously при необходимости)
+ * Гарантирует Auth-сессию (никнейм + пароль)
  * и возвращает identity с id === auth.uid().
  */
 export async function ensureAuthBoundIdentity(): Promise<UserIdentity> {

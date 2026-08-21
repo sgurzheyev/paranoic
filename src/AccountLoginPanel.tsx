@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LogIn } from 'lucide-react';
-import { hasSavedLoginSession, normalizeUsername, type UserIdentity } from './identity';
-import { loginWithUsernamePassword } from './profile';
+import { hasSavedLoginSession, type UserIdentity } from './identity';
+import { signInWithEmailPassword } from './authCredentials';
 
 type AccountLoginPanelProps = {
   onRestored: (identity: UserIdentity) => void;
@@ -9,13 +9,13 @@ type AccountLoginPanelProps = {
   compact?: boolean;
 };
 
-/** Вход по username + password — восстановление user_id и профиля из Supabase. */
+/** Вход по email + password (Supabase Auth). */
 export default function AccountLoginPanel({
   onRestored,
   onLobbyEnter,
   compact = false,
 }: AccountLoginPanelProps) {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -37,9 +37,8 @@ export default function AccountLoginPanel({
   const handleLogin = async () => {
     setError('');
     setToast('');
-    const handle = normalizeUsername(username);
-    if (!handle) {
-      setError('Введите никнейм');
+    if (!email.trim()) {
+      setError('Введите email');
       return;
     }
     if (!password.trim()) {
@@ -49,17 +48,25 @@ export default function AccountLoginPanel({
 
     setBusy(true);
     try {
-      const result = await loginWithUsernamePassword(handle, password);
+      const result = await signInWithEmailPassword(email, password);
       if (!result.ok) {
-        if (result.reason === 'password_mismatch') {
-          showToast('Неверный пароль');
+        if (result.reason === 'password_mismatch' || result.reason === 'email_not_confirmed') {
+          showToast(result.message);
           return;
         }
         setError(result.message);
         return;
       }
-      setPassword('');
-      onRestored(result.identity);
+      if ('pendingConfirmation' in result && result.pendingConfirmation) {
+        setError(
+          'На вашу почту отправлено письмо с подтверждением. Перейдите по ссылке или введите код.'
+        );
+        return;
+      }
+      if ('identity' in result) {
+        setPassword('');
+        onRestored(result.identity);
+      }
     } catch (e) {
       console.error('[paranoic login] handleLogin exception', e);
       setError(e instanceof Error ? e.message : 'Не удалось войти');
@@ -86,21 +93,21 @@ export default function AccountLoginPanel({
         </p>
       )}
       <div className="account-login-panel__row">
-        <div className="username-input-row account-login-panel__username">
-          <span className="username-at">@</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
-            placeholder="username"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            disabled={busy}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void handleLogin();
-            }}
-          />
-        </div>
+        <input
+          type="email"
+          className="account-login-panel__password account-login-panel__email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          autoComplete="email"
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleLogin();
+          }}
+        />
         <input
           type="password"
           className="account-login-panel__password"

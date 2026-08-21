@@ -310,7 +310,7 @@ export default function ProfileModal({
             placeholder="Минимум 4 символа"
             autoComplete="new-password"
           />
-          <p className="profile-field-hint">{passwordHint || 'Нужен никнейм + пароль для восстановления аккаунта.'}</p>
+          <p className="profile-field-hint">{passwordHint || 'Вход по email + пароль. Никнейм по умолчанию — часть email до @; здесь можно задать свой.'}</p>
         </label>
 
         <div className="profile-share-card">

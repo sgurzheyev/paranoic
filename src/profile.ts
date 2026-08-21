@@ -1,12 +1,10 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { hashPassword, passwordsMatch } from './passwordAuth';
+import { hashPassword } from './passwordAuth';
 import {
-  createUserId,
   getOrCreateIdentity,
   isValidUuid,
   looksLikeUsername,
   normalizeUsername,
-  restoreIdentityFromProfile,
   type UserIdentity,
 } from './identity';
 import { hasR2Config, uploadToR2, buildObjectKey } from './s3Storage';
@@ -187,29 +185,33 @@ export function isProfileNotFoundError(error: { code?: string; message?: string 
 }
 
 /**
- * Гарантирует физическую строку в profiles сразу после Anonymous Auth.
- * Без этого RLS/presence/звонки ломаются: auth.uid() есть, а профиля нет.
+ * Гарантирует физическую строку в profiles после Auth (email/password).
+ * Username: из identity или local-part email (до @).
  */
 export async function bootstrapAuthProfile(
   userId: string,
-  identity?: Pick<UserIdentity, 'name' | 'color' | 'username' | 'avatarUrl' | 'themeFon'>
+  identity?: Pick<UserIdentity, 'name' | 'color' | 'username' | 'avatarUrl' | 'themeFon'>,
+  opts?: { email?: string | null }
 ): Promise<void> {
   const id = userId.trim();
   if (!id || !hasSupabaseConfig()) return;
   try {
     const sb = getSupabase();
     const now = new Date().toISOString();
-    // username не пишем как 'New User' — unique + паттерн [a-z0-9_]; display → name.
+    let handle = identity?.username?.trim() || '';
+    if (!handle && opts?.email) {
+      const { usernameFromEmail } = await import('./authCredentials');
+      handle = usernameFromEmail(opts.email);
+    }
     const row: Record<string, unknown> = {
       id,
-      name: identity?.name?.trim() || 'New User',
+      name: identity?.name?.trim() || handle || 'New User',
       color: identity?.color || '#34d399',
       avatar_url: identity?.avatarUrl || null,
       theme_fon: identity?.themeFon || null,
       is_online: true,
       last_seen: now,
     };
-    const handle = identity?.username?.trim();
     if (handle) {
       row.username = handle;
     }
@@ -217,7 +219,7 @@ export async function bootstrapAuthProfile(
     if (error) {
       console.warn('[paranoic] bootstrap profiles upsert', error.message);
     } else {
-      console.log('[paranoic] profiles bootstrap ok', id);
+      console.log('[paranoic] profiles bootstrap ok', id, handle || '(no username)');
     }
   } catch (e) {
     console.warn('[paranoic] bootstrap profiles failed', e);
@@ -477,169 +479,4 @@ export async function resolveHandleToUserId(handle: string): Promise<string | nu
 
   console.warn('[P2P_DEBUG] resolve failed — user not found', { handle: raw });
   return null;
-}
-
-/** Вход: username + password → восстановление user_id и профиля. */
-export type LoginFailureReason =
-  | 'user_not_found'
-  | 'no_password_set'
-  | 'password_mismatch'
-  | 'db_error'
-  | 'invalid_input';
-
-export type LoginResult =
-  | { ok: true; identity: UserIdentity }
-  | { ok: false; reason: LoginFailureReason; message: string; detail?: string };
-
-async function hashPasswordForLogin(password: string): Promise<string> {
-  return hashPassword(password, { minLength: 1 });
-}
-
-/** SELECT profiles WHERE username = handle (вход — с password). */
-async function fetchProfileRowByUsername(
-  handle: string
-): Promise<{ row: RemoteProfile | null; dbError: string | null }> {
-  const profile = await fetchProfileByUsername(handle);
-  if (profile) {
-    const sb = getSupabase();
-    const { data, error } = await sb
-      .from(PROFILES_TABLE)
-      .select(PROFILE_COLUMNS)
-      .eq('id', profile.id)
-      .maybeSingle();
-    if (error) {
-      console.error('[paranoic login] SELECT password', { username: handle, message: error.message });
-      return { row: profile, dbError: null };
-    }
-    return { row: (data as RemoteProfile | null) ?? profile, dbError: null };
-  }
-
-  const normalized = normalizeUsername(handle);
-  if (!normalized) return { row: null, dbError: null };
-
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from(PROFILES_TABLE)
-    .select(PROFILE_COLUMNS)
-    .eq('username', normalized)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[paranoic login] SELECT profiles', { username: handle, message: error.message });
-    return { row: null, dbError: error.message };
-  }
-  return { row: (data as RemoteProfile | null) ?? null, dbError: null };
-}
-
-function finishLogin(row: RemoteProfile): LoginResult {
-  const identity = restoreIdentityFromProfile(row);
-  console.log('[paranoic login] success', { username: row.username, userId: identity.id });
-  return { ok: true, identity };
-}
-
-export async function loginWithUsernamePassword(
-  username: string,
-  password: string
-): Promise<LoginResult> {
-  if (!hasSupabaseConfig()) {
-    return {
-      ok: false,
-      reason: 'db_error',
-      message: 'Supabase не настроен — вход недоступен',
-    };
-  }
-
-  const handle = normalizeUsername(username);
-  const pwd = password.trim();
-  if (!handle) {
-    return { ok: false, reason: 'invalid_input', message: 'Введите никнейм' };
-  }
-  if (!pwd) {
-    return { ok: false, reason: 'invalid_input', message: 'Введите пароль' };
-  }
-
-  const sb = getSupabase();
-
-  try {
-    const { row, dbError } = await fetchProfileRowByUsername(handle);
-    if (dbError) {
-      return {
-        ok: false,
-        reason: 'db_error',
-        message: 'Ошибка базы данных при входе',
-        detail: dbError,
-      };
-    }
-
-    // 1. Профиля нет — создаём
-    if (!row) {
-      const id = createUserId();
-      const passwordStored = await hashPasswordForLogin(pwd);
-      const { data: created, error: insertErr } = await sb
-        .from(PROFILES_TABLE)
-        .insert({
-          id,
-          username: handle,
-          name: handle,
-          password: passwordStored,
-          color: getOrCreateIdentity().color,
-        })
-        .select(PROFILE_COLUMNS)
-        .single();
-
-      if (insertErr || !created) {
-        console.error('[paranoic login] INSERT profile', insertErr?.message);
-        return {
-          ok: false,
-          reason: 'db_error',
-          message: insertErr?.message || 'Не удалось создать профиль',
-        };
-      }
-      return finishLogin(created as RemoteProfile);
-    }
-
-    const storedPassword = readStoredPassword(row);
-
-    // 2. Профиль есть, пароль пустой — записываем
-    if (!storedPassword) {
-      const passwordStored = await hashPasswordForLogin(pwd);
-      const { data: updated, error: updateErr } = await sb
-        .from(PROFILES_TABLE)
-        .update({ password: passwordStored })
-        .eq('id', row.id)
-        .select(PROFILE_COLUMNS)
-        .single();
-
-      if (updateErr || !updated) {
-        console.error('[paranoic login] UPDATE password', updateErr?.message);
-        return {
-          ok: false,
-          reason: 'db_error',
-          message: updateErr?.message || 'Не удалось сохранить пароль',
-        };
-      }
-      return finishLogin(updated as RemoteProfile);
-    }
-
-    // 3. Профиль есть, пароль задан — сверяем
-    const matches = await passwordsMatch(pwd, storedPassword);
-    if (!matches) {
-      return {
-        ok: false,
-        reason: 'password_mismatch',
-        message: 'Неверный пароль',
-      };
-    }
-
-    return finishLogin(row);
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e);
-    console.error('[paranoic login] unexpected error', detail);
-    return {
-      ok: false,
-      reason: 'db_error',
-      message: detail || 'Не удалось войти',
-      detail,
-    };
-  }
 }
