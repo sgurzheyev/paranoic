@@ -136,7 +136,13 @@ export async function ensureAuthSession(): Promise<Session> {
     anonymous: Boolean(session.user.is_anonymous),
     hasJwt: Boolean(session.access_token),
   });
-  alignIdentityToAuthUid(session.user.id);
+  const aligned = alignIdentityToAuthUid(session.user.id);
+  if (aligned.id !== session.user.id) {
+    console.error('[AUTH SESSION] identity.id still ≠ auth.uid()', {
+      identityId: aligned.id,
+      authUid: session.user.id,
+    });
+  }
   return session;
 }
 

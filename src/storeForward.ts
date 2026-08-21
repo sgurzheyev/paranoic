@@ -77,17 +77,18 @@ export async function uploadPendingText(opts: {
   if (!hasSupabaseConfig()) {
     throw new Error('Supabase не настроен');
   }
-  await ensureAuthSession();
+  const session = await ensureAuthSession();
+  const fromUserId = session.user.id;
 
   const roomId = personalInboxRoom(opts.toUserId);
   const key = await deriveKeyFromRoom(roomId);
   const { cipher, iv } = await encryptMessage(opts.plaintext, key);
-  const conv = conversationId(opts.fromUserId, opts.toUserId);
+  const conv = conversationId(fromUserId, opts.toUserId);
   const sb = getSupabase();
 
   const row: Omit<PendingMessageRow, 'created_at'> & { created_at?: string } = {
     id: opts.id,
-    from_user_id: opts.fromUserId,
+    from_user_id: fromUserId,
     to_user_id: opts.toUserId,
     conversation_id: conv,
     room_id: roomId,
@@ -122,7 +123,8 @@ export async function uploadPendingMedia(opts: {
   if (opts.file.size > MAX_OFFLINE_FILE_BYTES) {
     throw new Error('Файл слишком большой (макс. 16 МБ)');
   }
-  await ensureAuthSession();
+  const session = await ensureAuthSession();
+  const fromUserId = session.user.id;
 
   const roomId = personalInboxRoom(opts.toUserId);
   const key = await deriveKeyFromRoom(roomId);
@@ -146,10 +148,10 @@ export async function uploadPendingMedia(opts: {
   if (upErr) throw new Error(upErr.message || 'Не удалось загрузить файл офлайн');
   opts.onProgress?.(0.85);
 
-  const conv = conversationId(opts.fromUserId, opts.toUserId);
+  const conv = conversationId(fromUserId, opts.toUserId);
   const row = {
     id: opts.id,
-    from_user_id: opts.fromUserId,
+    from_user_id: fromUserId,
     to_user_id: opts.toUserId,
     conversation_id: conv,
     room_id: roomId,

@@ -295,18 +295,64 @@ export function getOrCreateIdentity(): UserIdentity {
 
 /**
  * Выровнять локальный identity.id под auth.uid() (RLS: id = auth.uid()).
- * Вызывается из ensureAuthSession() после anonymous / refresh.
+ * Всегда перезаписывает сохранённый ID актуальным JWT — даже если он уже совпадал.
  */
 export function alignIdentityToAuthUid(authUid: string): UserIdentity {
   const uid = authUid.trim();
-  if (!isValidUuid(uid)) {
-    console.warn('[paranoic auth] alignIdentity: invalid auth.uid', authUid);
+  if (!uid) {
+    console.warn('[paranoic auth] alignIdentity: empty auth.uid');
     return getOrCreateIdentity();
   }
-  const current = getOrCreateIdentity();
-  if (current.id === uid) return current;
-  console.log('[paranoic auth] identity.id → auth.uid()', { from: current.id, to: uid });
-  return forcePersistSession({ ...current, id: uid });
+
+  let current: UserIdentity;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<UserIdentity>;
+      if (parsed?.id && parsed?.name) {
+        current = normalizeIdentity(parsed as UserIdentity);
+      } else {
+        current = getOrCreateIdentity();
+      }
+    } else {
+      current = getOrCreateIdentity();
+    }
+  } catch {
+    current = getOrCreateIdentity();
+  }
+
+  const next: UserIdentity = {
+    ...current,
+    // Жёстко: JWT uid, без повторной генерации через createUserId().
+    id: uid,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+
+  try {
+    const sessionRaw = localStorage.getItem(SESSION_KEY);
+    if (sessionRaw) {
+      const saved = JSON.parse(sessionRaw) as Partial<SavedLoginSession>;
+      localStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({
+          ...saved,
+          userId: uid,
+          peerId: uid,
+          username: saved.username ?? next.username,
+          savedAt: saved.savedAt || new Date().toISOString(),
+        } satisfies SavedLoginSession)
+      );
+    }
+  } catch {
+    /* */
+  }
+
+  if (current.id !== uid) {
+    console.log('[paranoic auth] identity.id → auth.uid()', { from: current.id, to: uid });
+  } else {
+    console.log('[paranoic auth] identity.id synced', uid);
+  }
+  return next;
 }
 
 /**

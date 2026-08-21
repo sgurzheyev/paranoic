@@ -25,12 +25,13 @@ export async function upsertCallSession(params: {
 }): Promise<void> {
   if (!hasSupabaseConfig()) return;
   try {
-    await ensureAuthSession();
+    const session = await ensureAuthSession();
+    const fromUserId = session.user.id;
     const sb = getSupabase();
     const { error } = await sb.from(CALL_SESSIONS_TABLE).upsert(
       {
         call_id: params.callId,
-        from_user_id: params.fromUserId,
+        from_user_id: fromUserId,
         to_user_id: params.toUserId,
         status: params.status,
         updated_at: new Date().toISOString(),
@@ -44,7 +45,7 @@ export async function upsertCallSession(params: {
     audit('call_sessions upsert', {
       callId: params.callId,
       status: params.status,
-      from: params.fromUserId,
+      from: fromUserId,
       to: params.toUserId,
     });
   } catch (e) {
