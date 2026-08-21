@@ -1,5 +1,11 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
+import {
+  ensureAuthSession,
+  getSupabase,
+  hasSupabaseConfig,
+  logRealtimeStatus,
+  waitForRealtimeAuth,
+} from './lib/supabase';
 
 export type PresenceStatus = 'online' | 'away' | 'offline' | 'in_call';
 
@@ -265,11 +271,21 @@ export class WorldPresence {
       return;
     }
 
+    const session = await waitForRealtimeAuth('presence');
+    if (me.userId && me.userId !== session.user.id) {
+      console.error('[REALTIME FAIL - paranoic-world] identity.id ≠ auth.uid()', {
+        identityId: me.userId,
+        authUid: session.user.id,
+      });
+    }
+    const userId = session.user.id;
+
     await this.stop();
     this.pageStatus = document.visibilityState === 'visible' ? 'online' : 'away';
     this.inCall = false;
     this.me = {
       ...me,
+      userId,
       online: true,
       status: this.pageStatus,
       updatedAt: Date.now(),
@@ -277,7 +293,7 @@ export class WorldPresence {
 
     const sb = getSupabase();
     const channel = sb.channel(PRESENCE_CHANNEL, {
-      config: { presence: { key: me.userId } },
+      config: { presence: { key: userId } },
     });
 
     channel.on('presence', { event: 'sync' }, () => {
@@ -285,13 +301,15 @@ export class WorldPresence {
     });
 
     await new Promise<void>((resolve, reject) => {
-      channel.subscribe(async (status) => {
+      const logStatus = logRealtimeStatus(PRESENCE_CHANNEL, { uid: userId });
+      channel.subscribe(async (status, err) => {
+        logStatus(status, err);
         if (status === 'SUBSCRIBED') {
           await channel.track(this.me!);
           resolve();
         }
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          reject(new Error('Не удалось подключить presence'));
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          reject(new Error(`Не удалось подключить presence (${status}${err ? `: ${err.message}` : ''})`));
         }
       });
     });

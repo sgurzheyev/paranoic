@@ -105,7 +105,7 @@ import {
   resolveRoom,
   setMagicUserInUrl,
 } from './room';
-import { hasSupabaseConfig, signOutAndReset } from './lib/supabase';
+import { hasSupabaseConfig, signOutAndReset, waitForRealtimeAuth } from './lib/supabase';
 import {
   appendStoredMessage,
   conversationId,
@@ -943,7 +943,7 @@ export default function App() {
     });
   }, []);
 
-  /** Постоянный слушатель call_offer на calls:{myId}. */
+  /** Постоянный слушатель call_offer на calls:{myId} — только после Auth JWT. */
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
     let cancelled = false;
@@ -979,9 +979,15 @@ export default function App() {
       },
     });
     callInboxRef.current = inbox;
-    void inbox.start(identity.id).catch((e) => {
-      console.warn('[P2P Audit] call inbox start failed', e);
-    });
+    void (async () => {
+      try {
+        const session = await waitForRealtimeAuth('app-call-inbox');
+        if (cancelled) return;
+        await inbox.start(session.user.id);
+      } catch (e) {
+        console.warn('[P2P Audit] call inbox start failed', e);
+      }
+    })();
     return () => {
       cancelled = true;
       callInboxRef.current = null;
@@ -1136,8 +1142,10 @@ export default function App() {
     void (async () => {
       setGeo({ ...ANTARCTICA });
       try {
+        const session = await waitForRealtimeAuth('app-presence');
+        if (cancelled) return;
         await presence.start({
-          userId: identityRef.current.id,
+          userId: session.user.id,
           name: identityRef.current.name,
           color: identityRef.current.color,
           avatarUrl: identityRef.current.avatarUrl,

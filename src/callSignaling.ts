@@ -1,5 +1,10 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import {
+  getSupabase,
+  hasSupabaseConfig,
+  logRealtimeStatus,
+  waitForRealtimeAuth,
+} from './lib/supabase';
 import {
   fetchPeerPresence,
   pingProfilePresence,
@@ -70,24 +75,33 @@ async function sendToUserChannel(
   payload: CallRingEvent
 ): Promise<void> {
   if (!hasSupabaseConfig()) return;
+  const session = await waitForRealtimeAuth(`call-out:${event}`);
+  console.log('[SIGNAL OUT]', event, {
+    to: userId,
+    fromUid: session.user.id,
+    payload,
+  });
   const sb = getSupabase();
   let lastError: unknown;
+  const chName = channelName(userId);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const ch = sb.channel(channelName(userId), {
+    const ch = sb.channel(chName, {
       config: { broadcast: { self: false } },
     });
 
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = window.setTimeout(() => reject(new Error('call channel timeout')), 8_000);
-        ch.subscribe((status) => {
+        const logStatus = logRealtimeStatus(chName, { attempt, fromUid: session.user.id });
+        ch.subscribe((status, err) => {
+          logStatus(status, err);
           if (status === 'SUBSCRIBED') {
             window.clearTimeout(timer);
             resolve();
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             window.clearTimeout(timer);
-            reject(new Error(`call channel ${status}`));
+            reject(new Error(`call channel ${status}${err ? `: ${err.message}` : ''}`));
           }
         });
       });
@@ -138,9 +152,17 @@ export class CallInbox {
     if (!hasSupabaseConfig()) return;
     if (this.channel && this.userId === userId && this.subscribed) return;
 
+    const session = await waitForRealtimeAuth('call-inbox');
+    if (!userId || userId !== session.user.id) {
+      console.error('[REALTIME FAIL - calls] identity.id ≠ auth.uid()', {
+        identityId: userId,
+        authUid: session.user.id,
+      });
+    }
+
     await this.stop();
-    this.userId = userId;
-    await this.subscribeInbox(userId);
+    this.userId = session.user.id;
+    await this.subscribeInbox(this.userId);
     this.bindVisibilityRecover();
   }
 
@@ -181,11 +203,13 @@ export class CallInbox {
 
   private async subscribeInbox(userId: string): Promise<void> {
     const sb = getSupabase();
-    const ch = sb.channel(channelName(userId), {
+    const chName = channelName(userId);
+    const ch = sb.channel(chName, {
       config: { broadcast: { self: false } },
     });
 
     ch.on('broadcast', { event: 'call_offer' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'call_offer', payload);
       const offer = payload as CallOfferEvent;
       if (!offer || offer.type !== 'call_offer') return;
       if (offer.toUserId !== this.userId) return;
@@ -195,6 +219,7 @@ export class CallInbox {
     });
 
     ch.on('broadcast', { event: 'call_reject' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'call_reject', payload);
       const event = payload as CallRejectEvent;
       if (!event || event.type !== 'call_reject') return;
       if (event.toUserId !== this.userId) return;
@@ -203,6 +228,7 @@ export class CallInbox {
     });
 
     ch.on('broadcast', { event: 'call_cancel' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'call_cancel', payload);
       const event = payload as CallCancelEvent;
       if (!event || event.type !== 'call_cancel') return;
       if (event.toUserId !== this.userId) return;
@@ -214,20 +240,22 @@ export class CallInbox {
     this.subscribed = false;
     await new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(() => reject(new Error('call inbox timeout')), 12_000);
-      ch.subscribe((status) => {
-        audit('call inbox subscribe', { status, userId });
+      const logStatus = logRealtimeStatus(chName, { userId });
+      ch.subscribe((status, err) => {
+        logStatus(status, err);
+        audit('call inbox subscribe', { status, userId, err: err?.message });
         if (status === 'SUBSCRIBED') {
           this.subscribed = true;
           window.clearTimeout(timer);
           resolve();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           window.clearTimeout(timer);
           const wasLive = this.subscribed;
           this.subscribed = false;
           if (wasLive && this.channel === ch) {
             void this.recoverIfNeeded();
           }
-          reject(new Error(`call inbox ${status}`));
+          reject(new Error(`call inbox ${status}${err ? `: ${err.message}` : ''}`));
         }
       });
     });

@@ -41,8 +41,38 @@ function createClientIfNeeded(): SupabaseClient {
         detectSessionInUrl: true,
       },
     });
+    client.auth.onAuthStateChange((event, session) => {
+      console.log('[AUTH STATE]', event, {
+        uid: session?.user?.id ?? null,
+        hasJwt: Boolean(session?.access_token),
+      });
+    });
   }
   return client;
+}
+
+/** Коллбек `.subscribe()`: статус канала + причина CLOSED / CHANNEL_ERROR. */
+export function logRealtimeStatus(channelName: string, extra?: Record<string, unknown>) {
+  return (status: string, err?: Error) => {
+    console.error(`[REALTIME STATUS - ${channelName}]:`, status, err ?? null, extra ?? '');
+    if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      console.error(`[REALTIME FAIL - ${channelName}] причина:`, err ?? 'no error payload', {
+        hint: 'CHANNEL_ERROR/CLOSED часто значит подписка до инициализации auth.uid()',
+        ...extra,
+      });
+    }
+  };
+}
+
+/** Дождаться JWT / auth.uid() перед Realtime-каналами (presence, calls, room). */
+export async function waitForRealtimeAuth(label: string): Promise<Session> {
+  const session = await ensureAuthSession();
+  console.log('[REALTIME AUTH READY]', {
+    label,
+    uid: session.user.id,
+    hasJwt: Boolean(session.access_token),
+  });
+  return session;
 }
 
 /**
@@ -101,6 +131,11 @@ export async function ensureAuthSession(): Promise<Session> {
     throw new Error('Сессия Auth отсутствует. Обновите страницу и войдите снова.');
   }
 
+  console.log('[AUTH SESSION]', {
+    uid: session.user.id,
+    anonymous: Boolean(session.user.is_anonymous),
+    hasJwt: Boolean(session.access_token),
+  });
   alignIdentityToAuthUid(session.user.id);
   return session;
 }

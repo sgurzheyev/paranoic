@@ -1,7 +1,7 @@
 /** Прямое P2P через WebRTC: DataChannel + MediaStream + Supabase signaling. */
 
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { getSupabase, hasSupabaseConfig, logRealtimeStatus, waitForRealtimeAuth } from './lib/supabase';
 import {
   ensureCallMediaAccess,
   getUserMediaForCall,
@@ -687,47 +687,68 @@ export class P2PConnection {
     this.remotePeerId = null;
     this.handshakeStarted = false;
     this.pendingCandidates = [];
-    this.cachedIceServers = PUBLIC_ICE_SERVERS;
+    this.cachedIceServers =
+      this.cachedIceServers?.length ? this.cachedIceServers : PUBLIC_ICE_SERVERS;
+    if (!this.cachedIceServers.some((s) => String(s.urls).includes('stun:'))) {
+      this.cachedIceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        ...this.cachedIceServers,
+      ];
+    }
     logIceServers('public Google STUN + Open Relay', this.cachedIceServers);
     this.setStatus(options.isHost ? 'waiting-answer' : 'connecting');
     this.setSignalingStatus('Подключаемся к сокетам...');
     p2pAudit('joinRoom start', { roomId, isHost: options.isHost, peerId: this.peerId });
 
+    const session = await waitForRealtimeAuth(`room:${roomId}`);
     const sb = getSupabase();
-    const signal = sb.channel(`room:${roomId}`, {
+    const chName = `room:${roomId}`;
+    const signal = sb.channel(chName, {
       config: { broadcast: { self: false } },
     });
 
     signal.on('broadcast', { event: 'join' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'join', payload);
       void this.onSignalJoin(payload as SignalJoin);
     });
     signal.on('broadcast', { event: 'join-ack' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'join-ack', payload);
       this.onSignalJoinAck(payload as SignalJoinAck);
     });
     signal.on('broadcast', { event: 'offer' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'offer', payload);
       void this.onSignalOffer(payload as SignalOffer);
     });
     signal.on('broadcast', { event: 'answer' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'answer', payload);
       void this.onSignalAnswer(payload as SignalAnswer);
     });
     signal.on('broadcast', { event: 'ice-candidate' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'ice-candidate', payload);
       void this.onSignalIce(payload as SignalIce);
     });
     signal.on('broadcast', { event: 'reject' }, ({ payload }) => {
+      console.log('[SIGNAL IN]', 'reject', payload);
       this.onSignalReject(payload as SignalReject);
     });
     signal.on('broadcast', { event: 'ctrl' }, ({ payload }) => {
-      void this.onSignalCtrl(payload as SignalCtrl);
+      const ctrl = payload as SignalCtrl;
+      console.log('[SIGNAL IN]', ctrl?.packet?.t ?? 'ctrl', payload);
+      void this.onSignalCtrl(ctrl);
     });
 
     await new Promise<void>((resolve, reject) => {
-      signal.subscribe((status) => {
-        p2pAudit('room signal subscribe', { roomId, status });
+      const logStatus = logRealtimeStatus(chName, {
+        uid: session.user.id,
+        peerId: this.peerId,
+      });
+      signal.subscribe((status, err) => {
+        logStatus(status, err);
+        p2pAudit('room signal subscribe', { roomId, status, err: err?.message });
         if (status === 'SUBSCRIBED') resolve();
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          // Если уже в комнате — помечаем сбой; иначе reject на старте.
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           if (this.signal === signal) {
-            p2pAudit('room signal lost', { roomId, status });
+            p2pAudit('room signal lost', { roomId, status, err: err?.message });
             this.handlers.onError?.(
               new Error('Сигналинг комнаты оборвался. Перезайдите по ссылке.')
             );
@@ -737,7 +758,11 @@ export class P2PConnection {
               this.setStatus('failed');
             }
           } else {
-            reject(new Error('Не удалось подключиться к комнате (signaling)'));
+            reject(
+              new Error(
+                `Не удалось подключиться к комнате (signaling ${status}${err ? `: ${err.message}` : ''})`
+              )
+            );
           }
         }
       });
@@ -1401,6 +1426,7 @@ export class P2PConnection {
   /** Повторная отправка критичных Realtime-событий (join/offer/answer/ICE/ctrl). */
   private async broadcastReliable(event: string, payload: object): Promise<void> {
     if (!this.signal) return;
+    console.log('[SIGNAL OUT]', event, payload);
     for (let attempt = 0; attempt < BROADCAST_RETRIES; attempt++) {
       try {
         const result = await this.signal.send({
@@ -1426,6 +1452,7 @@ export class P2PConnection {
   private sendCallControl(packet: ControlPacket): void {
     const msgId = packet.msgId || this.newMsgId();
     const withId = { ...packet, msgId } as ControlPacket;
+    console.log('[SIGNAL OUT]', withId.t, withId);
     try {
       if (this.isReady) this.sendControl(withId);
     } catch (e) {
@@ -2063,7 +2090,10 @@ export class P2PConnection {
   }
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
-    const iceServers = this.cachedIceServers ?? PUBLIC_ICE_SERVERS;
+    let iceServers = this.cachedIceServers ?? PUBLIC_ICE_SERVERS;
+    if (!iceServers.some((s) => String(s.urls).includes('stun:'))) {
+      iceServers = [{ urls: 'stun:stun.l.google.com:19302' }, ...iceServers];
+    }
     this.cachedIceServers = iceServers;
     p2pAudit('createPeerConnection', {
       peerId: this.peerId,
@@ -2078,6 +2108,14 @@ export class P2PConnection {
       rtcpMuxPolicy: 'require',
       iceTransportPolicy: 'all',
     });
+    console.log('[ICE CONFIG]', {
+      iceServerCount: iceServers.length,
+      urls: iceServers.flatMap((s) => (Array.isArray(s.urls) ? s.urls : [s.urls])),
+    });
+
+    pc.onsignalingstatechange = () => {
+      console.log('[SIGNALING STATE]:', pc.signalingState);
+    };
 
     // Trickle ICE — кандидаты с ретраями (Realtime часто теряет одиночные broadcast).
     pc.onicecandidate = (event) => {
@@ -2130,6 +2168,7 @@ export class P2PConnection {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log('[PEER CONNECTION]:', pc.connectionState);
       p2pAudit('connectionState', {
         state: pc.connectionState,
         ice: pc.iceConnectionState,
@@ -2163,6 +2202,7 @@ export class P2PConnection {
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
+      console.log('[ICE STATE]:', state);
       p2pAudit('iceConnectionState', { state, callState: this.callState });
       if (state === 'checking') {
         this.armIceCheckTimeout(pc);
@@ -2183,6 +2223,7 @@ export class P2PConnection {
         this.clearIceCheckTimeout();
         this.clearIceSoftRestartTimer();
         if (state === 'failed') {
+          console.error('[WEBRTC FAIL] Невозможно пробить NAT/Firewall');
           this.handlers.onError?.(new Error('Связь оборвалась. Переподключаемся…'));
         }
         // failed / closed: гарантированно гасим PC и локальные треки (камера/мик).
