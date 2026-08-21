@@ -1,10 +1,7 @@
-import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ensureAuthSession,
   getSupabase,
   hasSupabaseConfig,
-  logRealtimeStatus,
-  waitForRealtimeAuth,
 } from './lib/supabase';
 
 export type PresenceStatus = 'online' | 'away' | 'offline' | 'in_call';
@@ -20,6 +17,8 @@ export type PresenceUser = {
   online: boolean;
   status?: PresenceStatus;
   updatedAt: number;
+  /** Живые координаты (свой GPS). Опрос profiles даёт только online-флаг. */
+  hasLocation?: boolean;
 };
 
 export type GeoPoint = { lat: number; lng: number; source: 'gps' | 'antarctica' };
@@ -27,12 +26,13 @@ export type GeoPoint = { lat: number; lng: number; source: 'gps' | 'antarctica' 
 /** Условная «Антарктида», если GPS недоступен / запрещён. */
 export const ANTARCTICA: GeoPoint = { lat: -78.5, lng: 16.5, source: 'antarctica' };
 
-const PRESENCE_CHANNEL = 'paranoic-world';
 const GEO_FALLBACK_MS = 7_000;
 /** Heartbeat ping в profiles. */
-export const PRESENCE_HEARTBEAT_MS = 30_000;
+export const PRESENCE_HEARTBEAT_MS = 15_000;
 /** last_seen старше этого — считаем offline. */
-export const PRESENCE_STALE_MS = 90_000;
+export const PRESENCE_STALE_MS = 45_000;
+/** Как часто опрашивать список онлайн-профилей для UI. */
+export const PRESENCE_POLL_MS = 15_000;
 
 export type GeoWatchHandle = { stop: () => void };
 
@@ -151,11 +151,70 @@ function normalizeStatus(raw: unknown): PresenceStatus {
   return 'offline';
 }
 
-function isFreshLastSeen(lastSeen: string | null | undefined): boolean {
+export function isFreshLastSeen(lastSeen: string | null | undefined): boolean {
   if (!lastSeen) return false;
   const t = Date.parse(lastSeen);
   if (!Number.isFinite(t)) return false;
   return Date.now() - t <= PRESENCE_STALE_MS;
+}
+
+/** is_online + свежий last_seen (≤ 45с). */
+export function isHeartbeatOnline(
+  isOnline: boolean | null | undefined,
+  lastSeen: string | null | undefined
+): boolean {
+  return Boolean(isOnline) && isFreshLastSeen(lastSeen);
+}
+
+async function writeProfileHeartbeat(
+  userId: string,
+  online: boolean,
+  status?: PresenceStatus
+): Promise<void> {
+  if (!hasSupabaseConfig() || !userId) return;
+  try {
+    await ensureAuthSession();
+    const sb = getSupabase();
+    const patch: Record<string, unknown> = {
+      is_online: online,
+      last_seen: new Date().toISOString(),
+    };
+    if (status) patch.presence_status = status;
+    const { error } = await sb.from('profiles').update(patch).eq('id', userId);
+    if (error) {
+      console.warn('[presence] heartbeat', error.message);
+    }
+  } catch (e) {
+    console.warn('[presence] heartbeat failed', e);
+  }
+}
+
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let heartbeatUserId = '';
+
+export function stopHeartbeat(): void {
+  if (heartbeatTimer != null) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  heartbeatUserId = '';
+}
+
+/**
+ * Прямой API-heartbeat: каждые 15с пишет is_online + last_seen в profiles.
+ * Возвращает disposer (stopHeartbeat).
+ */
+export function startHeartbeat(userId: string): () => void {
+  stopHeartbeat();
+  if (!userId) return stopHeartbeat;
+  heartbeatUserId = userId;
+  const tick = () => {
+    if (heartbeatUserId !== userId) return;
+    void writeProfileHeartbeat(userId, true);
+  };
+  tick();
+  heartbeatTimer = window.setInterval(tick, PRESENCE_HEARTBEAT_MS);
+  return stopHeartbeat;
 }
 
 /**
@@ -165,23 +224,60 @@ export async function pingProfilePresence(
   userId: string,
   status: PresenceStatus
 ): Promise<void> {
-  if (!hasSupabaseConfig() || !userId) return;
+  const online = status === 'online' || status === 'away' || status === 'in_call';
+  await writeProfileHeartbeat(userId, online, status);
+}
+
+/** Профили с is_online = true и last_seen не старше 45 секунд. */
+export async function getOnlineUsers(): Promise<PresenceUser[]> {
+  if (!hasSupabaseConfig()) return [];
   try {
     await ensureAuthSession();
     const sb = getSupabase();
-    const { error } = await sb
+    const cutoff = new Date(Date.now() - PRESENCE_STALE_MS).toISOString();
+    const { data, error } = await sb
       .from('profiles')
-      .update({
-        is_online: status === 'online' || status === 'away' || status === 'in_call',
-        last_seen: new Date().toISOString(),
-        presence_status: status,
-      })
-      .eq('id', userId);
+      .select('id,name,color,avatar_url,theme_fon,is_online,last_seen,presence_status')
+      .eq('is_online', true)
+      .gte('last_seen', cutoff);
     if (error) {
-      console.warn('[presence] heartbeat', error.message);
+      console.warn('[presence] getOnlineUsers', error.message);
+      return [];
     }
+    const rows = (data ?? []) as Array<{
+      id?: string;
+      name?: string | null;
+      color?: string | null;
+      avatar_url?: string | null;
+      theme_fon?: string | null;
+      is_online?: boolean | null;
+      last_seen?: string | null;
+      presence_status?: string | null;
+    }>;
+    const out: PresenceUser[] = [];
+    for (const row of rows) {
+      const userId = String(row.id ?? '').trim();
+      if (!userId) continue;
+      if (!isHeartbeatOnline(row.is_online, row.last_seen)) continue;
+      const status = normalizeStatus(row.presence_status);
+      out.push({
+        userId,
+        name: row.name?.trim() || userId.slice(0, 8),
+        color: row.color?.trim() || '#60a5fa',
+        avatarUrl: row.avatar_url || undefined,
+        themeFon: row.theme_fon || undefined,
+        lat: ANTARCTICA.lat,
+        lng: ANTARCTICA.lng,
+        online: true,
+        status: status === 'offline' ? 'online' : status,
+        updatedAt: row.last_seen ? Date.parse(row.last_seen) || Date.now() : Date.now(),
+        hasLocation: false,
+      });
+    }
+    return out;
   } catch (e) {
-    console.warn('[presence] heartbeat failed', e);
+    console.warn('[presence] getOnlineUsers failed', e);
+    return [];
   }
 }
 
@@ -203,26 +299,22 @@ export async function fetchPeerPresence(userId: string): Promise<PeerPresenceInf
       return { userId, status: 'offline', isOnline: false, lastSeen: null };
     }
     const row = data as {
-      id?: string;
       is_online?: boolean;
       last_seen?: string | null;
       presence_status?: string | null;
     };
     const lastSeen = row.last_seen ?? null;
-    let status = normalizeStatus(row.presence_status);
-    if (status === 'in_call') {
+    const fresh = isHeartbeatOnline(row.is_online, lastSeen);
+    const status = normalizeStatus(row.presence_status);
+    if (status === 'in_call' && fresh) {
       return { userId, status: 'in_call', isOnline: true, lastSeen };
     }
-    if (!isFreshLastSeen(lastSeen)) {
-      return { userId, status: 'offline', isOnline: false, lastSeen };
-    }
-    if (status === 'offline' && row.is_online) status = 'online';
-    if (status === 'offline') {
+    if (!fresh) {
       return { userId, status: 'offline', isOnline: false, lastSeen };
     }
     return {
       userId,
-      status,
+      status: status === 'offline' ? 'online' : status,
       isOnline: true,
       lastSeen,
     };
@@ -249,16 +341,16 @@ type PresenceHandlers = {
 };
 
 /**
- * Presence: Realtime channel (карта / быстрые события)
- * + profiles heartbeat каждые 30с (надёжный online).
+ * Presence через API heartbeat (без Realtime channel.track).
+ * Свой профиль: setInterval 15с → profiles.is_online / last_seen.
+ * Контакты: периодический getOnlineUsers().
  */
 export class WorldPresence {
-  private channel: RealtimeChannel | null = null;
   private handlers: PresenceHandlers;
   private me: PresenceUser | null = null;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastOnline: PresenceUser[] = [];
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
   private visibilityHandler: (() => void) | null = null;
-  private pageStatus: PresenceStatus = 'online';
   private inCall = false;
 
   constructor(handlers: PresenceHandlers = {}) {
@@ -271,206 +363,176 @@ export class WorldPresence {
       return;
     }
 
-    const session = await waitForRealtimeAuth('presence');
-    if (me.userId && me.userId !== session.user.id) {
-      console.error('[REALTIME FAIL - paranoic-world] identity.id ≠ auth.uid()', {
-        identityId: me.userId,
-        authUid: session.user.id,
-      });
+    let userId = me.userId;
+    try {
+      const session = await ensureAuthSession();
+      if (me.userId && me.userId !== session.user.id) {
+        console.error('[presence] identity.id ≠ auth.uid()', {
+          identityId: me.userId,
+          authUid: session.user.id,
+        });
+      }
+      userId = session.user.id;
+    } catch (e) {
+      this.handlers.onError?.(e instanceof Error ? e : new Error('Нет сессии Auth'));
+      return;
     }
-    const userId = session.user.id;
 
     await this.stop();
-    this.pageStatus = document.visibilityState === 'visible' ? 'online' : 'away';
     this.inCall = false;
     this.me = {
       ...me,
       userId,
-      online: true,
-      status: this.pageStatus,
+      online: document.visibilityState !== 'hidden',
+      status: document.visibilityState === 'hidden' ? 'offline' : 'online',
       updatedAt: Date.now(),
+      hasLocation: true,
     };
 
-    const sb = getSupabase();
-    const channel = sb.channel(PRESENCE_CHANNEL, {
-      config: { presence: { key: userId } },
-    });
-
-    channel.on('presence', { event: 'sync' }, () => {
-      this.handlers.onSync?.(this.collect());
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      const logStatus = logRealtimeStatus(PRESENCE_CHANNEL, { uid: userId });
-      channel.subscribe(async (status, err) => {
-        logStatus(status, err);
-        if (status === 'SUBSCRIBED') {
-          await channel.track(this.me!);
-          resolve();
-        }
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          reject(new Error(`Не удалось подключить presence (${status}${err ? `: ${err.message}` : ''})`));
-        }
-      });
-    });
-
-    this.channel = channel;
     this.bindVisibility();
-    this.startHeartbeat();
-    await this.heartbeat();
-    this.handlers.onSync?.(this.collect());
+    if (document.visibilityState !== 'hidden') {
+      void writeProfileHeartbeat(userId, true, 'online');
+      startHeartbeat(userId);
+    } else {
+      void writeProfileHeartbeat(userId, false, 'offline');
+    }
+    this.startOnlinePoll();
+    await this.syncOnlineUsers();
   }
 
-  /** Занятость на время звонка — heartbeat пишет in_call. */
+  /** Занятость на время звонка. */
   setInCall(active: boolean): void {
     this.inCall = active;
+    const userId = this.me?.userId;
+    if (!userId) return;
     if (active) {
-      this.pageStatus = 'in_call';
+      if (this.me) {
+        this.me = { ...this.me, online: true, status: 'in_call', updatedAt: Date.now() };
+      }
+      void pingProfilePresence(userId, 'in_call');
+      if (document.visibilityState === 'visible') {
+        startHeartbeat(userId);
+      }
+    } else if (document.visibilityState === 'visible') {
+      if (this.me) {
+        this.me = { ...this.me, online: true, status: 'online', updatedAt: Date.now() };
+      }
+      void pingProfilePresence(userId, 'online');
+      startHeartbeat(userId);
     } else {
-      this.pageStatus = document.visibilityState === 'visible' ? 'online' : 'away';
+      void this.markHidden();
     }
-    if (this.me) {
-      this.me = {
-        ...this.me,
-        online: true,
-        status: this.pageStatus,
-        updatedAt: Date.now(),
-      };
-      void this.channel?.track(this.me);
-    }
-    void this.heartbeat();
+    this.emitSync();
   }
 
   private bindVisibility(): void {
     if (this.visibilityHandler || typeof document === 'undefined') return;
     this.visibilityHandler = () => {
-      if (this.inCall) {
-        this.pageStatus = 'in_call';
-        void this.heartbeat();
-        return;
-      }
-      if (document.visibilityState === 'visible') {
-        this.pageStatus = 'online';
-        if (this.me) {
-          this.me = { ...this.me, online: true, status: 'online', updatedAt: Date.now() };
-          void this.channel?.track(this.me);
-        }
-        void this.heartbeat();
+      if (document.visibilityState === 'hidden') {
+        void this.markHidden();
       } else {
-        this.pageStatus = 'away';
-        if (this.me) {
-          this.me = { ...this.me, online: true, status: 'away', updatedAt: Date.now() };
-          void this.channel?.track(this.me);
-        }
-        void this.heartbeat();
+        void this.markVisible();
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
   }
 
-  private startHeartbeat(): void {
-    this.clearHeartbeat();
-    this.heartbeatTimer = window.setInterval(() => {
-      void this.heartbeat();
-    }, PRESENCE_HEARTBEAT_MS);
+  private async markHidden(): Promise<void> {
+    stopHeartbeat();
+    const userId = this.me?.userId;
+    if (this.me) {
+      this.me = { ...this.me, online: false, status: 'offline', updatedAt: Date.now() };
+    }
+    if (userId) {
+      await writeProfileHeartbeat(userId, false, this.inCall ? 'in_call' : 'offline');
+    }
+    this.emitSync();
   }
 
-  private clearHeartbeat(): void {
-    if (this.heartbeatTimer != null) {
-      window.clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+  private async markVisible(): Promise<void> {
+    const userId = this.me?.userId;
+    if (this.me) {
+      this.me = {
+        ...this.me,
+        online: true,
+        status: this.inCall ? 'in_call' : 'online',
+        updatedAt: Date.now(),
+      };
+    }
+    if (userId) {
+      await writeProfileHeartbeat(userId, true, this.inCall ? 'in_call' : 'online');
+      startHeartbeat(userId);
+    }
+    await this.syncOnlineUsers();
+  }
+
+  private startOnlinePoll(): void {
+    this.clearOnlinePoll();
+    this.pollTimer = window.setInterval(() => {
+      void this.syncOnlineUsers();
+    }, PRESENCE_POLL_MS);
+  }
+
+  private clearOnlinePoll(): void {
+    if (this.pollTimer != null) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
   }
 
-  private async heartbeat(): Promise<void> {
-    if (!this.me) return;
-    const status: PresenceStatus = this.inCall
-      ? 'in_call'
-      : this.pageStatus === 'away'
-        ? 'away'
-        : 'online';
-    this.pageStatus = status;
-    this.me = { ...this.me, online: true, status, updatedAt: Date.now() };
-    try {
-      await this.channel?.track(this.me);
-    } catch {
-      /* */
-    }
-    await pingProfilePresence(this.me.userId, status);
+  private async syncOnlineUsers(): Promise<void> {
+    this.lastOnline = await getOnlineUsers();
+    this.emitSync();
+  }
+
+  private emitSync(): void {
+    this.handlers.onSync?.(this.collect());
   }
 
   async updateLocation(lat: number, lng: number): Promise<void> {
-    if (!this.channel || !this.me) return;
+    if (!this.me) return;
     if (this.me.lat === lat && this.me.lng === lng) return;
     this.me = {
       ...this.me,
       lat,
       lng,
       updatedAt: Date.now(),
-      online: true,
-      status: this.pageStatus,
+      hasLocation: true,
     };
-    await this.channel.track(this.me);
+    this.emitSync();
   }
 
   async updateProfile(
     patch: Partial<Pick<PresenceUser, 'name' | 'color' | 'avatarUrl' | 'themeFon' | 'lat' | 'lng'>>
   ): Promise<void> {
-    if (!this.channel || !this.me) return;
+    if (!this.me) return;
     this.me = {
       ...this.me,
       ...patch,
       updatedAt: Date.now(),
-      online: true,
-      status: this.pageStatus,
     };
-    await this.channel.track(this.me);
+    this.emitSync();
   }
 
   collect(): PresenceUser[] {
-    if (!this.channel) return [];
-    const state = this.channel.presenceState<PresenceUser>();
-    const out: PresenceUser[] = [];
-    for (const key of Object.keys(state)) {
-      const metas = state[key];
-      const latest = metas?.[metas.length - 1];
-      if (latest?.userId) {
-        out.push({
-          ...latest,
-          online: latest.status !== 'offline',
-          status: latest.status ?? 'online',
-        });
-      }
-    }
-    return out;
+    const mine = this.me?.userId;
+    const others = this.lastOnline.filter((u) => u.userId !== mine);
+    return this.me ? [this.me, ...others] : others;
   }
 
   async stop(): Promise<void> {
-    this.clearHeartbeat();
+    this.clearOnlinePoll();
+    stopHeartbeat();
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
     }
     const meId = this.me?.userId;
-    const ch = this.channel;
-    this.channel = null;
     this.me = null;
+    this.lastOnline = [];
     this.inCall = false;
-    this.pageStatus = 'offline';
     if (meId) {
-      void pingProfilePresence(meId, 'offline');
-    }
-    if (!ch) return;
-    try {
-      await ch.untrack();
-    } catch {
-      /* */
-    }
-    try {
-      await ch.unsubscribe();
-      getSupabase().removeChannel(ch);
-    } catch {
-      /* */
+      void writeProfileHeartbeat(meId, false, 'offline');
     }
   }
 }

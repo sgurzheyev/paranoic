@@ -379,11 +379,14 @@ export default function App() {
     };
   }, []);
 
-  const onlineIds = useMemo(() => new Set(presenceUsers.map((u) => u.userId)), [presenceUsers]);
+  const onlineIds = useMemo(
+    () => new Set(presenceUsers.filter((u) => u.online).map((u) => u.userId)),
+    [presenceUsers]
+  );
 
   const mapPeople = useMemo((): MapPerson[] => {
     const list: MapPerson[] = presenceUsers
-      .filter((u) => u.userId !== identity.id && !isBlocked(u.userId))
+      .filter((u) => u.userId !== identity.id && !isBlocked(u.userId) && u.hasLocation)
       .map((u) => {
         const contact = contacts.find((c) => c.id === u.userId);
         const trusted = Boolean(contact?.trusted) || trustedIds.has(u.userId) || isTrusted(u.userId);
@@ -2237,9 +2240,18 @@ export default function App() {
         }
         if (check.needsOfflineConfirm) {
           const sendNotify = window.confirm(
-            'Пользователь не в сети, отправить уведомление?'
+            'Пользователь не в сети. Отправить уведомление (Push)?'
           );
-          if (!sendNotify) return false;
+          if (sendNotify) {
+            void upsertCallSession({
+              callId: newCallId(),
+              fromUserId: me.id,
+              toUserId: callTarget,
+              status: 'ringing',
+            });
+            setError('Уведомление отправлено.');
+          }
+          return false;
         }
         return true;
       };

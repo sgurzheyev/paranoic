@@ -6,7 +6,7 @@ import {
   waitForRealtimeAuth,
 } from './lib/supabase';
 import {
-  fetchPeerPresence,
+  isHeartbeatOnline,
   pingProfilePresence,
   setUsersCallPresence,
   type PeerPresenceInfo,
@@ -280,9 +280,20 @@ export class CallInbox {
     }
   }
 
-  /** Инициатор → получателю: Caller ID до WebRTC. */
+  /** Инициатор → получателю: Caller ID до WebRTC.
+   *  Строка call_sessions пишется отдельно (`from_user_id` / `to_user_id`, не sender/recipient).
+   */
   async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<void> {
     if (!toUserId || toUserId === from.id) return;
+    const check = await checkCalleeOnline(toUserId);
+    if (!check.ok || check.needsOfflineConfirm) {
+      console.warn('[SIGNAL OUT] skip call_offer — callee offline or busy', {
+        to: toUserId,
+        status: check.peer.status,
+        isOnline: check.peer.isOnline,
+      });
+      return;
+    }
     const payload: CallOfferEvent = {
       type: 'call_offer',
       callId,
@@ -332,8 +343,8 @@ export function callerDisplayName(info: Pick<CallerInfo, 'name' | 'username' | '
 }
 
 /**
- * Перед SDP / call_offer: проверить heartbeat-статус получателя.
- * Offline → UI должен спросить про уведомление.
+ * Перед SDP / call_offer: прямой SELECT is_online, last_seen.
+ * Offline (is_online = false или last_seen старше 45с) → не звонить, UI про Push.
  */
 export async function checkCalleeOnline(toUserId: string): Promise<{
   ok: boolean;
@@ -341,14 +352,64 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
   /** true = пользователь offline, нужен confirm про уведомление */
   needsOfflineConfirm: boolean;
 }> {
-  const peer = await fetchPeerPresence(toUserId);
-  if (peer.status === 'in_call') {
-    return { ok: false, peer, needsOfflineConfirm: false };
+  if (!hasSupabaseConfig() || !toUserId) {
+    return {
+      ok: true,
+      peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
+      needsOfflineConfirm: true,
+    };
   }
-  if (!peer.isOnline || peer.status === 'offline') {
-    return { ok: true, peer, needsOfflineConfirm: true };
+  try {
+    await waitForRealtimeAuth('call-presence');
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from('profiles')
+      .select('is_online, last_seen, presence_status')
+      .eq('id', toUserId)
+      .single();
+    if (error || !data) {
+      if (error) console.warn('[presence] callee check', error.message);
+      return {
+        ok: true,
+        peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
+        needsOfflineConfirm: true,
+      };
+    }
+    const row = data as {
+      is_online?: boolean | null;
+      last_seen?: string | null;
+      presence_status?: string | null;
+    };
+    const lastSeen = row.last_seen ?? null;
+    const online = isHeartbeatOnline(row.is_online, lastSeen);
+    const statusRaw = String(row.presence_status ?? '').toLowerCase();
+    if (online && statusRaw === 'in_call') {
+      return {
+        ok: false,
+        peer: { userId: toUserId, status: 'in_call', isOnline: true, lastSeen },
+        needsOfflineConfirm: false,
+      };
+    }
+    if (!online) {
+      return {
+        ok: true,
+        peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen },
+        needsOfflineConfirm: true,
+      };
+    }
+    return {
+      ok: true,
+      peer: { userId: toUserId, status: 'online', isOnline: true, lastSeen },
+      needsOfflineConfirm: false,
+    };
+  } catch (e) {
+    console.warn('[presence] callee check failed', e);
+    return {
+      ok: true,
+      peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
+      needsOfflineConfirm: true,
+    };
   }
-  return { ok: true, peer, needsOfflineConfirm: false };
 }
 
 /** Оба участника → in_call (занятость в profiles). */

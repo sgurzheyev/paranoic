@@ -2,8 +2,8 @@
  * Presence heartbeat columns on profiles.
  * Run in Supabase SQL Editor after profiles.sql / harden_rls_policies.sql.
  *
- * Client heartbeats every ~30s while the tab is visible.
- * Stale last_seen (>90s) is treated as offline by the app.
+ * Client heartbeats every 15s while the tab is visible.
+ * Stale last_seen (>45s) is treated as offline by the app.
  */
 
 alter table public.profiles
