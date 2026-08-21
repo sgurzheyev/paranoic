@@ -4,15 +4,20 @@ import {
   getSupabase,
   hasSupabaseConfig,
 } from './lib/supabase';
+import { getOrCreateIdentity } from './identity';
 import {
+  assertWithinUploadLimit,
   deleteR2Object,
   hasR2Config,
   objectKeyFromPublicUrl,
-  uploadFileToR2,
+  thumbUrlFromMediaUrl,
+  uploadFileToR2Detailed,
 } from './s3Storage';
 
 export const MAP_GEMS_TABLE = 'map_gems';
 export const MAP_GEMS_BUCKET = 'map-gems';
+/** Лимит бесплатных капсул на пользователя. */
+export const FREE_MAP_GEM_LIMIT = 5;
 
 export type MapGemType = 'photo' | 'video' | 'text';
 
@@ -35,6 +40,11 @@ export type CreateMapGemInput = {
   content?: string | null;
 };
 
+export type UploadGemMediaResult = {
+  mediaUrl: string;
+  thumbUrl?: string;
+};
+
 const SELECT_COLS = 'id,author_id,lat,lng,type,media_url,content,created_at';
 
 function mapRow(row: Record<string, unknown>): MapGem {
@@ -48,6 +58,12 @@ function mapRow(row: Record<string, unknown>): MapGem {
     content: (row.content as string | null) ?? null,
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
+}
+
+/** URL превью для маркера карты: `-thumb.webp` рядом с полным файлом. */
+export function gemMapPreviewUrl(gem: Pick<MapGem, 'media_url' | 'type'>): string | null {
+  if (!gem.media_url || gem.type === 'text') return null;
+  return thumbUrlFromMediaUrl(gem.media_url) || gem.media_url;
 }
 
 /**
@@ -96,6 +112,69 @@ export async function fetchAllMapGems(): Promise<MapGem[]> {
   }
 }
 
+/** Число капсул текущего Auth-пользователя (author_id = auth.uid()). */
+export async function countOwnMapGems(): Promise<number> {
+  if (!hasSupabaseConfig()) return 0;
+  try {
+    const uid = await getAuthUserId();
+    if (!uid) return 0;
+    const sb = getSupabase();
+    const { count, error } = await sb
+      .from(MAP_GEMS_TABLE)
+      .select('id', { count: 'exact', head: true })
+      .eq('author_id', uid);
+    if (error) {
+      console.warn('[paranoic gems] count', error.message);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (e) {
+    console.warn('[paranoic gems] count failed', e);
+    return 0;
+  }
+}
+
+/**
+ * Premium-флаг: profiles.is_premium (по auth.uid или локальному id)
+ * либо localStorage `paranoic-premium-v1` = "1".
+ */
+export async function isPremiumUser(): Promise<boolean> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (localStorage.getItem('paranoic-premium-v1') === '1') return true;
+    }
+  } catch {
+    /* */
+  }
+
+  if (!hasSupabaseConfig()) return false;
+  try {
+    const authId = await getAuthUserId();
+    const localId = getOrCreateIdentity().id;
+    const ids = [...new Set([authId, localId].filter(Boolean))];
+    if (ids.length === 0) return false;
+    const sb = getSupabase();
+    const { data, error } = await sb.from('profiles').select('id,is_premium').in('id', ids);
+    if (error) {
+      console.warn('[paranoic gems] is_premium lookup', error.message);
+      return false;
+    }
+    return ((data as Array<{ is_premium?: boolean }> | null) ?? []).some(
+      (row) => row.is_premium === true
+    );
+  } catch (e) {
+    console.warn('[paranoic gems] is_premium failed', e);
+    return false;
+  }
+}
+
+/** true, если бесплатный лимит исчерпан и нет Premium. */
+export async function isFreeGemLimitReached(): Promise<boolean> {
+  if (await isPremiumUser()) return false;
+  const count = await countOwnMapGems();
+  return count >= FREE_MAP_GEM_LIMIT;
+}
+
 /**
  * Тексты капсул, видимых на карте (для тихого [Контекст обстановки] ИИ).
  */
@@ -103,7 +182,6 @@ export function buildVisibleGemsContext(
   gems: MapGem[],
   opts: {
     showGems: boolean;
-    /** Если есть bounds карты — только маркеры во вьюпорте. */
     inBounds?: (lat: number, lng: number) => boolean;
   }
 ): string {
@@ -126,7 +204,6 @@ export function buildVisibleGemsContext(
 /**
  * INSERT в map_gems.
  * `author_id` строго из session.user.id (не локальный профиль).
- * Профиль на клиенте не трогаем.
  */
 export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
@@ -176,17 +253,27 @@ export async function createMapGem(input: CreateMapGemInput): Promise<MapGem> {
 
 /**
  * Загрузка фото/видео капсулы в Cloudflare R2.
- * Публичный URL сохраняется в map_gems.media_url (Supabase).
+ * Изображения: ≤15 МБ до сжатия → WebP ≤1600px + thumb 256×256.
  */
 export async function uploadGemMedia(
   file: File,
   onProgress?: (ratio: number) => void
 ): Promise<string> {
+  const result = await uploadGemMediaDetailed(file, onProgress);
+  return result.mediaUrl;
+}
+
+export async function uploadGemMediaDetailed(
+  file: File,
+  onProgress?: (ratio: number) => void
+): Promise<UploadGemMediaResult> {
   if (!hasR2Config()) {
     throw new Error(
       'Cloudflare R2 не настроен. Добавьте VITE_R2_* переменные окружения.'
     );
   }
+
+  assertWithinUploadLimit(file);
 
   const sb = getSupabase();
   const {
@@ -197,7 +284,11 @@ export async function uploadGemMedia(
 
   const uid = session.user.id || 'anon';
   try {
-    return await uploadFileToR2('map-gems', uid, file, { onProgress });
+    const uploaded = await uploadFileToR2Detailed('map-gems', uid, file, { onProgress });
+    return {
+      mediaUrl: uploaded.mediaUrl,
+      thumbUrl: uploaded.thumbUrl,
+    };
   } catch (err) {
     const raw = err instanceof Error ? err : new Error(String(err));
     const wrapped = new Error(
@@ -210,8 +301,7 @@ export async function uploadGemMedia(
 }
 
 /**
- * Удаляет капсулу: сначала объект в R2 (если есть media_url), затем строку map_gems.
- * Только автор (`author_id` === auth.uid()).
+ * Удаляет капсулу: сначала объект(ы) в R2, затем строку map_gems.
  */
 export async function deleteMapGem(gem: MapGem): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
@@ -227,6 +317,14 @@ export async function deleteMapGem(gem: MapGem): Promise<void> {
       throw new Error(`Не удалось определить ключ R2: ${gem.media_url}`);
     }
     await deleteR2Object(key);
+    const thumbKey = objectKeyFromPublicUrl(thumbUrlFromMediaUrl(gem.media_url) || '');
+    if (thumbKey && thumbKey !== key) {
+      try {
+        await deleteR2Object(thumbKey);
+      } catch (e) {
+        console.warn('[paranoic gems] thumb delete', e);
+      }
+    }
   }
 
   const sb = getSupabase();

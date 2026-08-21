@@ -1,7 +1,8 @@
 import type { MapGem } from './mapGems';
+import { gemMapPreviewUrl } from './mapGems';
 import { configureGemImageElement, createGemFallbackElement } from './gemImage';
 
-/** Кастомный HTML-маркер капсулы: превью media_urls[0] / media_url. */
+/** Кастомный HTML-маркер капсулы: превью thumb / media_url. */
 export function buildGemMarkerElement(gem: MapGem, onOpen: () => void): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -10,9 +11,10 @@ export function buildGemMarkerElement(gem: MapGem, onOpen: () => void): HTMLButt
   btn.title = gem.content?.trim() || 'Memory Gem';
   btn.style.touchAction = 'manipulation';
 
-  if (gem.media_url && gem.type !== 'text') {
+  const preview = gemMapPreviewUrl(gem);
+  if (preview && gem.type !== 'text') {
     const img = document.createElement('img');
-    img.src = gem.media_url;
+    img.src = preview;
     img.alt = '';
     img.draggable = false;
     img.className = 'map-gem-marker-img';

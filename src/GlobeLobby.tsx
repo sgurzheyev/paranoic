@@ -36,7 +36,7 @@ import {
   setGemsLayerVisibility,
   startGemPulse,
 } from './mapGemLayers';
-import { buildVisibleGemsContext, fetchAllMapGems, type MapGem } from './mapGems';
+import { buildVisibleGemsContext, fetchAllMapGems, gemMapPreviewUrl, type MapGem } from './mapGems';
 import { fetchMemoryGems } from './memoryGems';
 import { buildGemMarkerElement } from './mapGemMarkers';
 import { configureGemImageElement } from './gemImage';
@@ -764,9 +764,12 @@ export default function GlobeLobby({
           const img = existing
             .getElement()
             .querySelector('.map-gem-marker-img') as HTMLImageElement | null;
-          if (gem.media_url && img && img.src !== gem.media_url) {
-            img.src = gem.media_url;
-            configureGemImageElement(img, 'map-gem-marker-fallback');
+          if (gem.media_url && img) {
+            const preview = gemMapPreviewUrl(gem) || gem.media_url;
+            if (img.src !== preview) {
+              img.src = preview;
+              configureGemImageElement(img, 'map-gem-marker-fallback');
+            }
           }
           continue;
         }

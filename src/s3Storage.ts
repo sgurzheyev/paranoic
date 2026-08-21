@@ -16,6 +16,14 @@ import { Upload } from '@aws-sdk/lib-storage';
 
 export type R2Folder = 'avatars' | 'map-gems' | 'media';
 
+/** Жёсткий лимит размера файла до клиентского сжатия. */
+export const MAX_UPLOAD_BYTES_BEFORE_COMPRESS = 15 * 1024 * 1024;
+
+const GEM_FULL_MAX_EDGE = 1600;
+const GEM_FULL_QUALITY = 0.82;
+const GEM_THUMB_EDGE = 256;
+const GEM_THUMB_QUALITY = 0.75;
+
 type R2Config = {
   accountId: string;
   accessKeyId: string;
@@ -129,6 +137,114 @@ export function buildObjectKey(
   const stamp = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
   return `${folder}/${owner}/${stamp}-${rand}.${ext}`;
+}
+
+/** Публичный URL миниатюры рядом с полным media URL. */
+export function thumbUrlFromMediaUrl(mediaUrl: string): string | null {
+  try {
+    const u = new URL(mediaUrl);
+    const path = u.pathname;
+    const m = path.match(/^(.*)\.([^.]+)$/);
+    if (!m) return null;
+    u.pathname = `${m[1]}-thumb.${m[2]}`;
+    return u.toString();
+  } catch {
+    const m = mediaUrl.match(/^(.*)\.([a-z0-9]+)(\?.*)?$/i);
+    if (!m) return null;
+    return `${m[1]}-thumb.${m[2]}${m[3] ?? ''}`;
+  }
+}
+
+export function assertWithinUploadLimit(file: Blob | File): void {
+  if (file.size > MAX_UPLOAD_BYTES_BEFORE_COMPRESS) {
+    const mb = (file.size / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Файл слишком большой (${mb} МБ). Максимум ${MAX_UPLOAD_BYTES_BEFORE_COMPRESS / (1024 * 1024)} МБ до сжатия.`
+    );
+  }
+}
+
+function canvasToWebpBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Не удалось сжать изображение в WebP'));
+          return;
+        }
+        resolve(blob);
+      },
+      'image/webp',
+      quality
+    );
+  });
+}
+
+/**
+ * Сжимает изображение через Canvas → WebP.
+ * @param maxEdge максимальная сторона (сохраняет пропорции)
+ * @param quality 0..1
+ * @param cover если true — квадратный кроп cover (для thumbnail)
+ */
+export async function compressImageToWebp(
+  file: Blob,
+  maxEdge: number,
+  quality: number,
+  cover = false
+): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas 2D недоступен');
+
+    if (cover) {
+      const size = maxEdge;
+      canvas.width = size;
+      canvas.height = size;
+      const scale = Math.max(size / bitmap.width, size / bitmap.height);
+      const w = bitmap.width * scale;
+      const h = bitmap.height * scale;
+      ctx.drawImage(bitmap, (size - w) / 2, (size - h) / 2, w, h);
+    } else {
+      const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    }
+
+    return await canvasToWebpBlob(canvas, quality);
+  } finally {
+    bitmap.close();
+  }
+}
+
+export type PreparedGemImage = {
+  full: Blob;
+  thumb: Blob;
+  fullFileName: string;
+  thumbFileName: string;
+  contentType: 'image/webp';
+};
+
+/** Полное WebP ≤1600px + thumbnail 256×256 для карты. */
+export async function prepareGemImageForR2(file: File): Promise<PreparedGemImage> {
+  assertWithinUploadLimit(file);
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Ожидалось изображение');
+  }
+  const base = sanitizeSegment(file.name.replace(/\.[^.]+$/, '') || 'gem');
+  const [full, thumb] = await Promise.all([
+    compressImageToWebp(file, GEM_FULL_MAX_EDGE, GEM_FULL_QUALITY, false),
+    compressImageToWebp(file, GEM_THUMB_EDGE, GEM_THUMB_QUALITY, true),
+  ]);
+  return {
+    full,
+    thumb,
+    fullFileName: `${base}.webp`,
+    thumbFileName: `${base}-thumb.webp`,
+    contentType: 'image/webp',
+  };
 }
 
 export type UploadToR2Options = {
@@ -283,7 +399,15 @@ export async function deleteR2Object(key: string): Promise<void> {
   );
 }
 
-/** Upload a File under a folder and return the public URL. */
+export type UploadFileToR2Result = {
+  mediaUrl: string;
+  thumbUrl?: string;
+};
+
+/**
+ * Upload a File under a folder and return the public URL.
+ * Для изображений в `map-gems`: лимит 15 МБ, WebP ≤1600px + thumb 256×256.
+ */
 export async function uploadFileToR2(
   folder: R2Folder,
   ownerId: string,
@@ -294,14 +418,64 @@ export async function uploadFileToR2(
     cacheControl?: string;
   }
 ): Promise<string> {
-  const key = buildObjectKey(folder, ownerId, file.name, {
+  const result = await uploadFileToR2Detailed(folder, ownerId, file, opts);
+  return result.mediaUrl;
+}
+
+/** Как uploadFileToR2, но возвращает URL миниатюры для map-gems изображений. */
+export async function uploadFileToR2Detailed(
+  folder: R2Folder,
+  ownerId: string,
+  file: File,
+  opts?: {
+    fixedName?: string;
+    onProgress?: (ratio: number) => void;
+    cacheControl?: string;
+  }
+): Promise<UploadFileToR2Result> {
+  assertWithinUploadLimit(file);
+
+  const isGemImage = folder === 'map-gems' && file.type.startsWith('image/');
+  if (!isGemImage) {
+    const key = buildObjectKey(folder, ownerId, file.name, {
+      fixedName: opts?.fixedName,
+    });
+    const mediaUrl = await uploadToR2({
+      key,
+      body: file,
+      contentType: file.type || undefined,
+      cacheControl: opts?.cacheControl,
+      onProgress: opts?.onProgress,
+    });
+    return { mediaUrl };
+  }
+
+  opts?.onProgress?.(0.05);
+  const prepared = await prepareGemImageForR2(file);
+  opts?.onProgress?.(0.2);
+
+  const fullKey = buildObjectKey(folder, ownerId, prepared.fullFileName, {
     fixedName: opts?.fixedName,
   });
-  return uploadToR2({
-    key,
-    body: file,
-    contentType: file.type || undefined,
+  const baseKey = fullKey.replace(/\.webp$/i, '');
+  const mediaKey = `${baseKey}.webp`;
+  const thumbKey = `${baseKey}-thumb.webp`;
+
+  const mediaUrl = await uploadToR2({
+    key: mediaKey,
+    body: prepared.full,
+    contentType: prepared.contentType,
     cacheControl: opts?.cacheControl,
-    onProgress: opts?.onProgress,
+    onProgress: (r) => opts?.onProgress?.(0.2 + r * 0.55),
   });
+
+  const thumbUrl = await uploadToR2({
+    key: thumbKey,
+    body: prepared.thumb,
+    contentType: prepared.contentType,
+    cacheControl: opts?.cacheControl,
+    onProgress: (r) => opts?.onProgress?.(0.75 + r * 0.25),
+  });
+
+  return { mediaUrl, thumbUrl };
 }

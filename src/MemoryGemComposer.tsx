@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Gem, ImagePlus, Type, Video, X } from 'lucide-react';
+import { Gem, ImagePlus, Lock, Type, Video, X } from 'lucide-react';
 import {
+  FREE_MAP_GEM_LIMIT,
   createMapGem,
+  isFreeGemLimitReached,
   uploadGemMedia,
   type MapGem,
   type MapGemType,
 } from './mapGems';
+import { MAX_UPLOAD_BYTES_BEFORE_COMPRESS } from './s3Storage';
 import { playSuccessSound } from './notify';
 
 type MemoryGemComposerProps = {
@@ -31,6 +34,7 @@ export default function MemoryGemComposer({
   const [progress, setProgress] = useState(0);
   const [phase, setPhase] = useState<'idle' | 'upload' | 'save'>('idle');
   const [error, setError] = useState('');
+  const [paywallOpen, setPaywallOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -57,6 +61,17 @@ export default function MemoryGemComposer({
 
   const onFile = (picked: File | undefined) => {
     if (!picked) return;
+    if (picked.size > MAX_UPLOAD_BYTES_BEFORE_COMPRESS) {
+      const mb = (picked.size / (1024 * 1024)).toFixed(1);
+      setError(
+        `Файл слишком большой (${mb} МБ). Максимум ${MAX_UPLOAD_BYTES_BEFORE_COMPRESS / (1024 * 1024)} МБ.`
+      );
+      setFile(null);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+      return;
+    }
+    setError('');
     setFile(picked);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(picked));
@@ -72,6 +87,11 @@ export default function MemoryGemComposer({
     setProgress(0);
     let step: 'idle' | 'upload' | 'save' = 'idle';
     try {
+      if (await isFreeGemLimitReached()) {
+        setPaywallOpen(true);
+        return;
+      }
+
       let mediaUrl: string | null = null;
       if (type === 'photo' || type === 'video') {
         if (!file) throw new Error(type === 'photo' ? 'Выберите фото' : 'Выберите видео');
@@ -272,6 +292,37 @@ export default function MemoryGemComposer({
           </button>
         </div>
       </div>
+
+      {paywallOpen && (
+        <div
+          className="memory-gem-paywall"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Лимит бесплатных капсул"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="memory-gem-paywall__card">
+            <span className="memory-gem-paywall__icon" aria-hidden>
+              <Lock size={28} />
+            </span>
+            <h3 className="memory-gem-paywall__title">Premium</h3>
+            <p className="memory-gem-paywall__text">
+              Лимит бесплатных капсул ({FREE_MAP_GEM_LIMIT}/{FREE_MAP_GEM_LIMIT}) исчерпан.
+              Оформите подписку для безлимитного хранения.
+            </p>
+            <button
+              type="button"
+              className="mega-btn primary compact"
+              onClick={() => {
+                setPaywallOpen(false);
+                onClose();
+              }}
+            >
+              Понятно
+            </button>
+          </div>
+        </div>
+      )}
     </div>,
     document.body
   );
