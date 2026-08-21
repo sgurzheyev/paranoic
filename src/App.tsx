@@ -134,6 +134,7 @@ import {
 import {
   buildMagicLink,
   clearMagicParamFromUrl,
+  ensureAuthBoundIdentity,
   forcePersistSession,
   getMagicTargetFromUrl,
   getOrCreateIdentity,
@@ -356,6 +357,24 @@ export default function App() {
   useEffect(() => {
     screenRef.current = screen;
   }, [screen]);
+
+  /** Auth JWT + identity.id = auth.uid() для RLS. */
+  useEffect(() => {
+    if (!hasSupabaseConfig()) return;
+    let cancelled = false;
+    void ensureAuthBoundIdentity()
+      .then((next) => {
+        if (cancelled) return;
+        setIdentity(next);
+        identityRef.current = next;
+      })
+      .catch((err) => {
+        console.warn('[paranoic auth] ensureAuthBoundIdentity', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const onlineIds = useMemo(() => new Set(presenceUsers.map((u) => u.userId)), [presenceUsers]);
 

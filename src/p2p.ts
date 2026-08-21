@@ -2179,11 +2179,14 @@ export class P2PConnection {
           'Слабое соединение. Файлы могут не отправляться.'
         );
         this.scheduleIceSoftRestart();
-      } else if (state === 'failed') {
+      } else if (state === 'failed' || state === 'closed') {
         this.clearIceCheckTimeout();
-        void this.handleIceFailure('iceConnectionState=failed');
-      } else if (state === 'closed') {
-        this.clearIceCheckTimeout();
+        this.clearIceSoftRestartTimer();
+        if (state === 'failed') {
+          this.handlers.onError?.(new Error('Связь оборвалась. Переподключаемся…'));
+        }
+        // failed / closed: гарантированно гасим PC и локальные треки (камера/мик).
+        this.softResetPeer();
       }
     };
 
@@ -2372,6 +2375,9 @@ export class P2PConnection {
     this.stopMediaWatchdog();
     this.stopNetworkWatch();
     void this.stopScreenShareInternal(false);
+    // Аппаратно гасим камеру/мик до close PC (иначе LED/треки остаются живыми).
+    this.stopLocalMedia();
+    this.clearRemoteStream();
     this.failActiveFileTransfers(FILE_TRANSFER_LOST);
     this.makingOffer = false;
     this.ignoreOffer = false;
@@ -2897,6 +2903,11 @@ export class P2PConnection {
 
   private clearRemoteStream(): void {
     this.remoteStream?.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        /* */
+      }
       try {
         this.remoteStream?.removeTrack(t);
       } catch {

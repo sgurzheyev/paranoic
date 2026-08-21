@@ -177,15 +177,18 @@ export async function syncProfileToSupabase(
 ): Promise<void> {
   if (!hasSupabaseConfig()) return;
   try {
+    const { ensureAuthSession } = await import('./lib/supabase');
+    const session = await ensureAuthSession();
+    const authId = session.user.id;
     const username = identity.username || null;
     if (username) {
-      const free = await isUsernameAvailable(username, identity.id);
+      const free = await isUsernameAvailable(username, authId);
       if (!free) throw new Error('Имя занято');
     }
 
     const sb = getSupabase();
     const row: Record<string, unknown> = {
-      id: identity.id,
+      id: authId,
       name: identity.name,
       color: identity.color,
       avatar_url: identity.avatarUrl || null,

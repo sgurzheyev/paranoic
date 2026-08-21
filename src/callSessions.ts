@@ -1,4 +1,4 @@
-import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
 
 export const CALL_SESSIONS_TABLE = 'call_sessions';
 
@@ -25,6 +25,7 @@ export async function upsertCallSession(params: {
 }): Promise<void> {
   if (!hasSupabaseConfig()) return;
   try {
+    await ensureAuthSession();
     const sb = getSupabase();
     const { error } = await sb.from(CALL_SESSIONS_TABLE).upsert(
       {
@@ -57,6 +58,7 @@ export async function updateCallSessionStatus(
 ): Promise<void> {
   if (!hasSupabaseConfig() || !callId) return;
   try {
+    await ensureAuthSession();
     const sb = getSupabase();
     const { error } = await sb
       .from(CALL_SESSIONS_TABLE)
@@ -79,6 +81,7 @@ export async function fetchRingingCallsForUser(
 ): Promise<CallSessionRow[]> {
   if (!hasSupabaseConfig() || !toUserId) return [];
   try {
+    await ensureAuthSession();
     const since = new Date(Date.now() - withinMs).toISOString();
     const sb = getSupabase();
     const { data, error } = await sb

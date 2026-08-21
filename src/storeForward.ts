@@ -15,7 +15,7 @@ import {
   encryptMessage,
 } from './crypto';
 import { personalInboxRoom } from './identity';
-import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
 import { conversationId } from './storage';
 
 export const MESSAGES_TABLE = 'messages';
@@ -77,6 +77,7 @@ export async function uploadPendingText(opts: {
   if (!hasSupabaseConfig()) {
     throw new Error('Supabase не настроен');
   }
+  await ensureAuthSession();
 
   const roomId = personalInboxRoom(opts.toUserId);
   const key = await deriveKeyFromRoom(roomId);
@@ -121,6 +122,7 @@ export async function uploadPendingMedia(opts: {
   if (opts.file.size > MAX_OFFLINE_FILE_BYTES) {
     throw new Error('Файл слишком большой (макс. 16 МБ)');
   }
+  await ensureAuthSession();
 
   const roomId = personalInboxRoom(opts.toUserId);
   const key = await deriveKeyFromRoom(roomId);
@@ -174,6 +176,7 @@ export async function uploadPendingMedia(opts: {
 /** Удалить ciphertext из Storage и строку из messages (Zero-Knowledge). */
 export async function purgePendingDelivery(row: Pick<PendingMessageRow, 'id' | 'storage_path'>): Promise<void> {
   if (!hasSupabaseConfig()) return;
+  await ensureAuthSession();
   const sb = getSupabase();
   if (row.storage_path) {
     const { error } = await sb.storage
@@ -207,6 +210,7 @@ export async function syncPendingDeliveries(
 ): Promise<{ text: number; media: number }> {
   if (!hasSupabaseConfig() || !myUserId) return { text: 0, media: 0 };
 
+  await ensureAuthSession();
   const sb = getSupabase();
   const { data, error } = await sb
     .from(MESSAGES_TABLE)

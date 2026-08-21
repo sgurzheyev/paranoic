@@ -1,9 +1,12 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import { alignIdentityToAuthUid } from '../identity';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 let client: SupabaseClient | null = null;
+/** In-flight / completed bootstrap so getSupabase() can kick off anon auth once. */
+let authBootstrap: Promise<Session> | null = null;
 
 export function hasSupabaseConfig(): boolean {
   return Boolean(url && anonKey);
@@ -14,8 +17,7 @@ export function getSupabaseConfig(): { url: string; anonKey: string } | null {
   return { url, anonKey };
 }
 
-/** Ленивый клиент Supabase Realtime (signaling). */
-export function getSupabase(): SupabaseClient {
+function createClientIfNeeded(): SupabaseClient {
   if (!hasSupabaseConfig()) {
     throw new Error(
       'Supabase не настроен. Добавьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY.'
@@ -35,11 +37,28 @@ export function getSupabase(): SupabaseClient {
 }
 
 /**
+ * Ленивый клиент Supabase Realtime (signaling).
+ * При первом вызове стартует anonymous sign-in (если нет сессии).
+ */
+export function getSupabase(): SupabaseClient {
+  const sb = createClientIfNeeded();
+  if (!authBootstrap) {
+    authBootstrap = ensureAuthSession().catch((err) => {
+      authBootstrap = null;
+      console.warn('[paranoic auth] bootstrap', err);
+      throw err;
+    });
+  }
+  return sb;
+}
+
+/**
  * Гарантирует живую Auth-сессию перед запросами с RLS.
  * 1) getSession → 2) refreshSession → 3) signInAnonymously (реинит).
+ * После успеха выравнивает local identity.id = auth.uid().
  */
 export async function ensureAuthSession(): Promise<Session> {
-  const sb = getSupabase();
+  const sb = createClientIfNeeded();
 
   const { data: first, error: sessionErr } = await sb.auth.getSession();
   if (sessionErr) {
@@ -57,7 +76,7 @@ export async function ensureAuthSession(): Promise<Session> {
   }
 
   if (!session?.user?.id) {
-    // Повторная инициализация сессии (локальный профиль ≠ Auth JWT).
+    // Нет JWT — anonymous sign-in, чтобы auth.uid() совпал с identity.id.
     const { data: anon, error: anonErr } = await sb.auth.signInAnonymously();
     if (anonErr) {
       const hint = /anonymous|disabled|not enabled/i.test(anonErr.message)
@@ -72,10 +91,11 @@ export async function ensureAuthSession(): Promise<Session> {
     throw new Error('Сессия Auth отсутствует. Обновите страницу и войдите снова.');
   }
 
+  alignIdentityToAuthUid(session.user.id);
   return session;
 }
 
-/** `session.user.id` (= auth.uid()), не локальный identity.id. */
+/** `session.user.id` (= auth.uid()), не устаревший локальный identity.id. */
 export async function getAuthUserId(): Promise<string> {
   const session = await ensureAuthSession();
   return session.user.id;

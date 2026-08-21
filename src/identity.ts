@@ -273,6 +273,33 @@ export function getOrCreateIdentity(): UserIdentity {
   return identity;
 }
 
+/**
+ * Выровнять локальный identity.id под auth.uid() (RLS: id = auth.uid()).
+ * Вызывается из ensureAuthSession() после anonymous / refresh.
+ */
+export function alignIdentityToAuthUid(authUid: string): UserIdentity {
+  const uid = authUid.trim();
+  if (!isValidUuid(uid)) {
+    console.warn('[paranoic auth] alignIdentity: invalid auth.uid', authUid);
+    return getOrCreateIdentity();
+  }
+  const current = getOrCreateIdentity();
+  if (current.id === uid) return current;
+  console.log('[paranoic auth] identity.id → auth.uid()', { from: current.id, to: uid });
+  return forcePersistSession({ ...current, id: uid });
+}
+
+/**
+ * Гарантирует Auth-сессию (signInAnonymously при необходимости)
+ * и возвращает identity с id === auth.uid().
+ */
+export async function ensureAuthBoundIdentity(): Promise<UserIdentity> {
+  const { ensureAuthSession, hasSupabaseConfig } = await import('./lib/supabase');
+  if (!hasSupabaseConfig()) return getOrCreateIdentity();
+  const session = await ensureAuthSession();
+  return alignIdentityToAuthUid(session.user.id);
+}
+
 export function updateIdentity(
   patch: Partial<Pick<UserIdentity, 'name' | 'username' | 'color' | 'avatarUrl' | 'themeFon'>>
 ): UserIdentity {
