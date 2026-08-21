@@ -27,3 +27,6 @@ dist-ssr
 *.sw?
 paranoic-release-key.jks
 android/key.properties
+
+google-services.json
+android/app/google-services.json
