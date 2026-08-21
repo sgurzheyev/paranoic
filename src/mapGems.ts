@@ -9,6 +9,7 @@ import {
   assertWithinUploadLimit,
   deleteGemMedia,
   hasR2Config,
+  thumbUrlFromMediaUrl,
   uploadFileToR2Detailed,
 } from './s3Storage';
 
