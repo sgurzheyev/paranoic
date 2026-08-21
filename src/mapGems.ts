@@ -7,10 +7,8 @@ import {
 import { getOrCreateIdentity } from './identity';
 import {
   assertWithinUploadLimit,
-  deleteR2Object,
+  deleteGemMedia,
   hasR2Config,
-  objectKeyFromPublicUrl,
-  thumbUrlFromMediaUrl,
   uploadFileToR2Detailed,
 } from './s3Storage';
 
@@ -20,9 +18,11 @@ export const MAP_GEMS_BUCKET = 'map-gems';
 export const FREE_MAP_GEM_LIMIT = 5;
 
 export type MapGemType = 'photo' | 'video' | 'text';
+export type MapGemSource = 'map_gems' | 'memory_gems';
 
 export type MapGem = {
   id: string;
+  /** Владелец: map_gems.author_id или memory_gems.user_id */
   author_id: string;
   lat: number;
   lng: number;
@@ -30,6 +30,12 @@ export type MapGem = {
   media_url: string | null;
   content: string | null;
   created_at: string;
+  source?: MapGemSource;
+  is_private?: boolean;
+  /** Полный список URL (memory_gems.media_urls). */
+  media_urls?: string[] | null;
+  /** Подпись / адрес (memory_gems.address). */
+  description?: string | null;
 };
 
 export type CreateMapGemInput = {
@@ -38,6 +44,15 @@ export type CreateMapGemInput = {
   type: MapGemType;
   mediaUrl?: string | null;
   content?: string | null;
+};
+
+export type UpdateGemInput = {
+  content?: string | null;
+  description?: string | null;
+  is_private?: boolean;
+  mediaUrl?: string | null;
+  mediaUrls?: string[] | null;
+  type?: MapGemType;
 };
 
 export type UploadGemMediaResult = {
@@ -57,6 +72,8 @@ function mapRow(row: Record<string, unknown>): MapGem {
     media_url: (row.media_url as string | null) ?? null,
     content: (row.content as string | null) ?? null,
     created_at: String(row.created_at ?? new Date().toISOString()),
+    source: 'map_gems',
+    is_private: false,
   };
 }
 
@@ -311,19 +328,16 @@ export async function deleteMapGem(gem: MapGem): Promise<void> {
     throw new Error('Можно удалить только свою капсулу');
   }
 
-  if (gem.media_url) {
-    const key = objectKeyFromPublicUrl(gem.media_url);
-    if (!key) {
-      throw new Error(`Не удалось определить ключ R2: ${gem.media_url}`);
-    }
-    await deleteR2Object(key);
-    const thumbKey = objectKeyFromPublicUrl(thumbUrlFromMediaUrl(gem.media_url) || '');
-    if (thumbKey && thumbKey !== key) {
-      try {
-        await deleteR2Object(thumbKey);
-      } catch (e) {
-        console.warn('[paranoic gems] thumb delete', e);
-      }
+  const urls = [
+    gem.media_url,
+    ...(gem.media_urls ?? []),
+  ].filter((u): u is string => Boolean(u));
+  const unique = [...new Set(urls)];
+  for (const url of unique) {
+    try {
+      await deleteGemMedia(url);
+    } catch (e) {
+      console.warn('[paranoic gems] media delete', url, e);
     }
   }
 
@@ -348,6 +362,71 @@ export async function deleteMapGem(gem: MapGem): Promise<void> {
   if (!data) {
     throw new Error('Капсула не найдена или уже удалена');
   }
+}
+
+/** Переместить пин map_gems. */
+export async function updateMapGemLocation(
+  gemId: string,
+  lat: number,
+  lng: number
+): Promise<MapGem> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  await ensureAuthSession();
+  const uid = await getAuthUserId();
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from(MAP_GEMS_TABLE)
+    .update({ lat, lng })
+    .eq('id', gemId)
+    .eq('author_id', uid)
+    .select(SELECT_COLS)
+    .single();
+  if (error) throw new Error(error.message || 'Не удалось переместить капсулу');
+  return mapRow(data as Record<string, unknown>);
+}
+
+/** Редактировать контент / медиа map_gems. */
+export async function updateMapGem(
+  gemId: string,
+  patch: UpdateGemInput
+): Promise<MapGem> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  await ensureAuthSession();
+  const uid = await getAuthUserId();
+  const row: Record<string, unknown> = {};
+  if (patch.content !== undefined) row.content = patch.content;
+  if (patch.mediaUrl !== undefined) row.media_url = patch.mediaUrl;
+  if (patch.type !== undefined) row.type = patch.type;
+  if (Object.keys(row).length === 0) {
+    throw new Error('Нет изменений');
+  }
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from(MAP_GEMS_TABLE)
+    .update(row)
+    .eq('id', gemId)
+    .eq('author_id', uid)
+    .select(SELECT_COLS)
+    .single();
+  if (error) throw new Error(error.message || 'Не удалось сохранить капсулу');
+  return mapRow(data as Record<string, unknown>);
+}
+
+export function isGemOwner(
+  gem: Pick<MapGem, 'author_id'>,
+  currentUserId: string,
+  opts?: { isAdmin?: boolean; allowDevOverride?: boolean }
+): boolean {
+  if (opts?.isAdmin) return true;
+  if (
+    opts?.allowDevOverride &&
+    import.meta.env.DEV &&
+    typeof localStorage !== 'undefined' &&
+    localStorage.getItem('paranoic-gem-owner-override') === '1'
+  ) {
+    return true;
+  }
+  return Boolean(currentUserId && gem.author_id === currentUserId);
 }
 
 export type GemFeatureCollection = {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, Ghost, ImagePlus, Link2, Timer, X } from 'lucide-react';
+import { Check, Copy, Ghost, ImagePlus, Link2, LogOut, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
 import {
   buildMagicLink,
@@ -18,6 +18,7 @@ type ProfileModalProps = {
   onClose: () => void;
   onSaved: (next: UserIdentity) => void;
   onSettingsChange: (next: AppSettings) => void;
+  onSignOut?: () => void | Promise<void>;
 };
 
 function IosToggle({
@@ -62,6 +63,7 @@ export default function ProfileModal({
   onClose,
   onSaved,
   onSettingsChange,
+  onSignOut,
 }: ProfileModalProps) {
   const [name, setName] = useState(identity.name);
   const [username, setUsername] = useState(identity.username || '');
@@ -70,12 +72,14 @@ export default function ProfileModal({
   const [ghostMode, setGhostMode] = useState(settings.ghostMode);
   const [ephemeral24h, setEphemeral24h] = useState(settings.ephemeral24h);
   const [busy, setBusy] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState('');
   const [usernameHint, setUsernameHint] = useState('');
   const [password, setPassword] = useState('');
   const [passwordHint, setPasswordHint] = useState('');
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const previewIdentity = useMemo(
@@ -149,6 +153,35 @@ export default function ProfileModal({
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
       setError('Не удалось скопировать ссылку');
+    }
+  };
+
+  const copyUserId = async () => {
+    try {
+      await navigator.clipboard.writeText(identity.id);
+      setCopiedId(true);
+      window.setTimeout(() => setCopiedId(false), 1800);
+    } catch {
+      setError('Не удалось скопировать User ID');
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!onSignOut || signingOut) return;
+    if (
+      !window.confirm(
+        'Выйти из аккаунта? Локальный профиль будет сброшен. Вы сможете войти по никнейму и паролю или создать новый аккаунт.'
+      )
+    ) {
+      return;
+    }
+    setSigningOut(true);
+    setError('');
+    try {
+      await onSignOut();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось выйти');
+      setSigningOut(false);
     }
   };
 
@@ -295,6 +328,20 @@ export default function ProfileModal({
           </button>
         </div>
 
+        <div className="profile-share-card profile-userid-card">
+          <p className="profile-share-label">User ID</p>
+          <p className="profile-share-url mono-box">{identity.id}</p>
+          <button
+            type="button"
+            className="accept-file-btn"
+            onClick={() => void copyUserId()}
+            aria-label="Копировать User ID"
+          >
+            {copiedId ? <Check size={16} /> : <Copy size={16} />}
+            {copiedId ? 'Скопировано' : 'Копировать в буфер'}
+          </button>
+        </div>
+
         <div className="profile-field">
           <span>Фон интерфейса</span>
           <div className="theme-fon-grid">
@@ -344,11 +391,23 @@ export default function ProfileModal({
         <button
           type="button"
           className="mega-btn primary compact"
-          disabled={busy || uploading}
+          disabled={busy || uploading || signingOut}
           onClick={() => void save()}
         >
           {busy ? 'Сохраняем…' : 'Сохранить'}
         </button>
+
+        {onSignOut && (
+          <button
+            type="button"
+            className="mega-btn profile-logout-btn compact"
+            disabled={signingOut || busy}
+            onClick={() => void handleSignOut()}
+          >
+            <LogOut size={18} />
+            {signingOut ? 'Выходим…' : 'Выйти из аккаунта'}
+          </button>
+        )}
       </div>
     </div>
   );

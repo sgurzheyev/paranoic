@@ -37,7 +37,7 @@ import {
   startGemPulse,
 } from './mapGemLayers';
 import { buildVisibleGemsContext, fetchAllMapGems, gemMapPreviewUrl, type MapGem } from './mapGems';
-import { fetchMemoryGems } from './memoryGems';
+import { fetchMemoryGems, moveOwnedGem } from './memoryGems';
 import { buildGemMarkerElement } from './mapGemMarkers';
 import { configureGemImageElement } from './gemImage';
 import { getAuthUserId } from './lib/supabase';
@@ -281,6 +281,9 @@ export default function GlobeLobby({
   /** Точка long-press / Drop a Gem. */
   const [dropPoint, setDropPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [isTargetingMode, setIsTargetingMode] = useState(false);
+  /** Режим «Передвинуть метку» — крестик в центре карты. */
+  const [movingGem, setMovingGem] = useState<MapGem | null>(null);
+  const [moveBusy, setMoveBusy] = useState(false);
   const [showContacts, setShowContacts] = useState(true);
   const [showGems, setShowGems] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
@@ -912,6 +915,11 @@ export default function GlobeLobby({
 
   const exitTargetingMode = () => setIsTargetingMode(false);
 
+  const exitMovePinMode = () => {
+    setMovingGem(null);
+    setMoveBusy(false);
+  };
+
   const confirmTargetDrop = () => {
     const map = mapRef.current;
     if (!map) return;
@@ -920,6 +928,42 @@ export default function GlobeLobby({
     setOpenedGem(null);
     setSelected(null);
     setDropPoint({ lat: center.lat, lng: center.lng });
+  };
+
+  const confirmMovePin = async () => {
+    const map = mapRef.current;
+    const gem = movingGem;
+    if (!map || !gem || moveBusy) return;
+    const center = map.getCenter();
+    setMoveBusy(true);
+    try {
+      const updated = await moveOwnedGem(gem, center.lat, center.lng);
+      setGems((prev) => prev.map((g) => (g.id === updated.id ? { ...g, ...updated } : g)));
+      setMovingGem(null);
+      setOpenedGem(updated);
+      setGemNotice('Метка перемещена');
+      flyToGem(updated);
+    } catch (e) {
+      setGemNotice(e instanceof Error ? e.message : 'Не удалось переместить метку');
+    } finally {
+      setMoveBusy(false);
+    }
+  };
+
+  const startMovePin = (gem: MapGem) => {
+    setOpenedGem(null);
+    setIsTargetingMode(false);
+    setDropPoint(null);
+    setMovingGem(gem);
+    const map = mapRef.current;
+    if (map) {
+      map.flyTo({
+        center: [gem.lng, gem.lat],
+        zoom: Math.max(map.getZoom(), FOCUS_ZOOM),
+        duration: 900,
+        essential: true,
+      });
+    }
   };
 
   const nudgeZoom = (delta: number) => {
@@ -1147,9 +1191,11 @@ export default function GlobeLobby({
           <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
             {isTargetingMode
               ? 'Двигайте карту — прицел в центре покажет место капсулы'
+              : movingGem
+                ? 'Двигайте карту — сохраните новую позицию метки'
               : `Чистая карта · контакты Family Mode${showGems ? ' · капсулы включены' : ''}`}
           </p>
-          {!isTargetingMode && (
+          {!isTargetingMode && !movingGem && (
             <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
               <MapPin size={12} /> {geoHint}
               {showGems && gems.length > 0 && (
@@ -1174,6 +1220,26 @@ export default function GlobeLobby({
                 type="button"
                 className="gem-target-cancel"
                 onClick={exitTargetingMode}
+              >
+                Отмена
+              </button>
+            </div>
+          ) : movingGem ? (
+            <div className="map-ui-target-actions">
+              <button
+                type="button"
+                className="gem-target-confirm"
+                onClick={() => void confirmMovePin()}
+                disabled={moveBusy}
+              >
+                <MapPin size={18} />
+                {moveBusy ? 'Сохраняем…' : 'Сохранить новую позицию'}
+              </button>
+              <button
+                type="button"
+                className="gem-target-cancel"
+                onClick={exitMovePinMode}
+                disabled={moveBusy}
               >
                 Отмена
               </button>
@@ -1304,7 +1370,7 @@ export default function GlobeLobby({
         </div>
       </div>
 
-      {isTargetingMode && (
+      {(isTargetingMode || movingGem) && (
         <div className="gem-crosshair" aria-hidden>
           <span className="gem-crosshair-ring" />
           <span className="gem-crosshair-core" />
@@ -1351,7 +1417,7 @@ export default function GlobeLobby({
         />
       )}
 
-      {openedGem && gems.length > 0 && (
+      {openedGem && gems.length > 0 && !movingGem && (
         <MemoryGemDrawer
           gems={gems}
           activeId={openedGem.id}
@@ -1364,6 +1430,7 @@ export default function GlobeLobby({
             me?.userId ||
             ''
           }
+          isAdmin={isAdmin}
           authorLabel={authorLabel}
           resolveAuthor={resolveAuthor}
           onActiveChange={(gem) => {
@@ -1376,6 +1443,12 @@ export default function GlobeLobby({
             setGems((prev) => prev.filter((g) => g.id !== gemId));
             setGemNotice('Капсула удалена');
           }}
+          onUpdated={(gem) => {
+            setGems((prev) => prev.map((g) => (g.id === gem.id ? { ...g, ...gem } : g)));
+            setOpenedGem(gem);
+            setGemNotice('Капсула сохранена');
+          }}
+          onMovePin={startMovePin}
         />
       )}
 

@@ -224,6 +224,26 @@ export function clearSavedLoginSession(): void {
   localStorage.removeItem(SESSION_KEY);
 }
 
+/** Сброс локального профиля и сохранённой сессии входа (перед Log Out / Switch Account). */
+export function clearLocalIdentityData(): void {
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SESSION_KEY);
+}
+
+/** Чистый локальный профиль без username (экран регистрации / новый аккаунт). */
+export function createFreshIdentity(): UserIdentity {
+  const identity: UserIdentity = {
+    id: createUserId(),
+    name: 'Я',
+    username: '',
+    color: randomColor(),
+    avatarUrl: '',
+    themeFon: DEFAULT_THEME_FON,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(identity));
+  return identity;
+}
+
 /** Восстановить локальную identity из строки profiles (login / sync). */
 export function restoreIdentityFromProfile(profile: {
   id: string;

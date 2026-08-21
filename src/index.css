@@ -2955,6 +2955,28 @@ textarea {
   line-height: 1.35;
 }
 
+.profile-userid-card {
+  margin-top: 10px;
+}
+
+.profile-logout-btn {
+  margin-top: 12px;
+  width: 100%;
+  background: rgba(244, 63, 94, 0.16) !important;
+  border: 1px solid rgba(251, 113, 133, 0.4) !important;
+  color: #fecaca !important;
+  box-shadow: none !important;
+}
+
+.profile-logout-btn:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.28) !important;
+}
+
+.profile-logout-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .theme-fon-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -4292,6 +4314,102 @@ textarea {
 .memory-gem-delete-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.memory-gem-owner-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 10px;
+  position: relative;
+  z-index: 2;
+}
+
+.memory-gem-owner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 12px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+
+.memory-gem-owner-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.memory-gem-owner-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.memory-gem-owner-btn.is-danger {
+  color: #fecaca;
+  border-color: rgba(251, 113, 133, 0.35);
+  background: rgba(244, 63, 94, 0.12);
+}
+
+.memory-gem-owner-btn.is-primary {
+  background: linear-gradient(160deg, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.28));
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.memory-gem-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 12px;
+  position: relative;
+  z-index: 2;
+}
+
+.memory-gem-edit__label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.memory-gem-edit__textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.memory-gem-edit__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.memory-gem-edit__media {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-gem-edit__preview {
+  max-height: 160px;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.memory-gem-edit__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .memory-gem-title-row {

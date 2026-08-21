@@ -1,5 +1,12 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
-import { alignIdentityToAuthUid } from '../identity';
+import {
+  alignIdentityToAuthUid,
+  clearLocalIdentityData,
+  createFreshIdentity,
+  getOrCreateIdentity,
+  type UserIdentity,
+} from '../identity';
+import { clearCallSessionResidue, clearEphemeralGuestId } from '../callSessionCleanup';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -7,6 +14,8 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 let client: SupabaseClient | null = null;
 /** In-flight / completed bootstrap so getSupabase() can kick off anon auth once. */
 let authBootstrap: Promise<Session> | null = null;
+/** После Log Out не поднимаем anon сразу из getSupabase(), пока не вызовут ensureAuthSession. */
+let authBootstrapPaused = false;
 
 export function hasSupabaseConfig(): boolean {
   return Boolean(url && anonKey);
@@ -42,7 +51,7 @@ function createClientIfNeeded(): SupabaseClient {
  */
 export function getSupabase(): SupabaseClient {
   const sb = createClientIfNeeded();
-  if (!authBootstrap) {
+  if (!authBootstrap && !authBootstrapPaused) {
     authBootstrap = ensureAuthSession().catch((err) => {
       authBootstrap = null;
       console.warn('[paranoic auth] bootstrap', err);
@@ -58,6 +67,7 @@ export function getSupabase(): SupabaseClient {
  * После успеха выравнивает local identity.id = auth.uid().
  */
 export async function ensureAuthSession(): Promise<Session> {
+  authBootstrapPaused = false;
   const sb = createClientIfNeeded();
 
   const { data: first, error: sessionErr } = await sb.auth.getSession();
@@ -108,4 +118,48 @@ export async function getAuthAccessToken(): Promise<string> {
     throw new Error('Нет access token. Обновите страницу и войдите снова.');
   }
   return session.access_token;
+}
+
+export type SignOutOptions = {
+  /**
+   * true — сразу создать новую anonymous Auth-сессию (чистый аккаунт).
+   * false — только выйти; вход / новый аккаунт на стартовом экране.
+   */
+  startFreshAnonymous?: boolean;
+};
+
+/**
+ * Log Out / Switch Account: signOut + очистка локального профиля.
+ * Возвращает identity для UI (пустой профиль или новый anon).
+ */
+export async function signOutAndReset(opts?: SignOutOptions): Promise<UserIdentity> {
+  const startFresh = opts?.startFreshAnonymous !== false;
+
+  authBootstrap = null;
+  authBootstrapPaused = true;
+
+  if (hasSupabaseConfig()) {
+    try {
+      await createClientIfNeeded().auth.signOut({ scope: 'local' });
+    } catch (e) {
+      console.warn('[paranoic auth] signOut', e);
+    }
+  }
+
+  clearLocalIdentityData();
+  try {
+    clearCallSessionResidue();
+    clearEphemeralGuestId();
+  } catch {
+    /* */
+  }
+
+  if (startFresh && hasSupabaseConfig()) {
+    authBootstrapPaused = false;
+    const session = await ensureAuthSession();
+    authBootstrap = Promise.resolve(session);
+    return getOrCreateIdentity();
+  }
+
+  return createFreshIdentity();
 }

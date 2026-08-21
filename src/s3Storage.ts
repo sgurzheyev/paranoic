@@ -399,6 +399,28 @@ export async function deleteR2Object(key: string): Promise<void> {
   );
 }
 
+/**
+ * Удаляет оригинал + thumbnail капсулы из R2 по публичному URL.
+ * Thumb best-effort (может отсутствовать).
+ */
+export async function deleteGemMedia(mediaUrl: string): Promise<void> {
+  const url = mediaUrl.trim();
+  if (!url) return;
+  const key = objectKeyFromPublicUrl(url);
+  if (!key) {
+    throw new Error(`Не удалось определить ключ R2: ${url}`);
+  }
+  await deleteR2Object(key);
+  const thumbKey = objectKeyFromPublicUrl(thumbUrlFromMediaUrl(url) || '');
+  if (thumbKey && thumbKey !== key) {
+    try {
+      await deleteR2Object(thumbKey);
+    } catch (e) {
+      console.warn('[paranoic r2] thumb delete', e);
+    }
+  }
+}
+
 export type UploadFileToR2Result = {
   mediaUrl: string;
   thumbUrl?: string;

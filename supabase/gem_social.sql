@@ -2,7 +2,10 @@
  * Memory Gem likes + comments.
  * Run in Supabase SQL Editor after map_gems / map_gems_auth_uid.sql.
  *
- * gem_id → public.map_gems(id)
+ * gem_id → public.map_gems(id) by default.
+ * For memory_gems support also run gem_social_memory_gems.sql
+ * (drops FK and checks map_gems OR memory_gems).
+ *
  * user_id matches profiles.id / auth.uid()::text (text, same as map_gems.author_id).
  *
  * Family Mode contacts live on the client; SELECT is therefore authenticated

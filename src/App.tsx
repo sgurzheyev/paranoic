@@ -102,7 +102,7 @@ import {
   resolveRoom,
   setMagicUserInUrl,
 } from './room';
-import { hasSupabaseConfig } from './lib/supabase';
+import { hasSupabaseConfig, signOutAndReset } from './lib/supabase';
 import {
   appendStoredMessage,
   conversationId,
@@ -2853,6 +2853,47 @@ export default function App() {
     void loadContacts().then(setContacts);
   };
 
+  /** Log Out → стартовый экран (вход / новый аккаунт). */
+  const handleSignOut = async () => {
+    stopRingtone();
+    closeActiveNotification();
+    pendingStartCallRef.current = false;
+    pendingRingAcceptRef.current = false;
+    try {
+      await p2pRef.current?.hangUp();
+    } catch {
+      /* */
+    }
+    destroyP2PSession();
+    p2pRef.current = null;
+    hangUpSession();
+    void presenceRef.current?.stop();
+    presenceRef.current = null;
+    void callInboxRef.current?.stop();
+    callInboxRef.current = null;
+
+    const next = await signOutAndReset({ startFreshAnonymous: true });
+    setIdentity(next);
+    identityRef.current = next;
+    setNameDraft(next.name);
+    setContacts([]);
+    setMessages([]);
+    setPeerId(null);
+    setGuestPeerId(null);
+    setIncomingRing(null);
+    setCallState('idle');
+    setP2pStatus('idle');
+    setIsAdmin(false);
+    setIsBanned(false);
+    isBannedRef.current = false;
+    setProfileOpen(false);
+    setAdminOpen(false);
+    setAppMode('select');
+    setMainTab('chats');
+    setScreen('home');
+    setSessionEpoch((n) => n + 1);
+  };
+
   /** Сохранённая сессия: не показываем login, сразу Paranoic → Контакты. */
   useEffect(() => {
     const session = getSavedLoginSession();
@@ -3132,6 +3173,7 @@ export default function App() {
           onClose={() => setProfileOpen(false)}
           onSaved={(next) => applyIdentity(next)}
           onSettingsChange={setSettings}
+          onSignOut={handleSignOut}
         />
       )}
       {adminOpen && (
