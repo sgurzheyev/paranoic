@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, Mic, MicOff, Paperclip, Phone, PhoneIncoming, PhoneOff } from 'lucide-react';
+import {
+  ChevronDown,
+  Mic,
+  MicOff,
+  Paperclip,
+  Phone,
+  PhoneIncoming,
+  PhoneOff,
+  SwitchCamera,
+  Video,
+  VideoOff,
+} from 'lucide-react';
 import type { CallFailKind, CallState, NetworkQuality } from './p2p';
 
 type CallOverlayProps = {
@@ -17,6 +28,9 @@ type CallOverlayProps = {
   onToggleScreenShare: () => void;
   micMuted?: boolean;
   onToggleMute?: () => void;
+  cameraOff?: boolean;
+  onToggleCamera?: () => void;
+  onSwitchCamera?: () => void;
   onAttachFile?: () => void;
   failure?: CallFailKind | null;
 };
@@ -91,6 +105,9 @@ export default function CallOverlay({
   onHangUp,
   micMuted = false,
   onToggleMute,
+  cameraOff = false,
+  onToggleCamera,
+  onSwitchCamera,
   onAttachFile,
   failure = null,
 }: CallOverlayProps) {
@@ -242,6 +259,24 @@ export default function CallOverlay({
                     aria-label={micMuted ? 'Включить микрофон' : 'Выключить микрофон'}
                   >
                     {micMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`call-room-btn${cameraOff ? ' is-off' : ''}`}
+                    onClick={onToggleCamera}
+                    aria-pressed={cameraOff}
+                    aria-label={cameraOff ? 'Включить камеру' : 'Выключить камеру'}
+                  >
+                    {cameraOff ? <VideoOff size={22} /> : <Video size={22} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="call-room-btn"
+                    onClick={onSwitchCamera}
+                    disabled={cameraOff || screenSharing}
+                    aria-label="Переключить камеру"
+                  >
+                    <SwitchCamera size={22} />
                   </button>
                   <button
                     type="button"

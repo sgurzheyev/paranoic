@@ -501,6 +501,7 @@ export class P2PConnection {
   private iceRestartAttempts = 0;
   private screenStream: MediaStream | null = null;
   private cameraVideoTrack: MediaStreamTrack | null = null;
+  private cameraFacing: 'user' | 'environment' = 'user';
   private sharingScreen = false;
   private netInfoHandler: (() => void) | null = null;
 
@@ -551,20 +552,107 @@ export class P2PConnection {
     return this.remoteStream;
   }
 
-  /** Включить / выключить локальный микрофон. Возвращает, включён ли звук. */
+  /** Включить / выключить локальный микрофон через track.enabled. */
+  toggleAudio(enabled: boolean): void {
+    for (const track of this.localStream?.getAudioTracks() ?? []) {
+      track.enabled = enabled;
+    }
+  }
+
+  /** Включить / выключить локальную камеру через track.enabled. */
+  toggleVideo(enabled: boolean): void {
+    for (const track of this.localStream?.getVideoTracks() ?? []) {
+      track.enabled = enabled;
+    }
+    if (this.cameraVideoTrack) this.cameraVideoTrack.enabled = enabled;
+  }
+
+  /** Переключить микрофон. Возвращает, включён ли звук. */
   toggleMic(): boolean {
     const tracks = this.localStream?.getAudioTracks() ?? [];
     if (tracks.length === 0) return false;
     const next = !tracks.some((t) => t.enabled);
-    for (const track of tracks) {
-      track.enabled = next;
-    }
+    this.toggleAudio(next);
     return next;
   }
 
   isMicEnabled(): boolean {
     const tracks = this.localStream?.getAudioTracks() ?? [];
     return tracks.some((t) => t.enabled);
+  }
+
+  isVideoEnabled(): boolean {
+    const tracks = this.localStream?.getVideoTracks() ?? [];
+    if (tracks.length === 0) return false;
+    return tracks.some((t) => t.enabled);
+  }
+
+  /**
+   * Передняя ↔ задняя камера: новый getUserMedia + RTCRtpSender.replaceTrack.
+   */
+  async switchCamera(): Promise<void> {
+    if (!this.localStream || this.sharingScreen || this.callState !== 'in-call') return;
+    if (this.videoAdaptLevel === 'audio-only') return;
+
+    const nextFacing: 'user' | 'environment' =
+      this.cameraFacing === 'user' ? 'environment' : 'user';
+    const level =
+      this.videoAdaptLevel === 'high' || this.videoAdaptLevel === 'medium' || this.videoAdaptLevel === 'low'
+        ? this.videoAdaptLevel
+        : 'high';
+    const wasEnabled = this.isVideoEnabled();
+
+    let fresh: MediaStream;
+    try {
+      fresh = await getUserMediaForCall({
+        audio: false,
+        video: {
+          ...VIDEO_LEVEL_CONSTRAINTS[level],
+          facingMode: { ideal: nextFacing },
+        },
+      });
+    } catch (e) {
+      throw toMediaAccessError(e);
+    }
+
+    const newTrack = fresh.getVideoTracks()[0];
+    if (!newTrack) {
+      fresh.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    newTrack.enabled = wasEnabled;
+
+    const oldTrack =
+      this.localStream.getVideoTracks()[0] ?? this.cameraVideoTrack ?? null;
+    const videoSender =
+      this.pc?.getSenders().find((s) => s.track?.kind === 'video') ??
+      this.pc?.getSenders().find((s) => s.track === oldTrack) ??
+      null;
+
+    if (videoSender) {
+      await videoSender.replaceTrack(newTrack);
+    }
+
+    if (oldTrack) {
+      this.localStream.removeTrack(oldTrack);
+      if (oldTrack !== newTrack) oldTrack.stop();
+    }
+    this.localStream.addTrack(newTrack);
+    this.cameraVideoTrack = newTrack;
+    this.cameraFacing = nextFacing;
+
+    // Остальные треки из fresh (если есть) не нужны.
+    for (const t of fresh.getTracks()) {
+      if (t !== newTrack) t.stop();
+    }
+
+    newTrack.addEventListener('ended', () => {
+      if (this.callState === 'in-call' && !this.sharingScreen) {
+        void this.refreshLocalTracks();
+      }
+    });
+
+    this.handlers.onLocalStream?.(this.localStream);
   }
 
   get isSharingScreen(): boolean {
@@ -1614,7 +1702,10 @@ export class P2PConnection {
     try {
       stream = await getUserMediaForCall({
         audio: MEDIA_CONSTRAINTS.audio,
-        video: VIDEO_LEVEL_CONSTRAINTS[level],
+        video: {
+          ...VIDEO_LEVEL_CONSTRAINTS[level],
+          facingMode: { ideal: this.cameraFacing },
+        },
       });
     } catch (e) {
       throw toMediaAccessError(e);
@@ -2796,6 +2887,7 @@ export class P2PConnection {
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.cameraVideoTrack = null;
+    this.cameraFacing = 'user';
     if (this.pc) {
       for (const sender of this.pc.getSenders()) {
         if (sender.track) void sender.replaceTrack(null);

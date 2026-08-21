@@ -107,13 +107,18 @@ export async function ensureCallMediaAccess(): Promise<void> {
   if (!isMediaApiAvailable()) {
     throw toMediaAccessError();
   }
+  const audio: MediaTrackConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio, video: true });
   } catch (err) {
     if (isMissingDeviceError(err)) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio, video: false });
       } catch (err2) {
         throw isMediaAccessError(err2) ? toMediaAccessError(err2) : err2;
       }

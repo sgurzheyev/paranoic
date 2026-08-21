@@ -293,6 +293,7 @@ export default function App() {
   });
   const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
   const [micMuted, setMicMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(false);
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -2161,6 +2162,7 @@ export default function App() {
     resetCallFailureUi();
     setError('');
     setMicMuted(false);
+    setCameraOff(false);
     void ensureNotifyPermission();
     if (isBannedRef.current) {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
@@ -2290,6 +2292,8 @@ export default function App() {
   const acceptMediaCall = async () => {
     resetCallFailureUi();
     setError('');
+    setMicMuted(false);
+    setCameraOff(false);
     stopRingtone();
     closeActiveNotification();
     void ensureNotifyPermission();
@@ -2423,6 +2427,7 @@ export default function App() {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     setScreenSharing(false);
     setMicMuted(false);
+    setCameraOff(false);
     setNetworkQuality('good');
     setCallExpanded(false);
     setJoining(false);
@@ -2758,8 +2763,21 @@ export default function App() {
   };
 
   const toggleCallMic = () => {
-    const enabled = p2pRef.current?.toggleMic() ?? false;
-    setMicMuted(!enabled);
+    const nextMuted = !micMuted;
+    p2pRef.current?.toggleAudio(!nextMuted);
+    setMicMuted(nextMuted);
+  };
+
+  const toggleCallCamera = () => {
+    const nextOff = !cameraOff;
+    p2pRef.current?.toggleVideo(!nextOff);
+    setCameraOff(nextOff);
+  };
+
+  const switchCallCamera = () => {
+    void p2pRef.current?.switchCamera().catch((err) => {
+      setError(mediaErrorMessage(err, 'Не удалось переключить камеру'));
+    });
   };
 
   useEffect(() => {
@@ -3943,6 +3961,9 @@ export default function App() {
         onToggleScreenShare={() => void toggleScreenShare()}
         micMuted={micMuted}
         onToggleMute={toggleCallMic}
+        cameraOff={cameraOff}
+        onToggleCamera={toggleCallCamera}
+        onSwitchCamera={switchCallCamera}
         onAttachFile={() => fileInputRef.current?.click()}
         failure={overlayFailure}
       />

@@ -2174,6 +2174,11 @@ textarea {
   color: rgba(255, 255, 255, 0.55);
 }
 
+.call-room-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .call-room-btn.hangup {
   background: linear-gradient(160deg, #f87171 0%, #dc2626 100%);
   border-color: rgba(248, 113, 113, 0.55);
