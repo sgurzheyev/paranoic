@@ -293,15 +293,41 @@ export function getOrCreateIdentity(): UserIdentity {
   return identity;
 }
 
+/** Прочитать сохранённый identity.id без создания нового (или null). */
+export function peekLocalIdentityId(): string | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<UserIdentity>;
+    const id = typeof parsed?.id === 'string' ? parsed.id.trim() : '';
+    return id || null;
+  } catch {
+    return null;
+  }
+}
+
+export type AlignIdentityResult = {
+  identity: UserIdentity;
+  /** true — старый localStorage id ≠ новому auth.uid() (нужен сброс контактов). */
+  idChanged: boolean;
+  previousId: string | null;
+};
+
 /**
  * Выровнять локальный identity.id под auth.uid() (RLS: id = auth.uid()).
  * Всегда перезаписывает сохранённый ID актуальным JWT — даже если он уже совпадал.
  */
 export function alignIdentityToAuthUid(authUid: string): UserIdentity {
+  return alignIdentityToAuthUidDetailed(authUid).identity;
+}
+
+/** То же, что alignIdentityToAuthUid, плюс флаг смены id. */
+export function alignIdentityToAuthUidDetailed(authUid: string): AlignIdentityResult {
   const uid = authUid.trim();
   if (!uid) {
     console.warn('[paranoic auth] alignIdentity: empty auth.uid');
-    return getOrCreateIdentity();
+    const identity = getOrCreateIdentity();
+    return { identity, idChanged: false, previousId: identity.id };
   }
 
   let current: UserIdentity;
@@ -320,6 +346,9 @@ export function alignIdentityToAuthUid(authUid: string): UserIdentity {
   } catch {
     current = getOrCreateIdentity();
   }
+
+  const previousId = current.id;
+  const idChanged = Boolean(previousId && previousId !== uid);
 
   const next: UserIdentity = {
     ...current,
@@ -347,12 +376,12 @@ export function alignIdentityToAuthUid(authUid: string): UserIdentity {
     /* */
   }
 
-  if (current.id !== uid) {
-    console.log('[paranoic auth] identity.id → auth.uid()', { from: current.id, to: uid });
+  if (idChanged) {
+    console.log('[paranoic auth] identity.id → auth.uid()', { from: previousId, to: uid });
   } else {
     console.log('[paranoic auth] identity.id synced', uid);
   }
-  return next;
+  return { identity: next, idChanged, previousId };
 }
 
 /**

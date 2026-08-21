@@ -1,12 +1,13 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import {
-  alignIdentityToAuthUid,
+  alignIdentityToAuthUidDetailed,
   clearLocalIdentityData,
   createFreshIdentity,
   getOrCreateIdentity,
   type UserIdentity,
 } from '../identity';
 import { clearCallSessionResidue, clearEphemeralGuestId } from '../callSessionCleanup';
+import { clearLocalChatsAndContacts } from '../storeContacts';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -136,13 +137,23 @@ export async function ensureAuthSession(): Promise<Session> {
     anonymous: Boolean(session.user.is_anonymous),
     hasJwt: Boolean(session.access_token),
   });
-  const aligned = alignIdentityToAuthUid(session.user.id);
+  const { identity: aligned, idChanged, previousId } = alignIdentityToAuthUidDetailed(
+    session.user.id
+  );
   if (aligned.id !== session.user.id) {
     console.error('[AUTH SESSION] identity.id still ≠ auth.uid()', {
       identityId: aligned.id,
       authUid: session.user.id,
     });
   }
+  if (idChanged && previousId) {
+    // Старый localStorage id ≠ новый JWT — не писать в чужие/мёртвые чаты.
+    await clearLocalChatsAndContacts();
+  }
+  // Физическая строка в profiles (иначе presence/звонки бьются о пустой SELECT).
+  // dynamic import — избегаем цикла supabase ↔ profile.
+  const { bootstrapAuthProfile } = await import('../profile');
+  await bootstrapAuthProfile(session.user.id, aligned);
   return session;
 }
 

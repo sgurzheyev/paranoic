@@ -1,10 +1,9 @@
 import localforage from 'localforage';
-import { looksLikeUsername, isValidUuid } from './identity';
+import { looksLikeUsername } from './identity';
 import { hasSupabaseConfig } from './lib/supabase';
 import {
   fetchProfileByUsername,
   fetchRemoteProfile,
-  looksLikeUuid,
   resolveMagicLinkProfile,
   type RemoteProfile,
 } from './profile';
@@ -109,10 +108,6 @@ export async function trustAndUpsertContact(
   });
 }
 
-function isPeerIdWithoutRequiredProfile(id: string): boolean {
-  return looksLikeUuid(id) || isValidUuid(id) || (!looksLikeUsername(id) && id.length >= 8);
-}
-
 /** Найти контакт в локальной записной книжке (id / username). */
 export async function findLocalContact(
   contactId: string,
@@ -162,9 +157,8 @@ export async function resolvePeerProfile(handle: string): Promise<RemoteProfile 
 /**
  * Перед звонком: сверить контакт с Supabase.
  * - self → блок
- * - missing → ok:false (только для абсолютно новых пользователей)
+ * - missing → профиля нет в БД («Контакт устарел или удален»)
  * - найден → обновить кэш (в т.ч. если id сменился через username)
- * Локальная записная книжка имеет приоритет — Supabase не блокирует чат/звонок.
  */
 export async function validateContactForCall(
   contactId: string,
@@ -176,21 +170,21 @@ export async function validateContactForCall(
   }
 
   const local = await findLocalContact(contactId, hint);
-  if (local) {
-    return { ok: true, contact: local, idChanged: false, skipped: true };
-  }
 
   const fallbackContact = (): Contact => ({
     id: contactId,
-    name: hint?.name || 'Контакт',
-    color: hint?.color || '#60a5fa',
-    avatarUrl: hint?.avatarUrl || '',
-    username: hint?.username,
-    trusted: isTrusted(contactId),
-    addedAt: new Date().toISOString(),
+    name: hint?.name || local?.name || 'Контакт',
+    color: hint?.color || local?.color || '#60a5fa',
+    avatarUrl: hint?.avatarUrl || local?.avatarUrl || '',
+    username: hint?.username || local?.username,
+    trusted: isTrusted(contactId) || Boolean(local?.trusted),
+    addedAt: local?.addedAt ?? new Date().toISOString(),
   });
 
   if (!hasSupabaseConfig()) {
+    if (local) {
+      return { ok: true, contact: local, idChanged: false, skipped: true };
+    }
     return { ok: true, contact: fallbackContact(), idChanged: false, skipped: true };
   }
 
@@ -199,6 +193,7 @@ export async function validateContactForCall(
   const usernameHint =
     (hint?.username && looksLikeUsername(hint.username) ? hint.username : '') ||
     (hint?.name && looksLikeUsername(hint.name) ? hint.name : '') ||
+    (local?.username && looksLikeUsername(local.username) ? local.username : '') ||
     (looksLikeUsername(contactId) ? contactId : '');
 
   if (!remote && usernameHint) {
@@ -206,9 +201,6 @@ export async function validateContactForCall(
   }
 
   if (!remote) {
-    if (isPeerIdWithoutRequiredProfile(contactId)) {
-      return { ok: true, contact: fallbackContact(), idChanged: false, skipped: true };
-    }
     return { ok: false, reason: 'missing' };
   }
 
@@ -218,13 +210,13 @@ export async function validateContactForCall(
 
   const contact: Contact = {
     id: remote.id,
-    name: remote.name || hint?.name || remote.username || 'Контакт',
-    color: remote.color || hint?.color || '#60a5fa',
-    avatarUrl: remote.avatar_url || hint?.avatarUrl || '',
-    username: remote.username || usernameHint || undefined,
-    trusted: isTrusted(remote.id),
-    source: 'call',
-    addedAt: new Date().toISOString(),
+    name: remote.name || hint?.name || local?.name || remote.username || 'Контакт',
+    color: remote.color || hint?.color || local?.color || '#60a5fa',
+    avatarUrl: remote.avatar_url || hint?.avatarUrl || local?.avatarUrl || '',
+    username: remote.username || usernameHint || local?.username || undefined,
+    trusted: isTrusted(remote.id) || Boolean(local?.trusted),
+    source: local?.source || 'call',
+    addedAt: local?.addedAt ?? new Date().toISOString(),
   };
 
   const idChanged = contact.id !== contactId;

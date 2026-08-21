@@ -162,7 +162,7 @@ import {
   validateContactForCall,
   type Contact,
 } from './contacts';
-import { syncProfileToSupabase, fetchRemoteProfile } from './profile';
+import { syncProfileToSupabase, fetchRemoteProfile, PROFILE_STALE_MESSAGE } from './profile';
 import { startNativePush } from './pushNotifications';
 import {
   clearCallResidueState,
@@ -745,6 +745,11 @@ export default function App() {
     // Снос только residue прошлой сессии (host-флаги legacy ?room= оставляем для F5).
     clearCallResidueState();
   }, []);
+
+  /** После смены auth.uid() storeContacts очищает IndexedDB — подтянуть пустой список в UI. */
+  useEffect(() => {
+    void loadContacts().then(setContacts);
+  }, [identity.id]);
 
   /** Magic link (?u=): SELECT profiles → контакт → экран гостя до join. */
   useEffect(() => {
@@ -2093,8 +2098,7 @@ export default function App() {
         await openPeerSession(targetUserId, label || 'Близкий', {}, { openChat: opts?.openChat, rejoin: false });
         return;
       }
-      const title = label || targetUserId;
-      setError(`Пользователь «${title}» не найден. Проверьте никнейм или откройте ссылку с ID.`);
+      setError(PROFILE_STALE_MESSAGE);
       return;
     }
 
@@ -2234,6 +2238,10 @@ export default function App() {
 
       const confirmOfflineOrBusy = async (callTarget: string): Promise<boolean> => {
         const check = await checkCalleeOnline(callTarget);
+        if (check.missingProfile) {
+          setError(PROFILE_STALE_MESSAGE);
+          return false;
+        }
         if (check.peer.status === 'in_call') {
           setError('Пользователь сейчас разговаривает. Попробуйте позже.');
           return false;
@@ -2307,14 +2315,14 @@ export default function App() {
           }
           const title = peerLabel || known?.name || target;
           const shouldRemove = window.confirm(
-            `Контакт «${title}» больше не найден (профиль удалён или ID изменился).\n\nУдалить его из записной книжки?`
+            `${PROFILE_STALE_MESSAGE}\n\nУдалить «${title}» из записной книжки?`
           );
           if (shouldRemove) {
             const next = await removeContact(target);
             setContacts(next);
-            setError(`Контакт «${title}» удалён из записной книжки.`);
+            setError(PROFILE_STALE_MESSAGE);
           } else {
-            setError(`Контакт «${title}» неактуален. Обновите ссылку собеседника.`);
+            setError(PROFILE_STALE_MESSAGE);
           }
           clearCallSessionResidue();
           return;

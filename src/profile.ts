@@ -170,6 +170,60 @@ export function looksLikeUuid(value: string): boolean {
   return UUID_RE.test(value.trim());
 }
 
+/** Сообщение UI, когда профиль по id не найден в БД. */
+export const PROFILE_STALE_MESSAGE = 'Контакт устарел или удален';
+
+/** PostgREST: .single() / .maybeSingle() — строка отсутствует. */
+export function isProfileNotFoundError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === 'PGRST116') return true;
+  const msg = (error.message || '').toLowerCase();
+  return (
+    msg.includes('row not found') ||
+    msg.includes('0 rows') ||
+    msg.includes('cannot coerce') ||
+    msg.includes('json object requested')
+  );
+}
+
+/**
+ * Гарантирует физическую строку в profiles сразу после Anonymous Auth.
+ * Без этого RLS/presence/звонки ломаются: auth.uid() есть, а профиля нет.
+ */
+export async function bootstrapAuthProfile(
+  userId: string,
+  identity?: Pick<UserIdentity, 'name' | 'color' | 'username' | 'avatarUrl' | 'themeFon'>
+): Promise<void> {
+  const id = userId.trim();
+  if (!id || !hasSupabaseConfig()) return;
+  try {
+    const sb = getSupabase();
+    const now = new Date().toISOString();
+    // username не пишем как 'New User' — unique + паттерн [a-z0-9_]; display → name.
+    const row: Record<string, unknown> = {
+      id,
+      name: identity?.name?.trim() || 'New User',
+      color: identity?.color || '#34d399',
+      avatar_url: identity?.avatarUrl || null,
+      theme_fon: identity?.themeFon || null,
+      is_online: true,
+      last_seen: now,
+    };
+    const handle = identity?.username?.trim();
+    if (handle) {
+      row.username = handle;
+    }
+    const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
+    if (error) {
+      console.warn('[paranoic] bootstrap profiles upsert', error.message);
+    } else {
+      console.log('[paranoic] profiles bootstrap ok', id);
+    }
+  } catch (e) {
+    console.warn('[paranoic] bootstrap profiles failed', e);
+  }
+}
+
 /** Upsert в таблицу `profiles` (если настроена). */
 export async function syncProfileToSupabase(
   identity: UserIdentity,
@@ -280,12 +334,54 @@ export async function fetchRemoteProfile(userId: string): Promise<RemoteProfile 
       .eq('id', userId)
       .maybeSingle();
     if (error) {
-      console.warn('[paranoic] profiles fetch', error.message);
+      if (isProfileNotFoundError(error)) {
+        console.warn('[paranoic] profiles fetch', PROFILE_STALE_MESSAGE, userId);
+      } else {
+        console.warn('[paranoic] profiles fetch', error.message);
+      }
       return null;
     }
-    return data as RemoteProfile | null;
+    if (!data) {
+      console.warn('[paranoic] profiles fetch', PROFILE_STALE_MESSAGE, userId);
+      return null;
+    }
+    return data as RemoteProfile;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Как fetchRemoteProfile, но явно помечает «не найден» для UI.
+ */
+export async function fetchRemoteProfileOrStale(userId: string): Promise<{
+  profile: RemoteProfile | null;
+  stale: boolean;
+}> {
+  if (!hasSupabaseConfig() || !userId.trim()) {
+    return { profile: null, stale: true };
+  }
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from(PROFILES_TABLE)
+      .select(PROFILE_SELECT)
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) {
+      console.warn(
+        '[paranoic] profiles fetch',
+        isProfileNotFoundError(error) ? PROFILE_STALE_MESSAGE : error.message,
+        userId
+      );
+      return { profile: null, stale: isProfileNotFoundError(error) };
+    }
+    if (!data) {
+      return { profile: null, stale: true };
+    }
+    return { profile: data as RemoteProfile, stale: false };
+  } catch {
+    return { profile: null, stale: true };
   }
 }
 

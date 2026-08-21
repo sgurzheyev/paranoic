@@ -286,11 +286,12 @@ export class CallInbox {
   async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<void> {
     if (!toUserId || toUserId === from.id) return;
     const check = await checkCalleeOnline(toUserId);
-    if (!check.ok || check.needsOfflineConfirm) {
-      console.warn('[SIGNAL OUT] skip call_offer — callee offline or busy', {
+    if (!check.ok || check.needsOfflineConfirm || check.missingProfile) {
+      console.warn('[SIGNAL OUT] skip call_offer — callee offline, busy, or missing', {
         to: toUserId,
         status: check.peer.status,
         isOnline: check.peer.isOnline,
+        missingProfile: check.missingProfile,
       });
       return;
     }
@@ -351,12 +352,15 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
   peer: PeerPresenceInfo;
   /** true = пользователь offline, нужен confirm про уведомление */
   needsOfflineConfirm: boolean;
+  /** true = профиля нет в БД (устаревший / удалённый контакт) */
+  missingProfile?: boolean;
 }> {
   if (!hasSupabaseConfig() || !toUserId) {
     return {
-      ok: true,
+      ok: false,
       peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
-      needsOfflineConfirm: true,
+      needsOfflineConfirm: false,
+      missingProfile: true,
     };
   }
   try {
@@ -366,13 +370,15 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
       .from('profiles')
       .select('is_online, last_seen, presence_status')
       .eq('id', toUserId)
-      .single();
+      .maybeSingle();
     if (error || !data) {
       if (error) console.warn('[presence] callee check', error.message);
+      // maybeSingle: нет строки → data=null без error; .single → PGRST116
       return {
-        ok: true,
+        ok: false,
         peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
-        needsOfflineConfirm: true,
+        needsOfflineConfirm: false,
+        missingProfile: true,
       };
     }
     const row = data as {
@@ -405,9 +411,10 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
   } catch (e) {
     console.warn('[presence] callee check failed', e);
     return {
-      ok: true,
+      ok: false,
       peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
-      needsOfflineConfirm: true,
+      needsOfflineConfirm: false,
+      missingProfile: true,
     };
   }
 }
