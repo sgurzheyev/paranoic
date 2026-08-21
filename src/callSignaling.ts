@@ -1,5 +1,14 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
+import {
+  fetchPeerPresence,
+  pingProfilePresence,
+  setUsersCallPresence,
+  type PeerPresenceInfo,
+  type PresenceStatus,
+} from './presence';
+
+export type { PeerPresenceInfo, PresenceStatus };
 
 /** Профиль звонящего для Caller ID / уведомлений. */
 export type CallerInfo = {
@@ -292,4 +301,46 @@ export function callerDisplayName(info: Pick<CallerInfo, 'name' | 'username' | '
   if (info.username) return `@${info.username}`;
   if (info.name && info.name !== 'Я') return info.name;
   return info.id.slice(0, 10);
+}
+
+/**
+ * Перед SDP / call_offer: проверить heartbeat-статус получателя.
+ * Offline → UI должен спросить про уведомление.
+ */
+export async function checkCalleeOnline(toUserId: string): Promise<{
+  ok: boolean;
+  peer: PeerPresenceInfo;
+  /** true = пользователь offline, нужен confirm про уведомление */
+  needsOfflineConfirm: boolean;
+}> {
+  const peer = await fetchPeerPresence(toUserId);
+  if (peer.status === 'in_call') {
+    return { ok: false, peer, needsOfflineConfirm: false };
+  }
+  if (!peer.isOnline || peer.status === 'offline') {
+    return { ok: true, peer, needsOfflineConfirm: true };
+  }
+  return { ok: true, peer, needsOfflineConfirm: false };
+}
+
+/** Оба участника → in_call (занятость в profiles). */
+export async function markParticipantsInCall(
+  callerId: string,
+  calleeId: string
+): Promise<void> {
+  await setUsersCallPresence([callerId, calleeId], true);
+}
+
+/** Снять in_call; видимая вкладка → online, иначе away. */
+export async function clearParticipantsInCall(
+  userIds: string[],
+  opts?: { preferAway?: boolean }
+): Promise<void> {
+  const status: PresenceStatus =
+    opts?.preferAway ||
+    (typeof document !== 'undefined' && document.visibilityState !== 'visible')
+      ? 'away'
+      : 'online';
+  const unique = [...new Set(userIds.filter(Boolean))];
+  await Promise.all(unique.map((id) => pingProfilePresence(id, status)));
 }

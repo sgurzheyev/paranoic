@@ -53,6 +53,9 @@ import {
 import {
   CallInbox,
   callerDisplayName,
+  checkCalleeOnline,
+  clearParticipantsInCall,
+  markParticipantsInCall,
   newCallId,
   type CallOfferEvent,
   type CallerInfo,
@@ -1299,6 +1302,20 @@ export default function App() {
           if (state === 'calling' || state === 'in-call' || state === 'ringing') {
             setCallFailKind(null);
           }
+          if (state === 'calling' || state === 'in-call') {
+            presenceRef.current?.setInCall(true);
+            const meId = identityRef.current.id;
+            const peer =
+              peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+            if (meId && peer) void markParticipantsInCall(meId, peer);
+          }
+          if (state === 'idle' || state === 'ending') {
+            presenceRef.current?.setInCall(false);
+            const meId = identityRef.current.id;
+            const peer =
+              peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+            void clearParticipantsInCall([meId, peer].filter(Boolean));
+          }
           if (state === 'ringing') {
             setCallExpanded(true);
             const meta = peerMetaRef.current;
@@ -2203,6 +2220,22 @@ export default function App() {
         clearCallSessionResidue();
         return;
       }
+
+      const confirmOfflineOrBusy = async (callTarget: string): Promise<boolean> => {
+        const check = await checkCalleeOnline(callTarget);
+        if (check.peer.status === 'in_call') {
+          setError('Пользователь сейчас разговаривает. Попробуйте позже.');
+          return false;
+        }
+        if (check.needsOfflineConfirm) {
+          const sendNotify = window.confirm(
+            'Пользователь не в сети, отправить уведомление?'
+          );
+          if (!sendNotify) return false;
+        }
+        return true;
+      };
+
       if (target) {
         const known = contacts.find((c) => c.id === target);
         const validation = await validateContactForCall(target, me.id, {
@@ -2219,6 +2252,10 @@ export default function App() {
             return;
           }
           if (validation.reason === 'missing' && isLiveConnectedTo(target)) {
+            if (!(await confirmOfflineOrBusy(target))) {
+              clearCallSessionResidue();
+              return;
+            }
             const callTarget = target;
             saveCallResidue({ peerId: callTarget, guestPeerId: callTarget });
             const callId = newCallId();
@@ -2240,6 +2277,8 @@ export default function App() {
               },
               callId
             );
+            void markParticipantsInCall(me.id, callTarget);
+            presenceRef.current?.setInCall(true);
             await ensureP2P().startCall();
             attachLocalVideo(null);
             setCallExpanded(true);
@@ -2267,6 +2306,10 @@ export default function App() {
           await setActivePeer(validation.contact.id, validation.contact.name);
         }
         const callTarget = validation.contact.id;
+        if (!(await confirmOfflineOrBusy(callTarget))) {
+          clearCallSessionResidue();
+          return;
+        }
         saveCallResidue({ peerId: callTarget, guestPeerId: callTarget });
         const callId = newCallId();
         outboundCallIdRef.current = callId;
@@ -2287,6 +2330,8 @@ export default function App() {
           },
           callId
         );
+        void markParticipantsInCall(me.id, callTarget);
+        presenceRef.current?.setInCall(true);
       }
       await ensureP2P().startCall();
       attachLocalVideo(null);
@@ -2296,6 +2341,7 @@ export default function App() {
       pendingStartCallRef.current = false;
       clearCallSessionResidue();
       setCallExpanded(false);
+      presenceRef.current?.setInCall(false);
       setError(mediaErrorMessage(e, 'Не удалось начать звонок'));
     }
   };
@@ -2334,6 +2380,12 @@ export default function App() {
       void updateCallSessionStatus(ring.callId, 'accepted');
     }
     try {
+      const meId = identityRef.current.id;
+      const peerId = ring?.from.id || peerIdRef.current || guestPeerIdRef.current;
+      if (meId && peerId) {
+        void markParticipantsInCall(meId, peerId);
+        presenceRef.current?.setInCall(true);
+      }
       if (p2pRef.current?.currentCallState === 'ringing') {
         const stream = await ensureP2P().acceptCall();
         attachLocalVideo(stream);
@@ -2447,6 +2499,8 @@ export default function App() {
     setScreenSharing(false);
     setMicMuted(false);
     setCameraOff(false);
+    presenceRef.current?.setInCall(false);
+    void clearParticipantsInCall([me.id, target].filter(Boolean) as string[]);
     setNetworkQuality('good');
     setCallExpanded(false);
     setJoining(false);
