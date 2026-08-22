@@ -5,19 +5,19 @@ import {
   ArrowLeft,
   Box,
   Camera,
+  Crosshair,
   Gem,
   Ghost,
   Layers,
-  Locate,
   MapPin,
   MessageCircle,
+  Minus,
   Phone,
   PhoneOff,
+  Plus,
   Radar,
   ShieldCheck,
   X,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
 import { initials } from './identity';
 import {
@@ -1190,6 +1190,41 @@ export default function GlobeLobby({
         </header>
         <div className="map-top-bar-spacer" aria-hidden />
 
+        {/* Вертикальный dock: зум + GPS, слева сверху над картой. */}
+        {!isTargetingMode && !movingGem && (
+          <div className="map-zoom-dock map-ui-hit" role="toolbar" aria-label="Управление картой">
+            <button
+              type="button"
+              className="map-zoom-dock__btn"
+              aria-label="Приблизить"
+              title="Приблизить"
+              onClick={() => nudgeZoom(1.2)}
+              disabled={zoom >= 17.5}
+            >
+              <Plus {...neonIconProps} />
+            </button>
+            <button
+              type="button"
+              className="map-zoom-dock__btn"
+              aria-label="Отдалить"
+              title="Отдалить"
+              onClick={() => nudgeZoom(-1.2)}
+              disabled={zoom <= 1.4}
+            >
+              <Minus {...neonIconProps} />
+            </button>
+            <button
+              type="button"
+              className="map-zoom-dock__btn"
+              aria-label="Моё местоположение"
+              title="Моё местоположение"
+              onClick={flyToMyLocation}
+            >
+              <Crosshair {...neonIconProps} />
+            </button>
+          </div>
+        )}
+
         {banned && (
           <div className="map-banned-banner map-ui-hit">
             Аккаунт заблокирован — звонки и чат с карты недоступны.
@@ -1344,35 +1379,6 @@ export default function GlobeLobby({
               >
                 <Box {...neonIconProps} />
               </button>
-              <div className="map-ui-toolbar__cluster items-end">
-                <button
-                  type="button"
-                  aria-label="Моё местоположение"
-                  title="Моё местоположение"
-                  onClick={flyToMyLocation}
-                  className="map-neon-fab map-neon-fab--neutral"
-                >
-                  <Locate {...neonIconProps} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Приблизить"
-                  onClick={() => nudgeZoom(1.2)}
-                  disabled={zoom >= 17.5}
-                  className="map-neon-fab map-neon-fab--neutral"
-                >
-                  <ZoomIn {...neonIconProps} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Отдалить"
-                  onClick={() => nudgeZoom(-1.2)}
-                  disabled={zoom <= 1.4}
-                  className="map-neon-fab map-neon-fab--neutral"
-                >
-                  <ZoomOut {...neonIconProps} />
-                </button>
-              </div>
             </div>
           </div>
             </>
