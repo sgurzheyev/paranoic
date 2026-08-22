@@ -4,6 +4,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft,
   Box,
+  Camera,
   Gem,
   Ghost,
   Layers,
@@ -289,6 +290,8 @@ export default function GlobeLobby({
   const [layersOpen, setLayersOpen] = useState(false);
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+
+  const neonIconProps = { size: 18, strokeWidth: 1.5, 'aria-hidden': true as const };
 
   useEffect(() => {
     document.documentElement.classList.toggle('ar-active', arOpen);
@@ -1294,41 +1297,42 @@ export default function GlobeLobby({
             <div className="map-ui-toolbar__cluster">
               <button
                 type="button"
-                className="memory-gem-fab"
+                className={`map-neon-fab map-neon-fab--memory${isTargetingMode ? ' is-active' : ''}`}
                 disabled={banned}
+                aria-label="Закрепить фото или видео на карте"
+                title="Закрепить память на карте"
+                aria-pressed={isTargetingMode}
                 onClick={() => {
                   setLayersOpen(false);
                   setIsTargetingMode(true);
                 }}
-                title="Выбрать место для Pin Memory"
               >
-                <Gem size={16} />
-                Pin Memory
+                <Camera {...neonIconProps} />
               </button>
               <button
                 type="button"
-                className="ai-radar-fab"
+                className={`map-neon-fab map-neon-fab--ai${aiOpen ? ' is-active' : ''}`}
                 onClick={() => {
                   setLayersOpen(false);
                   setAiOpen(true);
                 }}
                 aria-label="ИИ-телохранитель"
-                title="ИИ-телохранитель"
+                title="Секретарь"
+                aria-pressed={aiOpen}
               >
-                <Radar size={18} />
-                Секретарь
+                <Radar {...neonIconProps} />
               </button>
             </div>
             <div className="map-ui-toolbar__cluster items-end">
               <button
                 type="button"
-                className="ar-fab"
+                className={`map-neon-fab map-neon-fab--ar${arOpen ? ' is-active' : ''}`}
                 onClick={() => setArOpen(true)}
                 aria-label="AR Footprints"
                 title="Дополненная реальность"
+                aria-pressed={arOpen}
               >
-                <Box size={22} />
-                <span>AR</span>
+                <Box {...neonIconProps} />
               </button>
               <div className="map-ui-toolbar__cluster items-end">
                 <button
@@ -1336,27 +1340,27 @@ export default function GlobeLobby({
                   aria-label="Моё местоположение"
                   title="Моё местоположение"
                   onClick={flyToMyLocation}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
+                  className="map-neon-fab map-neon-fab--neutral"
                 >
-                  <Locate size={18} />
+                  <Locate {...neonIconProps} />
                 </button>
                 <button
                   type="button"
                   aria-label="Приблизить"
                   onClick={() => nudgeZoom(1.2)}
                   disabled={zoom >= 17.5}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
+                  className="map-neon-fab map-neon-fab--neutral"
                 >
-                  <ZoomIn size={18} />
+                  <ZoomIn {...neonIconProps} />
                 </button>
                 <button
                   type="button"
                   aria-label="Отдалить"
                   onClick={() => nudgeZoom(-1.2)}
                   disabled={zoom <= 1.4}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15 disabled:opacity-35"
+                  className="map-neon-fab map-neon-fab--neutral"
                 >
-                  <ZoomOut size={18} />
+                  <ZoomOut {...neonIconProps} />
                 </button>
               </div>
             </div>
