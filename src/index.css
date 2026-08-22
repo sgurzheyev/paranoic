@@ -3946,11 +3946,11 @@ svg.lucide {
   touch-action: none;
 }
 
-/* Своя дорожка слева от колонки круглых кнопок, иначе компас и attribution
-   вылезают из-под них. */
+/* Своя дорожка слева от правого dock, иначе компас и attribution
+   вылезают из-под колонки. */
 .family-mapbox .mapboxgl-ctrl-bottom-right {
   margin-bottom: calc(7.25rem + env(safe-area-inset-bottom, 0px));
-  margin-right: calc(0.75rem + 52px);
+  margin-right: calc(0.75rem + 56px);
 }
 
 /* Родной компас Mapbox приводим к стеклянному стилю остальных кнопок карты. */
@@ -3996,7 +3996,7 @@ svg.lucide {
   right: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 0.5rem;
   min-height: 2.75rem;
@@ -4010,28 +4010,133 @@ svg.lucide {
   pointer-events: none;
 }
 
-/* Вертикальная капсула зума / GPS — левый верхний угол карты. */
-.map-zoom-dock {
+/* Единый правый вертикальный dock управления картой. */
+.map-side-dock {
   position: absolute;
   top: calc(max(12px, env(safe-area-inset-top, 12px)) + 3.15rem);
-  left: max(12px, env(safe-area-inset-left, 12px));
+  right: max(12px, env(safe-area-inset-right, 12px));
   z-index: 6;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 6px 5px;
-  border-radius: 999px;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.map-side-dock__slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.map-side-dock__fab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(5, 7, 11, 0.6);
-  backdrop-filter: blur(24px) saturate(1.25);
-  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(238, 241, 246, 0.9);
+  font: inherit;
+  cursor: pointer;
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
   box-shadow:
-    0 0 0 1px rgba(0, 245, 212, 0.08),
-    0 0 22px rgba(0, 245, 212, 0.16),
-    0 0 40px rgba(125, 222, 168, 0.08),
-    0 10px 28px rgba(5, 7, 11, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 4px 16px rgba(5, 7, 11, 0.45);
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.map-side-dock__fab svg {
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 4px rgba(0, 245, 212, 0.18));
+}
+
+.map-side-dock__fab:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(0, 245, 212, 0.28);
+  background: rgba(0, 0, 0, 0.52);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 16px rgba(0, 245, 212, 0.16),
+    0 6px 18px rgba(5, 7, 11, 0.5);
+}
+
+.map-side-dock__fab:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.map-side-dock__fab:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.map-side-dock__fab.is-active,
+.map-side-dock__fab--memory.is-active {
+  border-color: rgba(226, 183, 20, 0.45);
+  color: var(--lux-gold, #e2b714);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 16px rgba(226, 183, 20, 0.22);
+}
+
+.map-side-dock__fab--ar.is-active {
+  border-color: rgba(0, 245, 212, 0.45);
+  color: var(--lux-emerald, #00f5d4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 16px rgba(0, 245, 212, 0.22);
+}
+
+.map-side-dock__fab--ai.is-active {
+  border-color: rgba(129, 140, 248, 0.5);
+  color: #c7d2fe;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 16px rgba(99, 102, 241, 0.25);
+}
+
+.map-side-dock__fab:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 2px rgba(0, 245, 212, 0.4);
+}
+
+/* Круглый пульт зума / GPS внутри правого dock. */
+.map-zoom-dock {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  z-index: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 48px;
+  height: 48px;
+  padding: 5px 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 14px rgba(0, 245, 212, 0.14),
+    0 4px 16px rgba(5, 7, 11, 0.45);
   pointer-events: auto;
 }
 
@@ -4039,49 +4144,53 @@ svg.lucide {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 100%;
+  height: 12px;
   padding: 0;
   border: none;
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
-  color: rgba(200, 245, 230, 0.92);
+  color: rgba(220, 245, 235, 0.9);
   cursor: pointer;
   transition:
     color 0.2s ease,
-    background 0.2s ease,
-    transform 0.2s ease,
+    opacity 0.2s ease,
     filter 0.2s ease;
+}
+
+.map-zoom-dock__btn--center {
+  color: var(--lux-emerald, #00f5d4);
 }
 
 .map-zoom-dock__btn svg {
   stroke-width: 1.5;
-  filter: drop-shadow(0 0 6px rgba(0, 245, 212, 0.28));
+  filter: drop-shadow(0 0 4px rgba(0, 245, 212, 0.22));
 }
 
 .map-zoom-dock__btn:hover:not(:disabled) {
   color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-  transform: scale(1.06);
+}
+
+.map-zoom-dock__btn--center:hover:not(:disabled) {
+  color: #7ef9e2;
 }
 
 .map-zoom-dock__btn:hover:not(:disabled) svg {
-  filter: drop-shadow(0 0 10px rgba(0, 245, 212, 0.45));
+  filter: drop-shadow(0 0 8px rgba(0, 245, 212, 0.45));
 }
 
 .map-zoom-dock__btn:active:not(:disabled) {
-  transform: scale(0.94);
+  opacity: 0.7;
 }
 
 .map-zoom-dock__btn:disabled {
-  opacity: 0.32;
+  opacity: 0.28;
   cursor: not-allowed;
 }
 
 .map-zoom-dock__btn:focus-visible {
   outline: none;
-  background: rgba(0, 245, 212, 0.1);
-  box-shadow: 0 0 0 2px rgba(0, 245, 212, 0.35);
+  color: #fff;
 }
 
 /* Full-screen map UI shell: transparent areas pass events to Mapbox. */
@@ -5592,6 +5701,27 @@ svg.lucide {
   gap: 8px;
   transform-origin: top center;
   animation: map-layers-menu-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Меню слоёв у правого dock — открывается влево. */
+.map-layers-menu--dock {
+  top: 0;
+  right: calc(100% + 10px);
+  left: auto;
+  transform: none;
+  transform-origin: top right;
+  animation: map-layers-menu-dock-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes map-layers-menu-dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 
 @keyframes map-layers-menu-in {

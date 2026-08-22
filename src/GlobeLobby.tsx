@@ -292,8 +292,6 @@ export default function GlobeLobby({
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
-  const neonIconProps = { size: 18, strokeWidth: 1.5, 'aria-hidden': true as const };
-
   useEffect(() => {
     document.documentElement.classList.toggle('ar-active', arOpen);
     return () => {
@@ -1124,20 +1122,39 @@ export default function GlobeLobby({
             )}
           </div>
 
-          <div className="map-top-bar__center">
-            <div className="relative">
+          <div className="map-top-bar__right">
+            {isAdmin && onOpenAdmin && (
               <button
                 type="button"
-                className={`map-layers-btn${layersOpen ? ' open' : ''}`}
+                onClick={onOpenAdmin}
+                className="lux-glass-chip px-3 py-2 text-xs font-extrabold"
+              >
+                <ShieldCheck size={14} /> Admin Panel
+              </button>
+            )}
+            <div className="lux-glass-chip px-3 py-1.5 text-xs font-semibold text-slate-300">
+              Family Mode
+            </div>
+          </div>
+        </header>
+        <div className="map-top-bar-spacer" aria-hidden />
+
+        {/* Единый правый dock: слои, зум/GPS, память, AR, секретарь. */}
+        {!isTargetingMode && !movingGem && (
+          <aside className="map-side-dock map-ui-hit" aria-label="Управление картой">
+            <div className="map-side-dock__slot">
+              <button
+                type="button"
+                className={`map-side-dock__fab${layersOpen ? ' is-active' : ''}`}
                 aria-expanded={layersOpen}
                 aria-label="Слои карты"
+                title="Слои"
                 onClick={() => setLayersOpen((v) => !v)}
               >
-                <Layers size={16} />
-                Слои
+                <Layers size={16} strokeWidth={1.5} aria-hidden />
               </button>
               {layersOpen && (
-                <div className="map-layers-menu" role="menu">
+                <div className="map-layers-menu map-layers-menu--dock" role="menu">
                   <p className="map-layers-menu-title">Слои карты</p>
                   <label className="map-layers-toggle">
                     <span>Контакты</span>
@@ -1171,58 +1188,79 @@ export default function GlobeLobby({
                 </div>
               )}
             </div>
-          </div>
 
-          <div className="map-top-bar__right">
-            {isAdmin && onOpenAdmin && (
+            <div className="map-zoom-dock" role="toolbar" aria-label="Зум и локация">
               <button
                 type="button"
-                onClick={onOpenAdmin}
-                className="lux-glass-chip px-3 py-2 text-xs font-extrabold"
+                className="map-zoom-dock__btn"
+                aria-label="Приблизить"
+                title="Приблизить"
+                onClick={() => nudgeZoom(1.2)}
+                disabled={zoom >= 17.5}
               >
-                <ShieldCheck size={14} /> Admin Panel
+                <Plus size={14} strokeWidth={1.5} aria-hidden />
               </button>
-            )}
-            <div className="lux-glass-chip px-3 py-1.5 text-xs font-semibold text-slate-300">
-              Family Mode
+              <button
+                type="button"
+                className="map-zoom-dock__btn map-zoom-dock__btn--center"
+                aria-label="Моё местоположение"
+                title="Моё местоположение"
+                onClick={flyToMyLocation}
+              >
+                <Crosshair size={14} strokeWidth={1.5} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="map-zoom-dock__btn"
+                aria-label="Отдалить"
+                title="Отдалить"
+                onClick={() => nudgeZoom(-1.2)}
+                disabled={zoom <= 1.4}
+              >
+                <Minus size={14} strokeWidth={1.5} aria-hidden />
+              </button>
             </div>
-          </div>
-        </header>
-        <div className="map-top-bar-spacer" aria-hidden />
 
-        {/* Вертикальный dock: зум + GPS, слева сверху над картой. */}
-        {!isTargetingMode && !movingGem && (
-          <div className="map-zoom-dock map-ui-hit" role="toolbar" aria-label="Управление картой">
             <button
               type="button"
-              className="map-zoom-dock__btn"
-              aria-label="Приблизить"
-              title="Приблизить"
-              onClick={() => nudgeZoom(1.2)}
-              disabled={zoom >= 17.5}
+              className={`map-side-dock__fab map-side-dock__fab--memory${isTargetingMode ? ' is-active' : ''}`}
+              disabled={banned}
+              aria-label="Закрепить фото или видео на карте"
+              title="Закрепить память на карте"
+              aria-pressed={isTargetingMode}
+              onClick={() => {
+                setLayersOpen(false);
+                setIsTargetingMode(true);
+              }}
             >
-              <Plus {...neonIconProps} />
+              <Camera size={16} strokeWidth={1.5} aria-hidden />
             </button>
+
             <button
               type="button"
-              className="map-zoom-dock__btn"
-              aria-label="Отдалить"
-              title="Отдалить"
-              onClick={() => nudgeZoom(-1.2)}
-              disabled={zoom <= 1.4}
+              className={`map-side-dock__fab map-side-dock__fab--ar${arOpen ? ' is-active' : ''}`}
+              onClick={() => setArOpen(true)}
+              aria-label="AR Footprints"
+              title="Дополненная реальность"
+              aria-pressed={arOpen}
             >
-              <Minus {...neonIconProps} />
+              <Box size={16} strokeWidth={1.5} aria-hidden />
             </button>
+
             <button
               type="button"
-              className="map-zoom-dock__btn"
-              aria-label="Моё местоположение"
-              title="Моё местоположение"
-              onClick={flyToMyLocation}
+              className={`map-side-dock__fab map-side-dock__fab--ai${aiOpen ? ' is-active' : ''}`}
+              onClick={() => {
+                setLayersOpen(false);
+                setAiOpen(true);
+              }}
+              aria-label="Секретарь — ИИ-агент"
+              title="Секретарь"
+              aria-pressed={aiOpen}
             >
-              <Crosshair {...neonIconProps} />
+              <Radar size={16} strokeWidth={1.5} aria-hidden />
             </button>
-          </div>
+          </aside>
         )}
 
         {banned && (
@@ -1337,50 +1375,6 @@ export default function GlobeLobby({
               </div>
             </div>
           )}
-
-          <div className="map-ui-toolbar">
-            <div className="map-ui-toolbar__cluster">
-              <button
-                type="button"
-                className={`map-neon-fab map-neon-fab--memory${isTargetingMode ? ' is-active' : ''}`}
-                disabled={banned}
-                aria-label="Закрепить фото или видео на карте"
-                title="Закрепить память на карте"
-                aria-pressed={isTargetingMode}
-                onClick={() => {
-                  setLayersOpen(false);
-                  setIsTargetingMode(true);
-                }}
-              >
-                <Camera {...neonIconProps} />
-              </button>
-              <button
-                type="button"
-                className={`map-neon-fab map-neon-fab--ai${aiOpen ? ' is-active' : ''}`}
-                onClick={() => {
-                  setLayersOpen(false);
-                  setAiOpen(true);
-                }}
-                aria-label="Секретарь — ИИ-агент"
-                title="Секретарь"
-                aria-pressed={aiOpen}
-              >
-                <Radar {...neonIconProps} />
-              </button>
-            </div>
-            <div className="map-ui-toolbar__cluster items-end">
-              <button
-                type="button"
-                className={`map-neon-fab map-neon-fab--ar${arOpen ? ' is-active' : ''}`}
-                onClick={() => setArOpen(true)}
-                aria-label="AR Footprints"
-                title="Дополненная реальность"
-                aria-pressed={arOpen}
-              >
-                <Box {...neonIconProps} />
-              </button>
-            </div>
-          </div>
             </>
           )}
         </div>
