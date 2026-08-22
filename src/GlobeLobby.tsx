@@ -36,7 +36,7 @@ import {
   setGemsLayerVisibility,
   startGemPulse,
 } from './mapGemLayers';
-import { buildVisibleGemsContext, fetchAllMapGems, gemMapPreviewUrl, type MapGem } from './mapGems';
+import { buildVisibleGemsContext, gemMapPreviewUrl, type MapGem } from './mapGems';
 import { fetchMemoryGems, moveOwnedGem } from './memoryGems';
 import { buildGemMarkerElement } from './mapGemMarkers';
 import { configureGemImageElement } from './gemImage';
@@ -707,22 +707,18 @@ export default function GlobeLobby({
     }
   }, [gems, mapReady, showGems]);
 
-  /** Загрузка map_gems + memory_gems при инициализации карты. */
+  /** Загрузка капсул памяти — только при включённом слое «Капсулы памяти». */
   useEffect(() => {
-    if (!mapReady) return;
+    if (!mapReady || !showGems) return;
     let cancelled = false;
     void (async () => {
-      const [legacy, memory] = await Promise.all([fetchAllMapGems(), fetchMemoryGems()]);
-      if (!cancelled) {
-        const byId = new Map<string, MapGem>();
-        for (const gem of [...legacy, ...memory]) byId.set(gem.id, gem);
-        setGems([...byId.values()]);
-      }
+      const memory = await fetchMemoryGems();
+      if (!cancelled) setGems(memory);
     })();
     return () => {
       cancelled = true;
     };
-  }, [mapReady]);
+  }, [mapReady, showGems]);
 
   /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */
   useEffect(() => {

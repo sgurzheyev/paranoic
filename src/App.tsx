@@ -416,22 +416,38 @@ export default function App() {
     [presenceUsers]
   );
 
-  const mapPeople = useMemo((): MapPerson[] => {
-    const list: MapPerson[] = presenceUsers
-      .filter((u) => u.userId !== identity.id && !isBlocked(u.userId) && u.hasLocation)
-      .map((u) => {
-        const contact = contacts.find((c) => c.id === u.userId);
-        const trusted = Boolean(contact?.trusted) || trustedIds.has(u.userId) || isTrusted(u.userId);
-        return {
-          ...u,
-          isContact: Boolean(contact) || trusted,
-          name: contact?.name || u.name,
-          color: contact?.color || u.color,
-          avatarUrl: u.avatarUrl || contact?.avatarUrl || '',
-        };
-      });
+  /** Контакты + собеседники с активными чатами — только они на карте Family Mode. */
+  const mapContactIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of contacts) ids.add(c.id);
+    for (const peerId of Object.keys(lastPreviews)) ids.add(peerId);
+    return [...ids];
+  }, [contacts, lastPreviews]);
 
-    // Всегда показываем свою точку (GPS или Антарктида / Ghost).
+  const mapPeople = useMemo((): MapPerson[] => {
+    const presenceById = new Map(presenceUsers.map((u) => [u.userId, u]));
+    const list: MapPerson[] = [];
+
+    for (const id of mapContactIds) {
+      if (id === identity.id || isBlocked(id)) continue;
+      const contact = contacts.find((c) => c.id === id);
+      const presence = presenceById.get(id);
+      list.push({
+        userId: id,
+        name: contact?.name || presence?.name || id.slice(0, 8),
+        color: contact?.color || presence?.color || '#60a5fa',
+        avatarUrl: presence?.avatarUrl || contact?.avatarUrl || '',
+        themeFon: presence?.themeFon,
+        lat: presence?.lat ?? ANTARCTICA.lat,
+        lng: presence?.lng ?? ANTARCTICA.lng,
+        online: Boolean(presence?.online),
+        status: presence?.status ?? (presence?.online ? 'online' : 'offline'),
+        updatedAt: presence?.updatedAt ?? Date.now(),
+        hasLocation: presence?.hasLocation ?? false,
+        isContact: true,
+      });
+    }
+
     const selfGeo = geo ?? { ...ANTARCTICA };
     list.push({
       userId: identity.id,
@@ -445,9 +461,10 @@ export default function App() {
       updatedAt: Date.now(),
       isContact: false,
       isMe: true,
+      hasLocation: geo?.source === 'gps',
     });
     return list;
-  }, [presenceUsers, contacts, identity, geo, trustedIds]);
+  }, [mapContactIds, presenceUsers, contacts, identity, geo]);
 
   const revokeMediaUrls = useCallback(() => {
     for (const url of mediaUrlsRef.current) URL.revokeObjectURL(url);
@@ -1163,6 +1180,11 @@ export default function App() {
     };
   }, [revokeMediaUrls]);
 
+  /** Ограничить presence-опрос profiles списком контактов / активных чатов. */
+  useEffect(() => {
+    presenceRef.current?.setContactUserIds(mapContactIds);
+  }, [mapContactIds]);
+
   /** Presence + GPS (или Ghost Mode / Антарктида). */
   useEffect(() => {
     if (authGate !== 'ok') return;
@@ -1195,6 +1217,7 @@ export default function App() {
           lat: ANTARCTICA.lat,
           lng: ANTARCTICA.lng,
         });
+        presence.setContactUserIds(mapContactIds);
       } catch (e) {
         if (!cancelled) {
           console.warn('[presence] start failed', e);

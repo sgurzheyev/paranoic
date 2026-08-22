@@ -169,7 +169,8 @@ export function isHeartbeatOnline(
 async function writeProfileHeartbeat(
   userId: string,
   online: boolean,
-  status?: PresenceStatus
+  status?: PresenceStatus,
+  location?: { lat: number; lng: number } | null
 ): Promise<void> {
   if (!hasSupabaseConfig() || !userId) return;
   try {
@@ -180,8 +181,22 @@ async function writeProfileHeartbeat(
       last_seen: new Date().toISOString(),
     };
     if (status) patch.presence_status = status;
+    if (location) {
+      const latitude = Number(location.lat);
+      const longitude = Number(location.lng);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        patch.latitude = latitude;
+        patch.longitude = longitude;
+      }
+    }
     const { error } = await sb.from('profiles').update(patch).eq('id', userId);
     if (error) {
+      if (location && /latitude|longitude|column/i.test(error.message)) {
+        const { latitude: _lat, longitude: _lng, ...base } = patch;
+        const retry = await sb.from('profiles').update(base).eq('id', userId);
+        if (retry.error) console.warn('[presence] heartbeat', retry.error.message);
+        return;
+      }
       console.warn('[presence] heartbeat', error.message);
     }
   } catch (e) {
@@ -201,16 +216,18 @@ export function stopHeartbeat(): void {
 }
 
 /**
- * Прямой API-heartbeat: каждые 15с пишет is_online + last_seen в profiles.
- * Возвращает disposer (stopHeartbeat).
+ * Прямой API-heartbeat: каждые 15с пишет is_online + last_seen (+ координаты) в profiles.
  */
-export function startHeartbeat(userId: string): () => void {
+export function startHeartbeat(
+  userId: string,
+  getLocation?: () => { lat: number; lng: number } | null
+): () => void {
   stopHeartbeat();
   if (!userId) return stopHeartbeat;
   heartbeatUserId = userId;
   const tick = () => {
     if (heartbeatUserId !== userId) return;
-    void writeProfileHeartbeat(userId, true);
+    void writeProfileHeartbeat(userId, true, undefined, getLocation?.() ?? null);
   };
   tick();
   heartbeatTimer = window.setInterval(tick, PRESENCE_HEARTBEAT_MS);
@@ -228,57 +245,87 @@ export async function pingProfilePresence(
   await writeProfileHeartbeat(userId, online, status);
 }
 
-/** Профили с is_online = true и last_seen не старше 45 секунд. */
-export async function getOnlineUsers(): Promise<PresenceUser[]> {
-  if (!hasSupabaseConfig()) return [];
+type ProfileGeoRow = {
+  latitude?: number | null;
+  longitude?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+};
+
+function coordsFromProfileRow(row: ProfileGeoRow): { lat: number; lng: number } | null {
+  const latRaw = row.latitude ?? row.lat;
+  const lngRaw = row.longitude ?? row.lng;
+  if (latRaw == null || lngRaw == null) return null;
+  const lat = Number(latRaw);
+  const lng = Number(lngRaw);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+const PROFILE_PRESENCE_BASE =
+  'id,name,color,avatar_url,theme_fon,is_online,last_seen,presence_status';
+const PROFILE_PRESENCE_GEO = `${PROFILE_PRESENCE_BASE},latitude,longitude`;
+
+/** Presence + координаты только для переданных user id (контакты / активные чаты). */
+export async function getContactsPresence(userIds: string[]): Promise<PresenceUser[]> {
+  const unique = [...new Set(userIds.filter(Boolean))];
+  if (!hasSupabaseConfig() || unique.length === 0) return [];
   try {
     await ensureAuthSession();
     const sb = getSupabase();
-    const cutoff = new Date(Date.now() - PRESENCE_STALE_MS).toISOString();
-    const { data, error } = await sb
-      .from('profiles')
-      .select('id,name,color,avatar_url,theme_fon,is_online,last_seen,presence_status')
-      .eq('is_online', true)
-      .gte('last_seen', cutoff);
+    let data: unknown[] | null = null;
+    let error: { message: string } | null = null;
+    ({ data, error } = await sb.from('profiles').select(PROFILE_PRESENCE_GEO).in('id', unique));
+    if (error && /latitude|longitude|column/i.test(error.message)) {
+      ({ data, error } = await sb.from('profiles').select(PROFILE_PRESENCE_BASE).in('id', unique));
+    }
     if (error) {
-      console.warn('[presence] getOnlineUsers', error.message);
+      console.warn('[presence] getContactsPresence', error.message);
       return [];
     }
-    const rows = (data ?? []) as Array<{
-      id?: string;
-      name?: string | null;
-      color?: string | null;
-      avatar_url?: string | null;
-      theme_fon?: string | null;
-      is_online?: boolean | null;
-      last_seen?: string | null;
-      presence_status?: string | null;
-    }>;
+    const rows = (data ?? []) as Array<
+      ProfileGeoRow & {
+        id?: string;
+        name?: string | null;
+        color?: string | null;
+        avatar_url?: string | null;
+        theme_fon?: string | null;
+        is_online?: boolean | null;
+        last_seen?: string | null;
+        presence_status?: string | null;
+      }
+    >;
     const out: PresenceUser[] = [];
     for (const row of rows) {
       const userId = String(row.id ?? '').trim();
       if (!userId) continue;
-      if (!isHeartbeatOnline(row.is_online, row.last_seen)) continue;
+      const online = isHeartbeatOnline(row.is_online, row.last_seen);
       const status = normalizeStatus(row.presence_status);
+      const coords = coordsFromProfileRow(row);
       out.push({
         userId,
         name: row.name?.trim() || userId.slice(0, 8),
         color: row.color?.trim() || '#60a5fa',
         avatarUrl: row.avatar_url || undefined,
         themeFon: row.theme_fon || undefined,
-        lat: ANTARCTICA.lat,
-        lng: ANTARCTICA.lng,
-        online: true,
-        status: status === 'offline' ? 'online' : status,
+        lat: coords?.lat ?? ANTARCTICA.lat,
+        lng: coords?.lng ?? ANTARCTICA.lng,
+        online,
+        status: online ? (status === 'offline' ? 'online' : status) : 'offline',
         updatedAt: row.last_seen ? Date.parse(row.last_seen) || Date.now() : Date.now(),
-        hasLocation: false,
+        hasLocation: coords != null,
       });
     }
     return out;
   } catch (e) {
-    console.warn('[presence] getOnlineUsers failed', e);
+    console.warn('[presence] getContactsPresence failed', e);
     return [];
   }
+}
+
+/** @deprecated Используйте getContactsPresence с id контактов. */
+export async function getOnlineUsers(): Promise<PresenceUser[]> {
+  return getContactsPresence([]);
 }
 
 /** Быстрый fetch статуса получателя перед звонком. */
@@ -343,18 +390,37 @@ type PresenceHandlers = {
 /**
  * Presence через API heartbeat (без Realtime channel.track).
  * Свой профиль: setInterval 15с → profiles.is_online / last_seen.
- * Контакты: периодический getOnlineUsers().
+ * Контакты: периодический getContactsPresence(contactUserIds).
  */
 export class WorldPresence {
   private handlers: PresenceHandlers;
   private me: PresenceUser | null = null;
   private lastOnline: PresenceUser[] = [];
+  private contactUserIds: string[] = [];
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private visibilityHandler: (() => void) | null = null;
   private inCall = false;
 
   constructor(handlers: PresenceHandlers = {}) {
     this.handlers = handlers;
+  }
+
+  /** Ограничить опрос profiles списком контактов / активных чатов. */
+  setContactUserIds(userIds: string[]): void {
+    const next = [...new Set(userIds.filter(Boolean))];
+    if (
+      next.length === this.contactUserIds.length &&
+      next.every((id, i) => id === this.contactUserIds[i])
+    ) {
+      return;
+    }
+    this.contactUserIds = next;
+    void this.syncOnlineUsers();
+  }
+
+  private currentLocation(): { lat: number; lng: number } | null {
+    if (!this.me?.hasLocation) return null;
+    return { lat: this.me.lat, lng: this.me.lng };
   }
 
   async start(me: Omit<PresenceUser, 'online' | 'updatedAt' | 'status'>): Promise<void> {
@@ -391,8 +457,8 @@ export class WorldPresence {
 
     this.bindVisibility();
     if (document.visibilityState !== 'hidden') {
-      void writeProfileHeartbeat(userId, true, 'online');
-      startHeartbeat(userId);
+      void writeProfileHeartbeat(userId, true, 'online', this.currentLocation());
+      startHeartbeat(userId, () => this.currentLocation());
     } else {
       void writeProfileHeartbeat(userId, false, 'offline');
     }
@@ -411,14 +477,14 @@ export class WorldPresence {
       }
       void pingProfilePresence(userId, 'in_call');
       if (document.visibilityState === 'visible') {
-        startHeartbeat(userId);
+        startHeartbeat(userId, () => this.currentLocation());
       }
     } else if (document.visibilityState === 'visible') {
       if (this.me) {
         this.me = { ...this.me, online: true, status: 'online', updatedAt: Date.now() };
       }
       void pingProfilePresence(userId, 'online');
-      startHeartbeat(userId);
+      startHeartbeat(userId, () => this.currentLocation());
     } else {
       void this.markHidden();
     }
@@ -460,8 +526,13 @@ export class WorldPresence {
       };
     }
     if (userId) {
-      await writeProfileHeartbeat(userId, true, this.inCall ? 'in_call' : 'online');
-      startHeartbeat(userId);
+      await writeProfileHeartbeat(
+        userId,
+        true,
+        this.inCall ? 'in_call' : 'online',
+        this.currentLocation()
+      );
+      startHeartbeat(userId, () => this.currentLocation());
     }
     await this.syncOnlineUsers();
   }
@@ -481,7 +552,7 @@ export class WorldPresence {
   }
 
   private async syncOnlineUsers(): Promise<void> {
-    this.lastOnline = await getOnlineUsers();
+    this.lastOnline = await getContactsPresence(this.contactUserIds);
     this.emitSync();
   }
 
@@ -491,14 +562,24 @@ export class WorldPresence {
 
   async updateLocation(lat: number, lng: number): Promise<void> {
     if (!this.me) return;
-    if (this.me.lat === lat && this.me.lng === lng) return;
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    if (this.me.lat === latitude && this.me.lng === longitude) return;
     this.me = {
       ...this.me,
-      lat,
-      lng,
+      lat: latitude,
+      lng: longitude,
       updatedAt: Date.now(),
       hasLocation: true,
     };
+    const userId = this.me.userId;
+    if (userId && document.visibilityState === 'visible') {
+      void writeProfileHeartbeat(userId, true, this.inCall ? 'in_call' : 'online', {
+        lat: latitude,
+        lng: longitude,
+      });
+    }
     this.emitSync();
   }
 
