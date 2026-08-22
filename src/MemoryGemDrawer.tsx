@@ -545,7 +545,7 @@ export default function MemoryGemDrawer({
               )}
               {gem.type === 'text' && (
                 <div className="memory-gem-drawer__text-card">
-                  <Type size={22} />
+                  <Type size={18} />
                   <p>{gem.content || 'Пустая текстовая капсула'}</p>
                 </div>
               )}

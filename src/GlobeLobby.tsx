@@ -1077,15 +1077,15 @@ export default function GlobeLobby({
             if (e.propertyName === 'opacity' && mapBootDone) setSplashGone(true);
           }}
         >
-          <ParanoicLogo size={72} compact className="map-boot-splash__logo" />
+          <ParanoicLogo size={52} compact className="map-boot-splash__logo" />
           <span className="map-boot-splash__spinner" aria-hidden />
         </div>
       )}
 
       {tokenMissing && (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-6 text-center backdrop-blur-md">
-          <div className="max-w-md rounded-3xl border border-white/10 bg-black/40 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
-            <h2 className="m-0 text-xl font-extrabold text-white">Нужен Mapbox токен</h2>
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-4 text-center backdrop-blur-md">
+          <div className="max-w-sm rounded-2xl border border-white/10 bg-black/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
+            <h2 className="m-0 text-base font-bold text-white">Нужен Mapbox токен</h2>
             <p className="mt-3 text-sm text-slate-400">
               Добавьте <code className="lux-text-emerald">VITE_MAPBOX_TOKEN</code> в{' '}
               <code className="lux-text-emerald">.env</code> и перезапустите dev-сервер.
@@ -1093,7 +1093,7 @@ export default function GlobeLobby({
             <button
               type="button"
               onClick={onBack}
-              className="lux-glass-chip mt-5 px-4 py-2 text-sm font-bold"
+              className="lux-glass-chip mt-3 px-3 py-1.5 text-xs font-semibold"
             >
               <ArrowLeft size={16} /> Назад
             </button>
@@ -1102,12 +1102,12 @@ export default function GlobeLobby({
       )}
 
       <div className="family-map-ui-layer pointer-events-none absolute inset-0 z-10 flex flex-col">
-        <header className="map-top-bar px-4 sm:px-6">
+        <header className="map-top-bar px-2 sm:px-3">
           <div className="map-top-bar__left">
             <button
               type="button"
               onClick={onBack}
-              className="lux-glass-chip map-ui-hit px-4 py-2 text-sm font-bold"
+              className="lux-glass-chip map-ui-hit px-3 py-1.5 text-xs font-semibold"
             >
               <ArrowLeft size={16} /> Назад
             </button>
@@ -1183,7 +1183,7 @@ export default function GlobeLobby({
                 <ShieldCheck size={14} /> Admin Panel
               </button>
             )}
-            <div className="lux-glass-chip px-4 py-2 text-sm font-bold text-slate-300">
+            <div className="lux-glass-chip px-3 py-1.5 text-xs font-semibold text-slate-300">
               Family Mode
             </div>
           </div>
@@ -1196,8 +1196,8 @@ export default function GlobeLobby({
           </div>
         )}
 
-        <div className="pointer-events-none px-4 text-center sm:px-6">
-          <p className="mx-auto max-w-md text-sm text-slate-300/90 sm:text-base">
+        <div className="pointer-events-none px-2 text-center sm:px-3">
+          <p className="mx-auto max-w-md text-xs text-slate-300/90">
             {isTargetingMode
               ? 'Двигайте карту — прицел в центре покажет место капсулы'
               : movingGem
@@ -1256,16 +1256,16 @@ export default function GlobeLobby({
           ) : (
             <>
           {contacts.length > 0 && showContacts && (
-            <div className="map-ui-panel overflow-x-auto rounded-2xl border border-white/15 bg-white/[0.07] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-[18px]">
+            <div className="map-ui-panel overflow-x-auto rounded-xl border border-white/10 bg-white/[0.06] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] backdrop-blur-[18px]">
               <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
                 Близкие
               </p>
-              <div className="flex gap-3">
+              <div className="flex gap-2">
                 {contacts.map((c) => (
                   <button
                     key={c.userId}
                     type="button"
-                    className={`flex w-16 shrink-0 flex-col items-center gap-1.5 rounded-xl p-1 transition ${
+                    className={`flex w-14 shrink-0 flex-col items-center gap-1 rounded-lg p-1 transition ${
                       focusedContactId === c.userId
                         ? 'bg-white/15 ring-1 ring-white/30'
                         : 'hover:bg-white/10'
@@ -1277,7 +1277,7 @@ export default function GlobeLobby({
                     aria-label={`Показать ${c.name} на карте`}
                   >
                     <span
-                      className="relative h-12 w-12 overflow-hidden rounded-full border-2 border-white/50 shadow-md"
+                      className="relative h-9 w-9 overflow-hidden rounded-full border border-white/40 shadow-md"
                       style={{ background: c.avatarUrl ? '#1a1d28' : c.color }}
                     >
                       {c.avatarUrl ? (
@@ -1486,11 +1486,11 @@ export default function GlobeLobby({
 
       {selected && (
         <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/40 p-4 backdrop-blur-[8px] sm:items-center">
-          <div className="w-full max-w-md animate-[slide-up_0.28s_ease] rounded-3xl border border-white/20 bg-white/[0.08] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-[24px]">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
+          <div className="w-full max-w-sm animate-[slide-up_0.28s_ease] rounded-2xl border border-white/10 bg-white/[0.06] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_18px_44px_rgba(0,0,0,0.45)] backdrop-blur-[24px]">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
                 <div
-                  className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-full text-lg font-extrabold text-white"
+                  className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full text-sm font-bold text-white"
                   style={{
                     background: selected.avatarUrl
                       ? '#1a1d28'
@@ -1514,44 +1514,44 @@ export default function GlobeLobby({
                   <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#05070b] lux-online-dot" />
                 </div>
                 <div>
-                  <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-slate-400">
+                  <p className="m-0 text-[0.6rem] font-bold uppercase tracking-[0.2em] text-slate-400">
                     {selected.isContact ? 'Контакт' : 'В сети'}
                   </p>
-                  <h2 className="mt-1 m-0 text-2xl font-extrabold text-white">
+                  <h2 className="mt-0.5 m-0 text-base font-bold text-white">
                     {selected.isContact ? selected.name : 'Незнакомец'}
                   </h2>
-                  <p className="mt-1 text-sm text-slate-400">
+                  <p className="mt-0.5 text-xs text-slate-400">
                     {selected.lat.toFixed(1)}°, {selected.lng.toFixed(1)}°
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                className="rounded-full p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
                 aria-label="Закрыть"
                 onClick={() => setSelected(null)}
               >
-                <X size={20} />
+                <X size={16} />
               </button>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
               <button
                 type="button"
                 onClick={() => onChatUser(selected)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition hover:bg-white/15"
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] transition hover:bg-white/15"
               >
-                <MessageCircle size={20} /> Написать
+                <MessageCircle size={16} /> Написать
               </button>
               <button
                 type="button"
                 onClick={() => onCallUser(selected)}
                 title={callMediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
                 aria-disabled={callMediaBlocked}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 py-4 text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(255,255,255,0.06)] transition hover:bg-white/15${
+                className={`flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_0_20px_rgba(255,255,255,0.05)] transition hover:bg-white/15${
                   callMediaBlocked ? ' is-media-blocked' : ''
                 }`}
               >
-                <Phone size={20} /> Позвонить
+                <Phone size={16} /> Позвонить
               </button>
             </div>
           </div>

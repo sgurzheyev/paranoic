@@ -237,7 +237,7 @@ export default function ProfileModal({
         <div className="profile-modal-head">
           <h2 id="profile-modal-title">Профиль</h2>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
-            <X size={20} />
+            <X size={16} />
           </button>
         </div>
 

@@ -349,7 +349,7 @@ export default function ChatRecordButton({
         onPointerDown={onPointerDown}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {mode === 'video' ? <Camera size={22} /> : <Mic size={22} />}
+        {mode === 'video' ? <Camera size={18} /> : <Mic size={18} />}
       </button>
       {recording && (
         <MediaNoteOverlay

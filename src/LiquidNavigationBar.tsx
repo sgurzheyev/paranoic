@@ -65,7 +65,7 @@ export default function LiquidNavigationBar({
               aria-label={tab.label}
               onClick={handlers[tab.id]}
             >
-              <Icon size={22} strokeWidth={isActive ? 2.4 : 2} />
+              <Icon size={18} />
               <span className="liquid-nav-label">{tab.label}</span>
             </button>
           );

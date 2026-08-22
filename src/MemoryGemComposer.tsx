@@ -303,7 +303,7 @@ export default function MemoryGemComposer({
         >
           <div className="memory-gem-paywall__card">
             <span className="memory-gem-paywall__icon" aria-hidden>
-              <Lock size={28} />
+              <Lock size={20} />
             </span>
             <h3 className="memory-gem-paywall__title">Premium</h3>
             <p className="memory-gem-paywall__text">

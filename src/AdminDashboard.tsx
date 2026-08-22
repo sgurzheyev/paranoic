@@ -97,7 +97,7 @@ export default function AdminDashboard({ currentUserId, onClose }: AdminDashboar
       >
         <div className="admin-dash-head">
           <div className="admin-dash-title-row">
-            <Shield size={20} />
+            <Shield size={16} />
             <h2 id="admin-dash-title">Admin Panel</h2>
           </div>
           <div className="admin-dash-head-actions">
@@ -111,7 +111,7 @@ export default function AdminDashboard({ currentUserId, onClose }: AdminDashboar
               <RefreshCw size={18} className={loading ? 'spin' : undefined} />
             </button>
             <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
-              <X size={20} />
+              <X size={16} />
             </button>
           </div>
         </div>

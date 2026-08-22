@@ -10,6 +10,7 @@ import {
   SwitchCamera,
   Video,
   VideoOff,
+  X,
 } from 'lucide-react';
 import type { CallFailKind, CallState, NetworkQuality } from './p2p';
 
@@ -145,30 +146,31 @@ export default function CallOverlay({
 
   if (callState === 'idle' && !failure) return null;
 
+  // Неудачный дозвон — компактная плашка поверх интерфейса, а не блокирующий экран.
   if (failure) {
     return (
-      <div
-        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
-        role="dialog"
-        aria-modal="true"
-        aria-label={failure === 'declined' ? 'Вызов отклонён' : 'Не удалось связаться'}
-      >
-        <div className="mx-auto w-full max-w-sm rounded-3xl border border-white/10 bg-neutral-900/90 p-6 text-center shadow-2xl">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-rose-500/30 bg-rose-500/20 text-rose-400">
-            <PhoneOff size={28} aria-hidden />
-          </div>
-          <h2 className="m-0 text-lg font-bold text-white">
-            {failure === 'declined' ? 'Собеседник отклонил вызов' : 'Не удалось связаться'}
-          </h2>
-          <p className="mt-2 mb-6 text-sm text-neutral-400">
+      <div className="call-failure-note" role="alert">
+        <span className="call-failure-note__icon" aria-hidden>
+          <PhoneOff size={18} />
+        </span>
+        <div className="call-failure-note__copy">
+          <strong>
+            {failure === 'declined' ? 'Вызов отклонён' : 'Абонент не ответил'}
+          </strong>
+          <span>
             {failure === 'declined'
-              ? peerLabel
-              : 'Хост офлайн или ссылка неверна. Проверьте никнейм / ID.'}
-          </p>
-          <button type="button" className="decline-call-btn large w-full" onClick={onHangUp}>
-            Закрыть
-          </button>
+              ? peerLabel || 'Собеседник сбросил звонок'
+              : 'Похоже, он офлайн. Попробуйте позже.'}
+          </span>
         </div>
+        <button
+          type="button"
+          className="call-failure-note__close"
+          onClick={onHangUp}
+          aria-label="Закрыть"
+        >
+          <X size={16} />
+        </button>
       </div>
     );
   }
@@ -196,7 +198,7 @@ export default function CallOverlay({
       {isRinging && expanded ? (
         <div className="incoming-media-card call-overlay-ring">
           <div className="avatar lg" style={{ background: 'var(--call)' }}>
-            <PhoneIncoming size={28} />
+            <PhoneIncoming size={20} />
           </div>
           <h2 className="incoming-media-title">Входящий звонок</h2>
           <p className="incoming-media-sub">{peerLabel}</p>
@@ -243,7 +245,7 @@ export default function CallOverlay({
                       onExpandedChange(false);
                     }}
                   >
-                    <ChevronDown size={22} />
+                    <ChevronDown size={18} />
                   </button>
                   <p className="call-room-status">{statusText}</p>
                 </div>
@@ -258,7 +260,7 @@ export default function CallOverlay({
                     aria-pressed={micMuted}
                     aria-label={micMuted ? 'Включить микрофон' : 'Выключить микрофон'}
                   >
-                    {micMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                    {micMuted ? <MicOff size={18} /> : <Mic size={18} />}
                   </button>
                   <button
                     type="button"
@@ -267,7 +269,7 @@ export default function CallOverlay({
                     aria-pressed={cameraOff}
                     aria-label={cameraOff ? 'Включить камеру' : 'Выключить камеру'}
                   >
-                    {cameraOff ? <VideoOff size={22} /> : <Video size={22} />}
+                    {cameraOff ? <VideoOff size={18} /> : <Video size={18} />}
                   </button>
                   <button
                     type="button"
@@ -276,7 +278,7 @@ export default function CallOverlay({
                     disabled={cameraOff || screenSharing}
                     aria-label="Переключить камеру"
                   >
-                    <SwitchCamera size={22} />
+                    <SwitchCamera size={18} />
                   </button>
                   <button
                     type="button"
@@ -284,7 +286,7 @@ export default function CallOverlay({
                     onClick={onAttachFile}
                     aria-label="Отправить файл"
                   >
-                    <Paperclip size={22} />
+                    <Paperclip size={18} />
                   </button>
                   <button
                     type="button"
@@ -292,7 +294,7 @@ export default function CallOverlay({
                     onClick={onHangUp}
                     aria-label="Завершить звонок"
                   >
-                    <PhoneOff size={22} />
+                    <PhoneOff size={18} />
                   </button>
                 </div>
               </div>

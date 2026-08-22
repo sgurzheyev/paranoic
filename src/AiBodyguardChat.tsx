@@ -175,7 +175,7 @@ export default function AiBodyguardChat({
             onClick={onClose}
             aria-label="Закрыть"
           >
-            <X size={20} />
+            <X size={16} />
           </button>
         </div>
 

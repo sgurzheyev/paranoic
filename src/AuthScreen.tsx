@@ -60,7 +60,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
       <div className="auth-screen__card">
         <header className="auth-screen__header">
-          <ParanoicLogo size={52} compact withWordmark className="auth-screen__logo" />
+          <ParanoicLogo size={40} compact withWordmark className="auth-screen__logo" />
           <h1 className="auth-screen__title">
             {mode === 'signup' ? 'Создать аккаунт' : 'Войти'}
           </h1>

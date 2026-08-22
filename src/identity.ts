@@ -1,7 +1,6 @@
 /** Постоянная личность пользователя + магическая ссылка. */
 
 import { Capacitor } from '@capacitor/core';
-import { getRoomIdFromUrl } from './room';
 
 export type UserIdentity = {
   id: string;
@@ -137,40 +136,6 @@ function normalizeIdentity(raw: Partial<UserIdentity> & { id: string; name: stri
     avatarUrl: typeof raw.avatarUrl === 'string' ? raw.avatarUrl : '',
     themeFon: typeof raw.themeFon === 'string' && raw.themeFon ? raw.themeFon : DEFAULT_THEME_FON,
   };
-}
-
-/** PWA standalone (установленное приложение). */
-export function isPwaStandalone(): boolean {
-  try {
-    return (
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (navigator as Navigator & { standalone?: boolean }).standalone === true
-    );
-  } catch {
-    return false;
-  }
-}
-
-/** Профиль уже настроен — не показывать стартовый lobby. */
-export function hasEstablishedProfile(identity: UserIdentity): boolean {
-  if (identity.username?.trim()) return true;
-  if (identity.avatarUrl?.trim()) return true;
-  if (identity.name.trim() && identity.name.trim() !== 'Я') return true;
-  return false;
-}
-
-/** Пропустить ModeSelector: PWA, сохранённая сессия входа или профиль (без magic/room в URL). */
-export function shouldSkipModeSelector(): boolean {
-  if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return false;
-  try {
-    const start = new URLSearchParams(window.location.search).get('start');
-    if (start === 'paranoic' || start === 'family') return false;
-  } catch {
-    /* */
-  }
-  if (hasSavedLoginSession()) return true;
-  if (isPwaStandalone()) return true;
-  return hasEstablishedProfile(getOrCreateIdentity());
 }
 
 /** Жёстко сохранить identity + сессию входа (userId / username / peerId). */

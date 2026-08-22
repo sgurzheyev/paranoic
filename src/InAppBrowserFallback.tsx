@@ -41,7 +41,7 @@ export default function InAppBrowserFallback() {
     <div className="inapp-fallback" role="alertdialog" aria-labelledby="inapp-fallback-title" aria-describedby="inapp-fallback-sub">
       <div className="inapp-fallback__bg" aria-hidden />
       <div className="inapp-fallback__card">
-        <ParanoicLogo size={56} compact withWordmark className="mb-4" />
+        <ParanoicLogo size={44} compact withWordmark className="mb-3" />
         <h1 id="inapp-fallback-title" className="inapp-fallback__title">
           Встроенный браузер ограничивает связь.
         </h1>

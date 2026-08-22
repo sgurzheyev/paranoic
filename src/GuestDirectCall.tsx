@@ -131,7 +131,7 @@ export default function GuestDirectCall({
           aria-label={failed ? 'Назад' : label}
         >
           <span className="guest-direct-call-pulse" aria-hidden />
-          {failed ? <PhoneOff size={32} /> : <Phone size={32} />}
+          {failed ? <PhoneOff size={24} /> : <Phone size={24} />}
           <span>{label}</span>
         </button>
 

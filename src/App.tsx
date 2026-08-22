@@ -26,7 +26,6 @@ import {
   UserCheck,
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
-import ModeSelector, { type AppModeChoice } from './ModeSelector';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
@@ -48,6 +47,7 @@ import {
   blockUser,
   isBlocked,
   isTrusted,
+  loadBlockedIds,
   loadTrustedIds,
 } from './trust';
 import {
@@ -143,11 +143,9 @@ import {
   getMagicTargetFromUrl,
   getOrCreateIdentity,
   getSavedLoginSession,
-  hasSavedLoginSession,
   personalInboxRoom,
   resolveMagicRoute,
   restoreIdentityFromProfile,
-  shouldSkipModeSelector,
   updateIdentity,
   looksLikeUsername,
   type UserIdentity,
@@ -173,7 +171,8 @@ import {
 } from './callSessionCleanup';
 import { ANTARCTICA, GEO_BLOCKED_MESSAGE, watchGeo, WorldPresence, type GeoPoint, type PresenceUser } from './presence';
 
-type AppMode = 'select' | AppModeChoice;
+/** Мессенджер и карта семьи — две поверхности одного интерфейса, без экрана выбора. */
+type AppMode = 'paranoic' | 'family';
 type Screen = 'home' | 'chat' | 'call';
 
 type ChatMessage = StoredMessage & {
@@ -209,17 +208,15 @@ export default function App() {
     hasSupabaseConfig() ? 'checking' : 'ok'
   );
   const [appMode, setAppMode] = useState<AppMode>(() => {
-    // Пока нет JWT — не стартуем Paranoic/Family (presence / Realtime).
-    if (hasSupabaseConfig()) return 'select';
     if (getMagicTargetFromUrl() || getRoomIdFromUrl()) return 'paranoic';
     try {
-      const start = new URLSearchParams(window.location.search).get('start');
-      if (start === 'paranoic' || start === 'family') return start;
+      if (new URLSearchParams(window.location.search).get('start') === 'family') {
+        return 'family';
+      }
     } catch {
       /* */
     }
-    if (shouldSkipModeSelector()) return 'paranoic';
-    return 'select';
+    return 'paranoic';
   });
   const [familyEntered, setFamilyEntered] = useState(
     () =>
@@ -295,14 +292,12 @@ export default function App() {
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
-  const [mainTab, setMainTab] = useState<LiquidNavTab>(() => {
-    if (getMagicTargetFromUrl()) return 'chats';
-    if (hasSavedLoginSession() || shouldSkipModeSelector()) {
-      if (!getMagicTargetFromUrl()) return 'contacts';
-    }
-    return 'chats';
-  });
+  const [mainTab, setMainTab] = useState<LiquidNavTab>(() =>
+    getMagicTargetFromUrl() ? 'chats' : 'contacts'
+  );
   const [trustedIds, setTrustedIds] = useState<Set<string>>(() => loadTrustedIds());
+  /** Отклонённые / заблокированные id — скрываются с карты и из presence. */
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(() => loadBlockedIds());
   const [micMuted, setMicMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
 
@@ -310,8 +305,10 @@ export default function App() {
   const secretKeyRef = useRef<CryptoKey | null>(null);
   const identityRef = useRef(identity);
   const appModeRef = useRef(appMode);
-  /** На стартовом экране / логине не показываем и не накапливаем ошибки WebRTC. */
-  const suppressGlobalErrorsRef = useRef(appMode === 'select');
+  /** На экране логина не показываем и не накапливаем ошибки WebRTC. */
+  const suppressGlobalErrorsRef = useRef(authGate !== 'ok');
+  /** Идёт ли реальный вызов: без него обрыв ICE — фоновый, а не «не удалось связаться». */
+  const callAttemptRef = useRef(false);
   const peerIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -417,19 +414,24 @@ export default function App() {
   );
 
   /** Контакты + собеседники с активными чатами — только они на карте Family Mode. */
+  /**
+   * Видимость на карте = статус контакта: принят или есть активный чат — виден,
+   * заблокирован или удалён из книжки — исчезает и из presence-опроса.
+   */
   const mapContactIds = useMemo(() => {
     const ids = new Set<string>();
     for (const c of contacts) ids.add(c.id);
     for (const peerId of Object.keys(lastPreviews)) ids.add(peerId);
+    ids.delete(identity.id);
+    for (const id of blockedIds) ids.delete(id);
     return [...ids];
-  }, [contacts, lastPreviews]);
+  }, [contacts, lastPreviews, blockedIds, identity.id]);
 
   const mapPeople = useMemo((): MapPerson[] => {
     const presenceById = new Map(presenceUsers.map((u) => [u.userId, u]));
     const list: MapPerson[] = [];
 
     for (const id of mapContactIds) {
-      if (id === identity.id || isBlocked(id)) continue;
       const contact = contacts.find((c) => c.id === id);
       const presence = presenceById.get(id);
       list.push({
@@ -465,6 +467,16 @@ export default function App() {
     });
     return list;
   }, [mapContactIds, presenceUsers, contacts, identity, geo]);
+
+  /** Блокировка / разблокировка в другой вкладке — сразу отражается на карте. */
+  useEffect(() => {
+    const sync = () => {
+      setBlockedIds(loadBlockedIds());
+      setTrustedIds(loadTrustedIds());
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, []);
 
   const revokeMediaUrls = useCallback(() => {
     for (const url of mediaUrlsRef.current) URL.revokeObjectURL(url);
@@ -894,12 +906,12 @@ export default function App() {
     mirrorSignalingStatus('');
   }, [mirrorSignalingStatus]);
 
-  /** ModeSelector / логin: сброс до отрисовки + блок повторных P2P toast. */
+  /** Экран логина: сброс до отрисовки + блок повторных P2P toast. */
   useLayoutEffect(() => {
-    suppressGlobalErrorsRef.current = appMode === 'select';
-    if (appMode !== 'select') return;
+    suppressGlobalErrorsRef.current = authGate !== 'ok';
+    if (authGate === 'ok') return;
     clearLobbyErrors();
-  }, [appMode, clearLobbyErrors]);
+  }, [authGate, clearLobbyErrors]);
 
   useEffect(() => {
     if (appMode === 'family') setFamilyEntered(true);
@@ -980,7 +992,6 @@ export default function App() {
   const applyIncomingCallOffer = useCallback((offer: CallOfferEvent) => {
     if (isBannedRef.current) return;
     if (isBlocked(offer.from.id)) return;
-    setAppMode((m) => (m === 'select' ? 'paranoic' : m));
     setIncomingConnection(false);
     setPeerLabel(offer.from.name || callerDisplayName(offer.from));
     setPeerAvatarUrl(offer.from.avatarUrl || '');
@@ -1055,7 +1066,7 @@ export default function App() {
 
   /** Native FCM: permission, token → profiles.fcm_token, incoming-call payloads. */
   useEffect(() => {
-    if (appMode === 'select') return;
+    if (authGate !== 'ok') return;
     let disposed = false;
     let stop: (() => void) | undefined;
     void startNativePush({
@@ -1069,7 +1080,7 @@ export default function App() {
       disposed = true;
       stop?.();
     };
-  }, [appMode, applyIncomingCallOffer, identity.id]);
+  }, [authGate, applyIncomingCallOffer, identity.id]);
 
   /** Fallback: poll call_sessions если Realtime offer потерялся в фоне. */
   useEffect(() => {
@@ -1151,12 +1162,6 @@ export default function App() {
     setCallAlertToastOpen(false);
     setError('');
   }, [appMode, error]);
-
-  /** ModeSelector / логин: не тащить ошибки WebRTC и дозвона из прошлых сессий. */
-  useEffect(() => {
-    if (appMode !== 'select') return;
-    clearLobbyErrors();
-  }, [appMode, clearLobbyErrors]);
 
   /** Не спамить «контакт не найден», если P2P уже connected. */
   useEffect(() => {
@@ -1372,7 +1377,9 @@ export default function App() {
         onCallState: (state) => {
           setCallState(state);
           mirrorCallState(state);
-          if (state === 'calling' || state === 'in-call' || state === 'ringing') {
+          callAttemptRef.current =
+            state === 'calling' || state === 'in-call' || state === 'ringing';
+          if (callAttemptRef.current) {
             setCallFailKind(null);
           }
           if (state === 'calling' || state === 'in-call') {
@@ -1457,8 +1464,6 @@ export default function App() {
         onIncomingConnection: (info) => {
           setError('');
           setCallFailKind(null);
-          // Хост на стартовом экране — сразу в Paranoic, чтобы handshake был виден.
-          setAppMode((m) => (m === 'select' ? 'paranoic' : m));
           console.log('[P2P_DEBUG] onIncomingConnection — auto-accept P2P link', info);
           // Магическая ссылка: сразу устанавливаем DataChannel.
           // Медиазвонок по-прежнему требует Accept через CallInbox / call-invite.
@@ -1765,6 +1770,16 @@ export default function App() {
           const msg = err.message;
           const kind = classifyCallFailure(msg);
           if (kind) {
+            // Инбокс висит в фоне постоянно, и его ICE-обрывы к пользователю
+            // отношения не имеют — сообщаем только про живую попытку дозвона.
+            const calling =
+              callAttemptRef.current ||
+              pendingStartCallRef.current ||
+              Boolean(guestPeerIdRef.current);
+            if (!calling) {
+              console.log('[P2P_DEBUG] idle call failure ignored', msg);
+              return;
+            }
             setCallFailKind(kind);
             if (appModeRef.current === 'family') {
               setCallAlert(msg);
@@ -1836,7 +1851,7 @@ export default function App() {
 
         // Резолв ?u=username|id → реальный peer id.
         let urlRoute = resolveMagicRoute(me.id, me.username);
-        if ((appMode === 'family' || appMode === 'select') && !keepGuestRoom && !stickyGuest) {
+        if (appMode === 'family' && !keepGuestRoom && !stickyGuest) {
           // Фон: свой инбокс-хост, чтобы принимать join/звонки.
           urlRoute = { kind: 'self' };
         } else if (urlRoute.kind === 'guest' && urlHandle) {
@@ -2947,14 +2962,14 @@ export default function App() {
 
   /** Разрешение на уведомления по первому жесту в приложении. */
   useEffect(() => {
-    if (appMode === 'select') return;
+    if (authGate !== 'ok') return;
     const unlock = () => {
       void ensureNotifyPermission();
       window.removeEventListener('pointerdown', unlock);
     };
     window.addEventListener('pointerdown', unlock, { once: true });
     return () => window.removeEventListener('pointerdown', unlock);
-  }, [appMode]);
+  }, [authGate]);
 
   const retryFileTransfer = (id: string) => {
     const file = retrySendFilesRef.current.get(id);
@@ -3019,8 +3034,8 @@ export default function App() {
     isBannedRef.current = false;
     setProfileOpen(false);
     setAdminOpen(false);
-    setAppMode('select');
-    setMainTab('chats');
+    setAppMode('paranoic');
+    setMainTab('contacts');
     setScreen('home');
     setSessionEpoch((n) => n + 1);
   };
@@ -3048,7 +3063,6 @@ export default function App() {
       });
     }
 
-    setAppMode((mode) => (mode === 'select' ? 'paranoic' : mode));
     setMainTab('contacts');
     setScreen('home');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3066,9 +3080,9 @@ export default function App() {
   const showErrorToast = Boolean(error) && !classifyCallFailure(error);
   const guestCallScreen = Boolean(guestPeerId) && !connected;
   const overlayFailure = guestCallScreen ? null : callFailKind;
+  /** Плашка неудачного дозвона больше не «экран» — интерфейс под ней остаётся живым. */
   const callUiOpen =
-    callExpanded ||
-    Boolean(overlayFailure) ||
+    (callExpanded && !overlayFailure) ||
     (callState === 'ringing' && Boolean(incomingRing));
   /** Bottom nav: на главных вкладках; скрыт в открытом чате, звонке и guest direct. */
   const showBottomNav =
@@ -3104,9 +3118,7 @@ export default function App() {
     setScreen('home');
     setMessengerSidebarOpen(false);
     setCallExpanded(false);
-    if (appMode === 'family' || appMode === 'select') {
-      setAppMode('paranoic');
-    }
+    if (appMode === 'family') setAppMode('paranoic');
   };
 
   const handleTrustPeer = async () => {
@@ -3121,6 +3133,7 @@ export default function App() {
     });
     setContacts(next);
     setTrustedIds(loadTrustedIds());
+    setBlockedIds(loadBlockedIds());
   };
 
   const handleBlockPeer = async () => {
@@ -3128,6 +3141,7 @@ export default function App() {
     if (!id) return;
     blockUser(id);
     setTrustedIds(loadTrustedIds());
+    setBlockedIds(loadBlockedIds());
     setError(`«${peerLabel}» заблокирован. Сообщения и звонки от этого ID игнорируются.`);
     disconnect();
   };
@@ -3152,30 +3166,8 @@ export default function App() {
         visible={showCallBanner}
         callState={callState}
         startedAt={callStartedAt}
-        onOpen={() => {
-          if (appMode === 'select') setAppMode('paranoic');
-          setCallExpanded(true);
-        }}
+        onOpen={() => setCallExpanded(true)}
       />
-      {appMode === 'select' && (
-        <>
-          {incomingRing && (
-            <IncomingCallModal
-              caller={incomingRing.from}
-              mediaBlocked={callMediaBlocked}
-              onAccept={() => {
-                setAppMode('paranoic');
-                void acceptMediaCall();
-              }}
-              onReject={() => void declineMediaCall()}
-            />
-          )}
-          <ModeSelector
-            onSelect={(mode) => setAppMode(mode)}
-            onLobbyEnter={clearLobbyErrors}
-          />
-        </>
-      )}
       {familyEntered && (
       <div
         className={`family-app-shell${appMode === 'family' ? ' is-active' : ' is-dormant'}`}
@@ -3298,9 +3290,8 @@ export default function App() {
         )}
       </div>
       )}
-      {appMode !== 'select' && (
     <div
-      className={`app-shell themed pt-[max(8px,env(safe-area-inset-top))] px-3${screen === 'chat' ? ' messenger-shell' : ''}${
+      className={`app-shell themed pt-[max(6px,env(safe-area-inset-top))] px-2${screen === 'chat' ? ' messenger-shell' : ''}${
         showBottomNav ? ' has-liquid-nav' : ''
       }${appMode === 'family' ? ' is-dormant' : ''}`}
       style={shellStyle}
@@ -3319,17 +3310,9 @@ export default function App() {
       {adminOpen && (
         <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
-      <header className="app-header h-14 flex items-center py-2 px-3">
+      <header className="app-header flex items-center">
         <div className="brand">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="К выбору режима"
-            onClick={() => setAppMode('select')}
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <ParanoicLogo size={36} compact className="brand-logo-mark" />
+          <ParanoicLogo size={26} compact className="brand-logo-mark" />
           <div>
             <h1>Paranoic</h1>
           </div>
@@ -3420,7 +3403,7 @@ export default function App() {
                               void startCall();
                             }}
                           >
-                            <Phone size={28} />
+                            <Phone size={18} />
                             Позвонить
                           </button>
                           <button
@@ -3428,7 +3411,7 @@ export default function App() {
                             className="mega-btn chat"
                             onClick={() => setScreen('chat')}
                           >
-                            <MessageCircle size={28} />
+                            <MessageCircle size={18} />
                             Открыть чат
                           </button>
                         </div>
@@ -3571,7 +3554,7 @@ export default function App() {
                       style={{ marginTop: 16 }}
                       onClick={() => setAppMode('family')}
                     >
-                      <Globe2 size={22} />
+                      <Globe2 size={16} />
                       Открыть карту семьи
                     </button>
                     {isAdmin && (
@@ -3581,18 +3564,10 @@ export default function App() {
                         style={{ marginTop: 10 }}
                         onClick={() => setAdminOpen(true)}
                       >
-                        <ShieldCheck size={20} />
+                        <ShieldCheck size={16} />
                         Admin Panel
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="text-link"
-                      style={{ marginTop: 16 }}
-                      onClick={() => setAppMode('select')}
-                    >
-                      <ArrowLeft size={16} /> К выбору режима
-                    </button>
                   </div>
                 )}
 
@@ -3651,12 +3626,12 @@ export default function App() {
                         onClick={() => setProfileOpen(true)}
                         aria-label="Редактировать профиль"
                       >
-                        <Settings2 size={20} />
+                        <Settings2 size={16} />
                       </button>
                     </div>
 
                     <div className="room-card magic-card liquid-glass-card">
-                      <Link2 size={28} className="room-card-icon" />
+                      <Link2 size={20} className="room-card-icon" />
                       <p className="room-id-label">Ваша магическая ссылка</p>
                       <p className="mono-box magic-url">{magicLink}</p>
                       <button
@@ -3664,7 +3639,7 @@ export default function App() {
                         className="mega-btn primary compact"
                         onClick={() => void copyMagicLink()}
                       >
-                        {copied ? <Check size={28} /> : <Copy size={28} />}
+                        {copied ? <Check size={18} /> : <Copy size={18} />}
                         {copied ? 'Скопировано' : 'Скопировать ссылку'}
                       </button>
                       <p className="hint">
@@ -3783,7 +3758,7 @@ export default function App() {
                 aria-label="Контакты"
                 onClick={() => setMessengerSidebarOpen((v) => !v)}
               >
-                <PanelLeft size={20} />
+                <PanelLeft size={16} />
               </button>
               <button
                 type="button"
@@ -3823,7 +3798,7 @@ export default function App() {
                 disabled={!connected}
                 aria-disabled={!connected || callMediaBlocked}
               >
-                <Phone size={20} />
+                <Phone size={17} />
               </button>
               <button
                 type="button"
@@ -3832,7 +3807,7 @@ export default function App() {
                 aria-label="Прикрепить файл"
                 disabled={!peerId}
               >
-                <Paperclip size={20} />
+                <Paperclip size={17} />
               </button>
             </div>
 
@@ -4083,7 +4058,7 @@ export default function App() {
                 aria-label="Прикрепить файл"
                 disabled={!peerId}
               >
-                <Paperclip size={20} />
+                <Paperclip size={17} />
               </button>
               <input
                 value={inputText}
@@ -4108,7 +4083,7 @@ export default function App() {
                   disabled={!peerId || !secretKey}
                   aria-label="Отправить"
                 >
-                  <Send size={22} />
+                  <Send size={17} />
                 </button>
               ) : (
                 <ChatRecordButton
@@ -4144,9 +4119,8 @@ export default function App() {
         />
       )}
     </div>
-      )}
 
-      {!incomingRing && appMode !== 'select' && (
+      {!incomingRing && (
       <CallOverlay
         callState={callState === 'ringing' ? 'idle' : callState}
         peerLabel={peerLabel}

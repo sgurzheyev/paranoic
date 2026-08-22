@@ -57,7 +57,7 @@ export default function MediaNoteOverlay({
               <video ref={videoRef} autoPlay playsInline muted className="media-note-video" />
             ) : (
               <div className="media-note-voice-preview">
-                <Mic size={42} />
+                <Mic size={30} />
                 <p>Запись голоса…</p>
               </div>
             )}
