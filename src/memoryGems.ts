@@ -22,8 +22,12 @@ export type MemoryGemRow = {
   address: string | null;
   media_urls: string[] | null;
   metadata: Record<string, unknown> | null;
-  lat: number | null;
-  lng: number | null;
+  /** Колонки БД memory_gems */
+  latitude?: number | null;
+  longitude?: number | null;
+  /** Legacy / metadata fallback */
+  lat?: number | null;
+  lng?: number | null;
   created_at: string;
   user_id?: string | null;
   is_private?: boolean | null;
@@ -36,8 +40,12 @@ function mediaTypeFromUrl(url: string): MapGemType {
 }
 
 function extractCoords(row: MemoryGemRow): { lat: number; lng: number } | null {
-  if (row.lat != null && row.lng != null && Number.isFinite(row.lat) && Number.isFinite(row.lng)) {
-    return { lat: row.lat, lng: row.lng };
+  const latRaw = row.latitude ?? row.lat;
+  const lngRaw = row.longitude ?? row.lng;
+  if (latRaw != null && lngRaw != null) {
+    const lat = Number(latRaw);
+    const lng = Number(lngRaw);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   const meta = row.metadata;
   if (!meta || typeof meta !== 'object') return null;
@@ -58,8 +66,18 @@ export function mapMemoryGemRow(row: Record<string, unknown>): MapGem | null {
     address: (row.address as string | null) ?? null,
     media_urls: mediaUrls,
     metadata: (row.metadata as Record<string, unknown> | null) ?? null,
-    lat: row.lat != null ? Number(row.lat) : null,
-    lng: row.lng != null ? Number(row.lng) : null,
+    lat:
+      row.latitude != null
+        ? Number(row.latitude)
+        : row.lat != null
+          ? Number(row.lat)
+          : null,
+    lng:
+      row.longitude != null
+        ? Number(row.longitude)
+        : row.lng != null
+          ? Number(row.lng)
+          : null,
     created_at: String(row.created_at ?? new Date().toISOString()),
     user_id: (row.user_id as string | null) ?? null,
     is_private: (row.is_private as boolean | null) ?? false,
@@ -125,10 +143,15 @@ export async function updateMemoryGemLocation(
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   await ensureAuthSession();
   const uid = await getAuthUserId();
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error('Некорректные координаты');
+  }
   const sb = getSupabase();
   const { data, error } = await sb
     .from(MEMORY_GEMS_TABLE)
-    .update({ lat, lng })
+    .update({ latitude, longitude })
     .eq('id', gemId)
     .eq('user_id', uid)
     .select('*')
