@@ -3410,6 +3410,47 @@ textarea {
   background: #fff;
 }
 
+.auth-screen__btn--go {
+  margin-top: 6px;
+  padding: 16px 20px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(226, 232, 240, 0.98) 0%, rgba(203, 213, 225, 0.95) 100%);
+  color: #0f172a;
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.auth-screen__btn--go:hover:not(:disabled) {
+  background: linear-gradient(135deg, #fff 0%, #e2e8f0 100%);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+}
+
+.auth-screen__toggle {
+  margin: 2px 0 0;
+  padding: 8px 4px;
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-screen__toggle:hover:not(:disabled) {
+  color: #cbd5e1;
+}
+
+.auth-screen__toggle:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .auth-screen__btn--secondary {
   background: rgba(255, 255, 255, 0.06);
   color: #e2e8f0;

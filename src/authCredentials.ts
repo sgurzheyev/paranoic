@@ -10,6 +10,7 @@ import {
   getOrCreateIdentity,
   normalizeUsername,
   updateIdentity,
+  validateUsername,
   type UserIdentity,
 } from './identity';
 import {
@@ -29,6 +30,7 @@ export type AuthFailureReason =
   | 'user_not_found'
   | 'password_mismatch'
   | 'email_taken'
+  | 'username_taken'
   | 'db_error'
   | 'invalid_input'
   | 'email_not_confirmed'
@@ -122,15 +124,24 @@ function mapAuthError(
   return { reason: 'db_error', message: message || 'Ошибка авторизации' };
 }
 
-/** После email/OAuth: identity + upsert profiles (имя из full_name или email). */
-export async function finishAuthenticatedSession(session: Session): Promise<UserIdentity> {
+function isUsernameConflictError(message: string): boolean {
+  return /username|unique|duplicate|already exists/i.test(message);
+}
+
+/** После email/OAuth: identity + upsert profiles. */
+export async function finishAuthenticatedSession(
+  session: Session,
+  opts?: { preferredUsername?: string }
+): Promise<UserIdentity> {
   markAuthBootstrapReady(session);
   const user = session.user;
   const userId = user.id;
   const email = user.email || '';
-  const handle = email
-    ? await resolveUsernameFromEmail(email, userId)
-    : usernameFromEmail(`user${userId.slice(0, 8)}@local`);
+  const handle = opts?.preferredUsername?.trim()
+    ? normalizeUsername(opts.preferredUsername)
+    : email
+      ? await resolveUsernameFromEmail(email, userId)
+      : usernameFromEmail(`user${userId.slice(0, 8)}@local`);
 
   const existing = await fetchRemoteProfile(userId);
   const base = getOrCreateIdentity();
@@ -235,12 +246,12 @@ export async function signInWithEmailPassword(
 }
 
 /**
- * Регистрация: signUp({ email, password }).
- * При Confirm Email = ON сессии нет → pendingConfirmation.
+ * Регистрация: signUp({ email, password }) + profiles.username = nickname.
  */
 export async function signUpWithEmailPassword(
   emailRaw: string,
-  password: string
+  password: string,
+  nicknameRaw: string
 ): Promise<AuthResult> {
   if (!hasSupabaseConfig()) {
     return {
@@ -248,6 +259,15 @@ export async function signUpWithEmailPassword(
       reason: 'db_error',
       message: 'Supabase не настроен — регистрация недоступна',
     };
+  }
+
+  const nickCheck = validateUsername(nicknameRaw);
+  if (!nickCheck.ok) {
+    return { ok: false, reason: 'invalid_input', message: nickCheck.error };
+  }
+  const nickname = nickCheck.value;
+  if (!nickname) {
+    return { ok: false, reason: 'invalid_input', message: 'Введите уникальный никнейм' };
   }
 
   const email = normalizeAuthEmail(emailRaw);
@@ -260,14 +280,22 @@ export async function signUpWithEmailPassword(
   }
 
   try {
+    const free = await isUsernameAvailable(nickname, '');
+    if (!free) {
+      return {
+        ok: false,
+        reason: 'username_taken',
+        message: 'Этот никнейм уже занят, придумайте другой',
+      };
+    }
+
     pauseAuthBootstrap(false);
     const sb = getSupabase();
-    const baseUsername = usernameFromEmail(email);
     const { data, error } = await sb.auth.signUp({
       email,
       password: pwd,
       options: {
-        data: { username: baseUsername },
+        data: { username: nickname },
       },
     });
     if (error) {
@@ -280,7 +308,37 @@ export async function signUpWithEmailPassword(
       return { ok: true, pendingConfirmation: true, email };
     }
 
-    const identity = await finishAuthenticatedSession(data.session);
+    const userId = data.session.user.id;
+    const { error: profileErr } = await sb.from(PROFILES_TABLE).upsert(
+      {
+        id: userId,
+        username: nickname,
+        name: nickname,
+        is_online: true,
+        last_seen: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    if (profileErr) {
+      if (isUsernameConflictError(profileErr.message)) {
+        return {
+          ok: false,
+          reason: 'username_taken',
+          message: 'Этот никнейм уже занят, придумайте другой',
+          detail: profileErr.message,
+        };
+      }
+      return {
+        ok: false,
+        reason: 'db_error',
+        message: profileErr.message || 'Не удалось создать профиль',
+        detail: profileErr.message,
+      };
+    }
+
+    const identity = await finishAuthenticatedSession(data.session, {
+      preferredUsername: nickname,
+    });
     console.log('[paranoic auth] signUp ok', {
       email,
       username: identity.username,
@@ -350,9 +408,10 @@ export async function signInWithNicknamePassword(
 /** @deprecated */
 export async function signUpWithNicknamePassword(
   emailOrNick: string,
-  password: string
+  password: string,
+  nickname?: string
 ): Promise<AuthResult> {
-  return signUpWithEmailPassword(emailOrNick, password);
+  return signUpWithEmailPassword(emailOrNick, password, nickname ?? emailOrNick);
 }
 
 /** @deprecated */

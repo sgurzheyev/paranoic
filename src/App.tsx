@@ -404,15 +404,8 @@ export default function App() {
     const persisted = forcePersistSession(next);
     applyIdentity(persisted);
     setAuthGate('ok');
-    if (getMagicTargetFromUrl() || getRoomIdFromUrl()) {
-      setAppMode('paranoic');
-    } else if (getSavedLoginSession()) {
-      setAppMode('paranoic');
-      setMainTab('contacts');
-    } else {
-      setAppMode('select');
-      setMainTab('chats');
-    }
+    setAppMode('paranoic');
+    setMainTab('contacts');
     setScreen('home');
     setSessionEpoch((n) => n + 1);
     void loadContacts().then(setContacts);
