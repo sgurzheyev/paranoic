@@ -185,13 +185,18 @@ export function isProfileNotFoundError(error: { code?: string; message?: string 
 }
 
 /**
- * Гарантирует физическую строку в profiles после Auth (email/password).
- * Username: из identity или local-part email (до @).
+ * Гарантирует физическую строку в profiles после Auth (email / Google OAuth).
+ * Username: из identity или local-part email.
+ * Имя: identity / user_metadata.full_name / email.
  */
 export async function bootstrapAuthProfile(
   userId: string,
   identity?: Pick<UserIdentity, 'name' | 'color' | 'username' | 'avatarUrl' | 'themeFon'>,
-  opts?: { email?: string | null }
+  opts?: {
+    email?: string | null;
+    fullName?: string | null;
+    avatarUrl?: string | null;
+  }
 ): Promise<void> {
   const id = userId.trim();
   if (!id || !hasSupabaseConfig()) return;
@@ -203,11 +208,19 @@ export async function bootstrapAuthProfile(
       const { usernameFromEmail } = await import('./authCredentials');
       handle = usernameFromEmail(opts.email);
     }
+    const displayName =
+      identity?.name?.trim() ||
+      opts?.fullName?.trim() ||
+      (opts?.email ? opts.email.split('@')[0]?.trim() : '') ||
+      handle ||
+      'New User';
+    const avatar =
+      identity?.avatarUrl?.trim() || opts?.avatarUrl?.trim() || null;
     const row: Record<string, unknown> = {
       id,
-      name: identity?.name?.trim() || handle || 'New User',
+      name: displayName,
       color: identity?.color || '#34d399',
-      avatar_url: identity?.avatarUrl || null,
+      avatar_url: avatar,
       theme_fon: identity?.themeFon || null,
       is_online: true,
       last_seen: now,

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { KeyRound, LogIn, Mail, UserPlus } from 'lucide-react';
 import {
   signInWithEmailPassword,
+  signInWithGoogleOAuth,
   signUpWithEmailPassword,
 } from './authCredentials';
 import ParanoicLogo from './ParanoicLogo';
@@ -14,9 +15,32 @@ type AuthScreenProps = {
 const CONFIRM_MESSAGE =
   'На вашу почту отправлено письмо с подтверждением. Перейдите по ссылке или введите код.';
 
+function GoogleGlyph({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path
+        fill="#EA4335"
+        d="M12 10.2v3.6h5.1c-.2 1.2-.9 2.3-1.9 3l3.1 2.4c1.8-1.7 2.9-4.1 2.9-7 0-.7-.1-1.3-.2-1.9H12z"
+      />
+      <path
+        fill="#34A853"
+        d="M6.6 14.3l-.9.7-2.5 1.9C5 19.5 8.2 21.5 12 21.5c2.4 0 4.4-.8 5.9-2.1l-3.1-2.4c-.8.6-1.9.9-2.8.9-2.2 0-4-1.5-4.7-3.5z"
+      />
+      <path
+        fill="#4A90E2"
+        d="M3.2 7.1C2.4 8.6 2 10.2 2 12s.4 3.4 1.2 4.9c0 .1 3.4-2.6 3.4-2.6-.2-.6-.3-1.2-.3-1.8s.1-1.3.3-1.9L3.2 7.1z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M12 5.1c1.3 0 2.5.5 3.5 1.3l2.6-2.6C16.4 2.3 14.4 1.5 12 1.5 8.2 1.5 5 3.5 3.2 7.1l3.4 2.6C7.9 6.6 9.8 5.1 12 5.1z"
+      />
+    </svg>
+  );
+}
+
 /**
- * Постоянный вход: реальный Email + пароль (Supabase Auth).
- * Username в profiles берётся из части email до @ после подтверждения.
+ * Постоянный вход: Email + пароль или Google OAuth.
+ * Username в profiles — из email; имя — full_name (Google) или email.
  */
 export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [email, setEmail] = useState('');
@@ -54,6 +78,23 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     }
   };
 
+  const runGoogle = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      const result = await signInWithGoogleOAuth();
+      if (!result.ok) {
+        setError(result.message);
+        setBusy(false);
+        return;
+      }
+      // Редирект на Google — страница уйдёт сама.
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось войти через Google');
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="auth-screen">
       <div className="auth-screen__bg" aria-hidden />
@@ -63,7 +104,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         <header className="auth-screen__header">
           <ParanoicLogo size={52} compact withWordmark className="auth-screen__logo" />
           <h1 className="auth-screen__title">Вход в Paranoic</h1>
-          <p className="auth-screen__sub">Email и пароль — постоянный аккаунт</p>
+          <p className="auth-screen__sub">Email, пароль или Google</p>
         </header>
 
         {pendingConfirmEmail ? (
@@ -92,6 +133,20 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </div>
         ) : (
           <>
+            <button
+              type="button"
+              className="auth-screen__btn auth-screen__btn--google"
+              disabled={busy}
+              onClick={() => void runGoogle()}
+            >
+              <GoogleGlyph />
+              {busy ? '…' : 'Войти через Google'}
+            </button>
+
+            <div className="auth-screen__divider" role="separator">
+              <span>или email</span>
+            </div>
+
             <label className="auth-screen__field">
               <span>Email</span>
               <input
@@ -165,7 +220,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
 
         <p className="auth-screen__hint">
           <KeyRound size={14} aria-hidden />
-          Никнейм в профиле создаётся из email (часть до @) после подтверждения почты.
+          Никнейм — из email; имя профиля — из Google (full_name) или email.
         </p>
       </div>
     </div>

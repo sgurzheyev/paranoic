@@ -1,10 +1,10 @@
 /**
- * Постоянная авторизация: реальный Email + пароль (Supabase Auth).
- * Username в profiles = local-part email (до @), после подтверждения почты.
- *
- * Confirm Email = ON: после signUp сессии нет → UI «проверьте почту».
+ * Постоянная авторизация: Email/пароль + Google OAuth (Supabase Auth).
+ * Username в profiles = local-part email (до @).
+ * Имя: user_metadata.full_name (Google) или email.
  */
 
+import type { Session, User } from '@supabase/supabase-js';
 import {
   forcePersistSession,
   getOrCreateIdentity,
@@ -20,7 +20,7 @@ import {
 } from './lib/supabase';
 import {
   bootstrapAuthProfile,
-  fetchProfileByUsername,
+  fetchRemoteProfile,
   isUsernameAvailable,
   PROFILES_TABLE,
 } from './profile';
@@ -31,11 +31,13 @@ export type AuthFailureReason =
   | 'email_taken'
   | 'db_error'
   | 'invalid_input'
-  | 'email_not_confirmed';
+  | 'email_not_confirmed'
+  | 'oauth_error';
 
 export type AuthResult =
   | { ok: true; identity: UserIdentity }
   | { ok: true; pendingConfirmation: true; email: string }
+  | { ok: true; oauthRedirect: true }
   | { ok: false; reason: AuthFailureReason; message: string; detail?: string };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -46,6 +48,25 @@ export function normalizeAuthEmail(raw: string): string {
 
 export function isValidAuthEmail(raw: string): boolean {
   return EMAIL_RE.test(normalizeAuthEmail(raw));
+}
+
+/** Имя из Google / OAuth metadata или email. */
+export function displayNameFromAuthUser(user: User): string {
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const fullName = String(meta.full_name ?? meta.name ?? '').trim();
+  if (fullName) return fullName;
+  const email = user.email?.trim();
+  if (email) {
+    const local = email.split('@')[0]?.trim();
+    if (local) return local;
+  }
+  return 'New User';
+}
+
+/** Аватар из Google metadata (avatar_url / picture). */
+export function avatarUrlFromAuthUser(user: User): string {
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  return String(meta.avatar_url ?? meta.picture ?? '').trim();
 }
 
 /**
@@ -101,24 +122,29 @@ function mapAuthError(
   return { reason: 'db_error', message: message || 'Ошибка авторизации' };
 }
 
-async function finishAuthenticatedSession(
-  session: import('@supabase/supabase-js').Session
-): Promise<UserIdentity> {
+/** После email/OAuth: identity + upsert profiles (имя из full_name или email). */
+export async function finishAuthenticatedSession(session: Session): Promise<UserIdentity> {
   markAuthBootstrapReady(session);
-  const userId = session.user.id;
-  const email = session.user.email || '';
+  const user = session.user;
+  const userId = user.id;
+  const email = user.email || '';
   const handle = email
     ? await resolveUsernameFromEmail(email, userId)
     : usernameFromEmail(`user${userId.slice(0, 8)}@local`);
 
-  const existing = await fetchProfileByUsername(handle);
+  const existing = await fetchRemoteProfile(userId);
   const base = getOrCreateIdentity();
+  const oauthName = displayNameFromAuthUser(user);
+  const oauthAvatar = avatarUrlFromAuthUser(user);
+
   const displayName =
-    existing?.name?.trim() && existing.name !== 'Я'
+    existing?.name?.trim() && existing.name !== 'Я' && existing.name !== 'New User'
       ? existing.name
-      : base.name !== 'Я'
-        ? base.name
-        : handle;
+      : oauthName !== 'New User'
+        ? oauthName
+        : base.name !== 'Я'
+          ? base.name
+          : handle;
 
   const next = forcePersistSession({
     ...base,
@@ -126,7 +152,7 @@ async function finishAuthenticatedSession(
     username: handle,
     name: displayName,
     color: existing?.color || base.color,
-    avatarUrl: existing?.avatar_url || base.avatarUrl,
+    avatarUrl: existing?.avatar_url || oauthAvatar || base.avatarUrl,
     themeFon: existing?.theme_fon || base.themeFon,
   });
   updateIdentity({
@@ -137,7 +163,11 @@ async function finishAuthenticatedSession(
     themeFon: next.themeFon,
   });
 
-  await bootstrapAuthProfile(userId, next, { email });
+  await bootstrapAuthProfile(userId, next, {
+    email,
+    fullName: oauthName,
+    avatarUrl: oauthAvatar || null,
+  });
 
   const sb = getSupabase();
   const { error } = await sb.from(PROFILES_TABLE).upsert(
@@ -245,7 +275,6 @@ export async function signUpWithEmailPassword(
       return { ok: false, ...mapped, detail: error.message };
     }
 
-    // Confirm email включён: пользователь создан, сессии ещё нет.
     if (!data.session?.user?.id) {
       console.log('[paranoic auth] signUp pending email confirmation', { email });
       return { ok: true, pendingConfirmation: true, email };
@@ -270,7 +299,47 @@ export async function signUpWithEmailPassword(
   }
 }
 
-/** @deprecated Используйте signInWithEmailPassword. */
+/** Google OAuth — редирект на провайдера, профиль создаётся после возврата. */
+export async function signInWithGoogleOAuth(): Promise<AuthResult> {
+  if (!hasSupabaseConfig()) {
+    return {
+      ok: false,
+      reason: 'db_error',
+      message: 'Supabase не настроен — вход через Google недоступен',
+    };
+  }
+  try {
+    pauseAuthBootstrap(false);
+    const sb = getSupabase();
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin,
+      },
+    });
+    if (error) {
+      console.error('[paranoic auth] Google OAuth', error.message);
+      return {
+        ok: false,
+        reason: 'oauth_error',
+        message: error.message || 'Не удалось открыть Google',
+        detail: error.message,
+      };
+    }
+    return { ok: true, oauthRedirect: true };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('[paranoic auth] Google OAuth failed', detail);
+    return {
+      ok: false,
+      reason: 'oauth_error',
+      message: detail || 'Не удалось войти через Google',
+      detail,
+    };
+  }
+}
+
+/** @deprecated */
 export async function signInWithNicknamePassword(
   emailOrNick: string,
   password: string
@@ -278,7 +347,7 @@ export async function signInWithNicknamePassword(
   return signInWithEmailPassword(emailOrNick, password);
 }
 
-/** @deprecated Используйте signUpWithEmailPassword. */
+/** @deprecated */
 export async function signUpWithNicknamePassword(
   emailOrNick: string,
   password: string

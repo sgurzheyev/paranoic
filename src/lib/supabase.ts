@@ -112,7 +112,7 @@ export async function ensureAuthSession(): Promise<Session> {
   const session = await peekAuthSession();
 
   if (!session?.user?.id) {
-    throw new Error('Нужен вход. Войдите по никнейму и паролю.');
+    throw new Error('Нужен вход. Войдите по email, паролю или через Google.');
   }
 
   console.log('[AUTH SESSION]', {
@@ -127,23 +127,28 @@ export async function ensureAuthSession(): Promise<Session> {
       authUid: session.user.id,
     });
   }
-  // UUID постоянный — локальные контакты при перезаходе не сбрасываем.
-  let profileIdentity = aligned;
-  if (!aligned.username?.trim() && session.user.email) {
-    const { resolveUsernameFromEmail } = await import('../authCredentials');
-    const { updateIdentity, forcePersistSession } = await import('../identity');
-    const handle = await resolveUsernameFromEmail(session.user.email, session.user.id);
-    profileIdentity = forcePersistSession(
-      updateIdentity({
-        username: handle,
-        name: aligned.name !== 'Я' ? aligned.name : handle,
-      })
+
+  const needsProfileSync =
+    !aligned.username?.trim() ||
+    !aligned.name?.trim() ||
+    aligned.name === 'Я' ||
+    aligned.name === 'New User';
+
+  if (needsProfileSync) {
+    // Google OAuth / первый вход — имя из full_name или email.
+    const { finishAuthenticatedSession } = await import('../authCredentials');
+    await finishAuthenticatedSession(session);
+  } else {
+    const { displayNameFromAuthUser, avatarUrlFromAuthUser } = await import(
+      '../authCredentials'
     );
+    const { bootstrapAuthProfile } = await import('../profile');
+    await bootstrapAuthProfile(session.user.id, aligned, {
+      email: session.user.email ?? null,
+      fullName: displayNameFromAuthUser(session.user),
+      avatarUrl: avatarUrlFromAuthUser(session.user) || null,
+    });
   }
-  const { bootstrapAuthProfile } = await import('../profile');
-  await bootstrapAuthProfile(session.user.id, profileIdentity, {
-    email: session.user.email ?? null,
-  });
   return session;
 }
 

@@ -1,15 +1,18 @@
 /**
- * Email/password Auth for Paranoic (real email + verification).
+ * Email/password + Google OAuth for Paranoic.
  *
  * Required Dashboard settings:
  *   Authentication → Providers → Email → Enable Email
- *   Authentication → Providers → Email → Confirm email = ON (verification flow)
+ *   Authentication → Providers → Email → Confirm email = ON (or OFF)
+ *   Authentication → Providers → Google → Enable + Client ID/Secret
+ *   Authentication → URL Configuration → Redirect URLs: include app origin
  *
- * After confirm, client sets profiles.username from email local-part
- * (e.g. user@gmail.com → username "user").
+ * After confirm / OAuth return:
+ *   profiles.username = email local-part
+ *   profiles.name prefers user_metadata.full_name (Google), then email
  *
  * Fake domain @paranoic.local is no longer used.
  */
 
 -- No schema changes; Auth users live in auth.users.
--- profiles.username is upserted by the client after confirmed sign-in.
+-- profiles row is upserted by the client after confirmed sign-in / OAuth return.
