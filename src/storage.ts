@@ -264,6 +264,109 @@ function previewTimeLabel(row: StoredMessage): string {
   return row.time;
 }
 
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`]+/i;
+
+/** Категории поисковой выдачи в чатах. */
+export type ChatSearchFilter = 'all' | 'media' | 'links' | 'files' | 'voice';
+
+export type ChatMessageCategory = 'media' | 'links' | 'files' | 'voice' | 'text';
+
+export type ChatSearchHit = {
+  peerId: string;
+  conversationId: string;
+  message: StoredMessage;
+  category: ChatMessageCategory;
+  snippet: string;
+  timeLabel: string;
+  createdAt: number;
+};
+
+/** Классификация сообщения для фильтров Все / Медиа / Ссылки / Файлы / Голосовые. */
+export function classifyMessageCategory(row: StoredMessage): ChatMessageCategory {
+  if (row.kind === 'media' || row.kind === 'file-pending' || row.kind === 'file-transfer') {
+    const name = row.mediaName || '';
+    if (
+      row.mediaKind === 'voice' ||
+      name.startsWith('voice-') ||
+      Boolean(row.mediaMime?.startsWith('audio/'))
+    ) {
+      return 'voice';
+    }
+    if (
+      row.mediaKind === 'file' ||
+      (row.mediaMime &&
+        !row.mediaMime.startsWith('image/') &&
+        !row.mediaMime.startsWith('video/') &&
+        !row.mediaMime.startsWith('audio/'))
+    ) {
+      return 'files';
+    }
+    return 'media';
+  }
+  if (row.kind === 'text' && row.text && URL_IN_TEXT_RE.test(row.text)) return 'links';
+  return 'text';
+}
+
+function messageMatchesQuery(row: StoredMessage, query: string): boolean {
+  if (!query) return true;
+  const hay = [row.text, row.mediaName, formatMessageSnippet(row)]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+  return hay.includes(query);
+}
+
+/**
+ * Мгновенный поиск по локальной истории IndexedDB с фильтром по типу контента.
+ * Пустой query + фильтр ≠ all → вся медиатека чатов этого типа.
+ */
+export async function searchLocalChatMessages(
+  selfId: string,
+  opts: { query?: string; filter?: ChatSearchFilter; limit?: number } = {}
+): Promise<ChatSearchHit[]> {
+  const query = (opts.query || '').trim().toLowerCase();
+  const filter = opts.filter ?? 'all';
+  const limit = opts.limit ?? 80;
+  const out: ChatSearchHit[] = [];
+  if (!selfId) return out;
+
+  try {
+    const keys = await messagesDb.keys();
+    for (const raw of keys) {
+      const key = String(raw);
+      const pair = parseChatKey(key);
+      if (!pair) continue;
+      const [a, b] = pair;
+      const peerId = a === selfId ? b : b === selfId ? a : null;
+      if (!peerId) continue;
+      const convId = conversationId(a, b);
+      const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
+      for (let i = history.length - 1; i >= 0; i--) {
+        const message = history[i]!;
+        const category = classifyMessageCategory(message);
+        if (filter !== 'all' && category !== filter) continue;
+        if (!messageMatchesQuery(message, query)) continue;
+        out.push({
+          peerId,
+          conversationId: convId,
+          message,
+          category,
+          snippet: formatMessageSnippet(message),
+          timeLabel: previewTimeLabel(message),
+          createdAt:
+            typeof message.createdAt === 'number' ? message.createdAt : 0,
+        });
+        if (out.length >= limit) return out;
+      }
+    }
+  } catch {
+    /* */
+  }
+
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out;
+}
+
 /** Последнее сообщение по каждому собеседнику (IndexedDB). */
 export async function loadLastMessagePreviews(
   selfId: string

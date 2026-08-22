@@ -26,6 +26,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
+import ChatSearchPanel from './ChatSearchPanel';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
@@ -293,6 +294,9 @@ export default function App() {
   const [lastPreviews, setLastPreviews] = useState<Record<string, LastMessagePreview>>({});
   /** Мобильный сайдбар контактов в мессенджере. */
   const [messengerSidebarOpen, setMessengerSidebarOpen] = useState(false);
+  /** Поиск с фильтрами перекрывает список чатов. */
+  const [chatsSearchMode, setChatsSearchMode] = useState(false);
+  const [sidebarSearchMode, setSidebarSearchMode] = useState(false);
   /** Главная вкладка Bottom Tab Bar. */
   const [mainTab, setMainTab] = useState<LiquidNavTab>(() =>
     getMagicTargetFromUrl() ? 'chats' : 'contacts'
@@ -3472,7 +3476,17 @@ export default function App() {
                       <h2>Чаты</h2>
                       <span className="contacts-count">{contacts.length}</span>
                     </div>
-                    {connected && peerId && (
+                    <ChatSearchPanel
+                      selfId={identity.id}
+                      contacts={contacts}
+                      onResultsModeChange={setChatsSearchMode}
+                      onOpenPeer={(peerId, peerName) => {
+                        const known = contacts.find((c) => c.id === peerId);
+                        if (known) quickChatContact(known);
+                        else void connectToUser(peerId, peerName, { openChat: true });
+                      }}
+                    />
+                    {connected && peerId && !chatsSearchMode && (
                       <div className="active-session-card">
                         <p className="lead" style={{ margin: 0 }}>
                           На связи: <strong>{peerLabel}</strong>
@@ -3513,7 +3527,7 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {contacts.length === 0 ? (
+                    {chatsSearchMode ? null : contacts.length === 0 ? (
                       <p className="empty-contacts">
                         Пока нет чатов. Откройте чужую ссылку или дождитесь, пока кто-то откроет
                         вашу — контакт сохранится автоматически.
@@ -3778,6 +3792,21 @@ export default function App() {
                 </button>
                 <h2>Чаты</h2>
               </div>
+              <div className="messenger-sidebar-search">
+                <ChatSearchPanel
+                  compact
+                  selfId={identity.id}
+                  contacts={contacts}
+                  onResultsModeChange={setSidebarSearchMode}
+                  onOpenPeer={(peerId, peerName) => {
+                    setMessengerSidebarOpen(false);
+                    const known = contacts.find((c) => c.id === peerId);
+                    if (known) quickChatContact(known);
+                    else void connectToUser(peerId, peerName, { openChat: true });
+                  }}
+                />
+              </div>
+              {sidebarSearchMode ? null : (
               <ul className="messenger-contacts">
                 {contacts.length === 0 ? (
                   <li className="empty-contacts">Пока нет контактов</li>
@@ -3827,6 +3856,7 @@ export default function App() {
                   })
                 )}
               </ul>
+              )}
             </aside>
 
             {messengerSidebarOpen && (
