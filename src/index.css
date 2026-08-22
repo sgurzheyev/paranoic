@@ -1061,6 +1061,37 @@ svg.lucide {
   min-width: 0;
 }
 
+.chat-peer--btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s ease;
+}
+
+.chat-peer--btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chat-peer--btn:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-peer--btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .chat-peer-meta {
   display: flex;
   flex-direction: column;
@@ -1078,6 +1109,189 @@ svg.lucide {
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--muted);
+}
+
+.icon-btn.is-call-live {
+  color: var(--lux-emerald, #00f5d4);
+  border-color: rgba(0, 245, 212, 0.35);
+  box-shadow: 0 0 12px rgba(0, 245, 212, 0.2);
+}
+
+/* Read-only профиль собеседника из шапки чата */
+.peer-profile-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  background: rgba(5, 7, 11, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+@media (min-width: 640px) {
+  .peer-profile-backdrop {
+    align-items: center;
+  }
+}
+
+.peer-profile-modal {
+  width: min(100%, 400px);
+  max-height: min(86svh, 680px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad);
+  padding: var(--pad-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  background: rgba(10, 13, 20, 0.88);
+  backdrop-filter: var(--blur-strong);
+  -webkit-backdrop-filter: var(--blur-strong);
+  box-shadow: var(--glass-shadow), 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.peer-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.peer-profile-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.peer-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--pad);
+}
+
+.peer-profile-hero-meta {
+  min-width: 0;
+}
+
+.peer-profile-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.peer-profile-username {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.peer-profile-status {
+  margin: 4px 0 0;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.peer-profile-status.is-online {
+  color: var(--lux-emerald, #00f5d4);
+}
+
+.peer-profile-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.peer-profile-label {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.peer-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border-soft);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.peer-profile-mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
+.peer-profile-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.peer-profile-copy:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.peer-profile-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.peer-profile-media-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.peer-profile-media-cell {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border-soft);
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.peer-profile-media-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.peer-profile-media-cell.is-file {
+  font-size: 0.9rem;
 }
 
 .trust-banner {

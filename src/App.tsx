@@ -29,6 +29,7 @@ import ContactListRow from './ContactListRow';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
+import PeerProfileModal from './PeerProfileModal';
 import AdminDashboard from './AdminDashboard';
 import CallOverlay, { ActiveCallBanner } from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
@@ -259,6 +260,7 @@ export default function App() {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(identity.name);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [peerProfileOpen, setPeerProfileOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isBanned, setIsBanned] = useState(false);
@@ -309,6 +311,8 @@ export default function App() {
   const suppressGlobalErrorsRef = useRef(authGate !== 'ok');
   /** Идёт ли реальный вызов: без него обрыв ICE — фоновый, а не «не удалось связаться». */
   const callAttemptRef = useRef(false);
+  /** Антидребезг кнопки звонка в шапке чата. */
+  const callDialLockRef = useRef(false);
   const peerIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -1344,9 +1348,9 @@ export default function App() {
                       callId
                     );
                   }
-                  await p2pRef.current?.startCall();
                   setCallExpanded(true);
                   setScreen('chat');
+                  await p2pRef.current?.startCall();
                 } catch (e) {
                   pendingStartCallRef.current = false;
                   clearCallSessionResidue();
@@ -2283,20 +2287,36 @@ export default function App() {
   };
 
   const startCall = async () => {
+    if (callDialLockRef.current) return;
+    callDialLockRef.current = true;
     resetCallFailureUi();
     setError('');
     setMicMuted(false);
     setCameraOff(false);
     void ensureNotifyPermission();
     if (isBannedRef.current) {
+      callDialLockRef.current = false;
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
       return;
     }
     if (callMediaBlocked) {
       pendingStartCallRef.current = false;
+      callDialLockRef.current = false;
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
     }
+
+    const liveCall = p2pRef.current?.currentCallState ?? callState;
+    if (liveCall === 'calling' || liveCall === 'in-call') {
+      setCallExpanded(true);
+      callDialLockRef.current = false;
+      return;
+    }
+    if (liveCall === 'ringing') {
+      callDialLockRef.current = false;
+      return;
+    }
+
     try {
       const me = getOrCreateIdentity();
       identityRef.current = me;
@@ -2380,10 +2400,10 @@ export default function App() {
             );
             void markParticipantsInCall(me.id, callTarget);
             presenceRef.current?.setInCall(true);
-            await ensureP2P().startCall();
-            attachLocalVideo(null);
             setCallExpanded(true);
             setScreen('chat');
+            await ensureP2P().startCall();
+            attachLocalVideo(null);
             return;
           }
           const title = peerLabel || known?.name || target;
@@ -2434,16 +2454,69 @@ export default function App() {
         void markParticipantsInCall(me.id, callTarget);
         presenceRef.current?.setInCall(true);
       }
-      await ensureP2P().startCall();
-      attachLocalVideo(null);
+      // Сразу раскрываем оверлей — состояние calling приходит из p2p.startCall.
       setCallExpanded(true);
       setScreen('chat');
+      await ensureP2P().startCall();
+      attachLocalVideo(null);
     } catch (e) {
       pendingStartCallRef.current = false;
       clearCallSessionResidue();
       setCallExpanded(false);
       presenceRef.current?.setInCall(false);
       setError(mediaErrorMessage(e, 'Не удалось начать звонок'));
+    } finally {
+      window.setTimeout(() => {
+        callDialLockRef.current = false;
+      }, 700);
+    }
+  };
+
+  /** Звонок из шапки чата: без ложных disabled, с реконнектом при необходимости. */
+  const dialFromChat = async () => {
+    if (callDialLockRef.current) return;
+    if (callMediaBlocked) {
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
+    if (isBannedRef.current) {
+      setError('Ваш аккаунт заблокирован. Звонки недоступны.');
+      return;
+    }
+
+    const liveCall = p2pRef.current?.currentCallState ?? callState;
+    if (liveCall === 'calling' || liveCall === 'in-call') {
+      setCallExpanded(true);
+      return;
+    }
+    if (liveCall === 'ringing') return;
+
+    const target = peerIdRef.current || guestPeerIdRef.current;
+    if (!target) {
+      setError('Нет собеседника для звонка');
+      return;
+    }
+
+    resetCallFailureUi();
+    setError('');
+
+    const ready =
+      (isLiveConnectedTo(target) || p2pStatus === 'connected') &&
+      Boolean(p2pRef.current?.isReady);
+
+    if (ready) {
+      await startCall();
+      return;
+    }
+
+    // Нет живого P2P — поднимаем сессию и стартуем звонок после connected.
+    pendingStartCallRef.current = true;
+    setCallExpanded(true);
+    const known = contacts.find((c) => c.id === target);
+    if (known) {
+      await connectToLocalContact(known, { startCall: true, openChat: true });
+    } else {
+      await connectToUser(target, peerLabel, { startCall: true, openChat: true });
     }
   };
 
@@ -3307,6 +3380,21 @@ export default function App() {
           onSignOut={handleSignOut}
         />
       )}
+      {peerProfileOpen && activePeerId && (
+        <PeerProfileModal
+          peer={{
+            id: activePeerId,
+            name: peerLabel,
+            username: contacts.find((c) => c.id === activePeerId)?.username,
+            color: peerColor,
+            avatarUrl: peerAvatarUrl,
+            online: connected,
+            typing: peerTyping,
+          }}
+          messages={messages}
+          onClose={() => setPeerProfileOpen(false)}
+        />
+      )}
       {adminOpen && (
         <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
@@ -3769,7 +3857,15 @@ export default function App() {
               >
                 <ArrowLeft size={16} /> Назад
               </button>
-              <div className="chat-peer">
+              <button
+                type="button"
+                className="chat-peer chat-peer--btn"
+                onClick={() => {
+                  if (activePeerId) setPeerProfileOpen(true);
+                }}
+                disabled={!activePeerId}
+                aria-label={`Профиль: ${peerLabel}`}
+              >
                 <Avatar
                   name={peerLabel}
                   color={peerColor}
@@ -3782,21 +3878,27 @@ export default function App() {
                     {peerTyping ? 'печатает…' : connected ? 'на связи' : 'офлайн'}
                   </span>
                 </div>
-              </div>
+              </button>
               <button
                 type="button"
-                className={`icon-btn${callMediaBlocked ? ' is-media-blocked' : ''}`}
+                className={`icon-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
                 onClick={() => {
                   if (callMediaBlocked) {
                     setError(MEDIA_ACCESS_DENIED_MESSAGE);
                     return;
                   }
-                  void startCall();
+                  void dialFromChat();
                 }}
-                aria-label="Позвонить"
-                title={callMediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
-                disabled={!connected}
-                aria-disabled={!connected || callMediaBlocked}
+                aria-label={callLive ? 'Вернуться к звонку' : 'Позвонить'}
+                title={
+                  callMediaBlocked
+                    ? MEDIA_ACCESS_DENIED_MESSAGE
+                    : callLive
+                      ? 'Вернуться к звонку'
+                      : 'Позвонить'
+                }
+                disabled={!activePeerId}
+                aria-disabled={!activePeerId || callMediaBlocked}
               >
                 <Phone size={17} />
               </button>

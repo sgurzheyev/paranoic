@@ -920,6 +920,10 @@ export class P2PConnection {
       throw new Error('Сначала ответьте на входящий звонок');
     }
 
+    // Экран дозвона сразу — проверка камеры/мика не должна блокировать UI.
+    this.setSignalingStatus('');
+    this.setCallState('calling');
+
     try {
       await ensureCallMediaAccess();
     } catch (e) {
@@ -927,8 +931,6 @@ export class P2PConnection {
       throw toMediaAccessError(e);
     }
 
-    this.setSignalingStatus('');
-    this.setCallState('calling');
     const msgId = crypto.randomUUID();
     this.sendCallControl({ t: 'call-invite', msgId });
     this.clearCallInviteRetry();
