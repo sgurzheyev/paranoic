@@ -3949,8 +3949,8 @@ svg.lucide {
 /* Своя дорожка слева от правого dock, иначе компас и attribution
    вылезают из-под колонки. */
 .family-mapbox .mapboxgl-ctrl-bottom-right {
-  margin-bottom: calc(7.25rem + env(safe-area-inset-bottom, 0px));
-  margin-right: calc(0.75rem + 56px);
+  margin-bottom: calc(7.5rem + env(safe-area-inset-bottom, 0px));
+  margin-right: max(4rem, calc(env(safe-area-inset-right, 0px) + 3.75rem));
 }
 
 /* Родной компас Mapbox приводим к стеклянному стилю остальных кнопок карты. */
@@ -4010,17 +4010,33 @@ svg.lucide {
   pointer-events: none;
 }
 
-/* Единый правый вертикальный dock управления картой. */
+/* Единый правый вертикальный dock управления картой.
+   Отступ справа учитывает safe-area + запас от edge-gestures;
+   снизу — зазор над liquid-nav. */
 .map-side-dock {
+  --map-dock-size: 44px;
+  --map-dock-gap: 10px;
   position: absolute;
   top: calc(max(12px, env(safe-area-inset-top, 12px)) + 3.15rem);
-  right: max(12px, env(safe-area-inset-right, 12px));
+  right: max(14px, calc(env(safe-area-inset-right, 0px) + 12px));
+  bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
   z-index: 6;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--map-dock-gap);
+  max-height: none;
+  overflow-x: visible;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
   pointer-events: auto;
+  padding-bottom: 2px;
+}
+
+.map-side-dock::-webkit-scrollbar {
+  display: none;
 }
 
 .map-side-dock__slot {
@@ -4028,14 +4044,17 @@ svg.lucide {
   display: flex;
   flex-direction: column;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .map-side-dock__fab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: var(--map-dock-size);
+  height: var(--map-dock-size);
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -4043,6 +4062,8 @@ svg.lucide {
   color: rgba(238, 241, 246, 0.9);
   font: inherit;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   backdrop-filter: blur(24px) saturate(1.2);
   -webkit-backdrop-filter: blur(24px) saturate(1.2);
   box-shadow:
@@ -4054,6 +4075,7 @@ svg.lucide {
     background 0.2s ease,
     transform 0.2s ease,
     box-shadow 0.2s ease;
+  flex-shrink: 0;
 }
 
 .map-side-dock__fab svg {
@@ -4123,10 +4145,12 @@ svg.lucide {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  width: 48px;
-  height: 48px;
-  padding: 5px 0;
+  justify-content: stretch;
+  width: var(--map-dock-size, 44px);
+  height: var(--map-dock-size, 44px);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 3px 0;
   box-sizing: border-box;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -4138,6 +4162,9 @@ svg.lucide {
     0 0 14px rgba(0, 245, 212, 0.14),
     0 4px 16px rgba(5, 7, 11, 0.45);
   pointer-events: auto;
+  flex-shrink: 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .map-zoom-dock__btn {
@@ -4145,13 +4172,16 @@ svg.lucide {
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 12px;
+  flex: 1 1 0;
+  min-height: 0;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
   color: rgba(220, 245, 235, 0.9);
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition:
     color 0.2s ease,
     opacity 0.2s ease,
@@ -4383,9 +4413,9 @@ svg.lucide {
   }
 }
 
-/** Отступ под фиксированный Bottom Tab Bar (высота панели ≈ 72px + 16px gap + safe area). */
+/** Отступ под фиксированный Bottom Tab Bar + home-indicator. */
 .map-chrome-bottom {
-  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(6.75rem + env(safe-area-inset-bottom, 0px));
   pointer-events: none;
   flex-shrink: 0;
 }
@@ -4545,7 +4575,7 @@ svg.lucide {
 
 @media (min-width: 640px) {
   .map-chrome-bottom {
-    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -6407,7 +6437,7 @@ svg.lucide {
   align-items: flex-end;
   justify-content: center;
   padding: 16px;
-  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(6.75rem + env(safe-area-inset-bottom, 0px));
   background: rgba(5, 7, 11, 0.55);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -6760,12 +6790,14 @@ svg.lucide {
 .liquid-nav {
   position: fixed;
   z-index: 45;
-  left: 1rem;
-  right: 1rem;
-  bottom: max(10px, env(safe-area-inset-bottom, 10px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  /* Safe-area + небольшой зазор, чтобы панель не липла к home-indicator. */
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   display: flex;
   justify-content: center;
   pointer-events: none;
+  padding: 0;
 }
 
 .liquid-nav-panel {
@@ -6774,7 +6806,7 @@ svg.lucide {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   width: min(100%, 380px);
-  padding: var(--gap-xs);
+  padding: 6px;
   border-radius: 1.1rem;
   border: 1px solid var(--glass-border);
   background:
@@ -6795,10 +6827,10 @@ svg.lucide {
 
 .liquid-nav-blob {
   position: absolute;
-  top: var(--gap-xs);
-  bottom: var(--gap-xs);
-  left: var(--gap-xs);
-  width: calc((100% - 8px) / 3);
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: calc((100% - 12px) / 3);
   border-radius: 999px;
   background:
     radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.35), transparent 55%),
@@ -6812,7 +6844,7 @@ svg.lucide {
 }
 
 .liquid-nav-blob--tabs4 {
-  width: calc((100% - 8px) / 4);
+  width: calc((100% - 12px) / 4);
 }
 
 .liquid-nav-btn {
@@ -6822,13 +6854,15 @@ svg.lucide {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  min-height: 42px;
+  gap: 2px;
+  min-height: 44px;
   border: none;
   background: transparent;
   color: rgba(200, 205, 214, 0.72);
   cursor: pointer;
   border-radius: 999px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition:
     color 0.25s ease,
     transform 0.35s cubic-bezier(0.34, 1.45, 0.64, 1);
@@ -6836,7 +6870,7 @@ svg.lucide {
 
 .liquid-nav-btn.is-active {
   color: #f8fafc;
-  transform: translateY(-4px);
+  transform: translateY(-3px);
 }
 
 .liquid-nav-label {
@@ -6847,12 +6881,28 @@ svg.lucide {
   opacity: 0.85;
 }
 
+/* Контент не уезжает под таббар + home-indicator. */
 .app-shell.has-liquid-nav {
-  padding-bottom: calc(62px + max(10px, env(safe-area-inset-bottom, 10px)));
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
 }
 
 .app-shell.messenger-shell.has-liquid-nav {
-  padding-bottom: calc(56px + max(10px, env(safe-area-inset-bottom, 10px)));
+  padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .liquid-nav-btn.is-active {
+    transform: none;
+  }
+
+  .map-side-dock__fab:hover:not(:disabled) {
+    transform: none;
+  }
+
+  .map-side-dock__fab:active:not(:disabled) {
+    transform: scale(0.94);
+    opacity: 0.92;
+  }
 }
 
 html.ar-active .liquid-nav,
