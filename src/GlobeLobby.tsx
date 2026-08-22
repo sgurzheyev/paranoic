@@ -1052,7 +1052,7 @@ export default function GlobeLobby({
         : 'Запрашиваем геолокацию…';
 
   return (
-    <div className="family-map-root absolute inset-0 h-full w-full overflow-hidden bg-[#03050a] font-[Nunito,system-ui,sans-serif] text-slate-200">
+    <div className="family-map-root absolute inset-0 h-full w-full overflow-hidden bg-[#05070b] font-[Nunito,system-ui,sans-serif] text-slate-300">
       <div
         ref={containerRef}
         className={`family-mapbox absolute inset-0 h-full w-full${mapBootDone ? ' is-visible' : ''}`}
@@ -1074,16 +1074,16 @@ export default function GlobeLobby({
 
       {tokenMissing && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#03050a]/90 p-6 text-center backdrop-blur-md">
-          <div className="max-w-md rounded-3xl border border-white/20 bg-white/10 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]">
+          <div className="max-w-md rounded-3xl border border-white/10 bg-black/40 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
             <h2 className="m-0 text-xl font-extrabold text-white">Нужен Mapbox токен</h2>
-            <p className="mt-3 text-sm text-slate-300">
-              Добавьте <code className="text-teal-200">VITE_MAPBOX_TOKEN</code> в{' '}
-              <code className="text-teal-200">.env</code> и перезапустите dev-сервер.
+            <p className="mt-3 text-sm text-slate-400">
+              Добавьте <code className="lux-text-emerald">VITE_MAPBOX_TOKEN</code> в{' '}
+              <code className="lux-text-emerald">.env</code> и перезапустите dev-сервер.
             </p>
             <button
               type="button"
               onClick={onBack}
-              className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-white"
+              className="lux-glass-chip mt-5 px-4 py-2 text-sm font-bold"
             >
               <ArrowLeft size={16} /> Назад
             </button>
@@ -1097,7 +1097,7 @@ export default function GlobeLobby({
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
+              className="lux-glass-chip map-ui-hit px-4 py-2 text-sm font-bold"
             >
               <ArrowLeft size={16} /> Назад
             </button>
@@ -1168,12 +1168,12 @@ export default function GlobeLobby({
               <button
                 type="button"
                 onClick={onOpenAdmin}
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-2 text-xs font-extrabold text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px] transition hover:bg-white/15"
+                className="lux-glass-chip px-3 py-2 text-xs font-extrabold"
               >
                 <ShieldCheck size={14} /> Admin Panel
               </button>
             )}
-            <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-slate-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-[20px]">
+            <div className="lux-glass-chip px-4 py-2 text-sm font-bold text-slate-300">
               Family Mode
             </div>
           </div>
@@ -1195,10 +1195,10 @@ export default function GlobeLobby({
               : `Чистая карта · контакты Family Mode${showGems ? ' · капсулы включены' : ''}`}
           </p>
           {!isTargetingMode && !movingGem && (
-            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-md">
-              <MapPin size={12} /> {geoHint}
+            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/40 px-3 py-1 text-xs text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl">
+              <MapPin size={12} className="lux-text-emerald" /> {geoHint}
               {showGems && gems.length > 0 && (
-                <span className="ml-1 text-amber-200/90">· {gems.length} капсул</span>
+                <span className="ml-1 lux-text-gold">· {gems.length} капсул</span>
               )}
             </p>
           )}
@@ -1282,7 +1282,7 @@ export default function GlobeLobby({
                           {initials(c.name)}
                         </span>
                       )}
-                      <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#0a0c12] bg-emerald-400" />
+                      <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#05070b] lux-online-dot" />
                     </span>
                     <span className="max-w-full truncate text-[11px] font-bold text-slate-200">
                       {c.name}
@@ -1500,7 +1500,7 @@ export default function GlobeLobby({
                   ) : (
                     '·'
                   )}
-                  <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#12141c] bg-emerald-400" />
+                  <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#05070b] lux-online-dot" />
                 </div>
                 <div>
                   <p className="m-0 text-xs font-bold uppercase tracking-[0.2em] text-slate-400">
