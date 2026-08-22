@@ -4212,30 +4212,73 @@ textarea {
 
 .map-gem-marker {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   padding: 0;
-  border: 2px solid var(--lux-gold);
+  border: 0;
   border-radius: 50%;
-  background: rgba(5, 7, 11, 0.88);
-  box-shadow:
-    0 0 0 2px var(--lux-gold-dim),
-    0 10px 28px rgba(5, 7, 11, 0.65);
-  overflow: hidden;
+  background: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateZ(0);
+  will-change: transform;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  animation: map-marker-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Плавное появление при включении слоя. */
+@keyframes map-marker-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateZ(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateZ(0);
+  }
+}
+
+/* Круглый аватар капсулы в тонкой золотой рамке. */
+.map-gem-marker-frame {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 50%;
+  border: 1.5px solid rgba(226, 183, 20, 0.7);
+  background: rgba(5, 7, 11, 0.88);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 24px rgba(5, 7, 11, 0.6);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.map-gem-marker.has-media .map-gem-marker-frame {
+  border-color: var(--lux-gold);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 12px rgba(226, 183, 20, 0.25),
+    0 8px 24px rgba(5, 7, 11, 0.6);
 }
 
 .map-gem-marker:hover {
-  transform: scale(1.1);
+  transform: scale(1.08) translateZ(0);
+}
+
+.map-gem-marker:hover .map-gem-marker-frame {
+  border-color: var(--lux-gold);
   box-shadow:
-    0 0 0 3px var(--lux-gold-glow),
-    0 12px 32px rgba(5, 7, 11, 0.72);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 20px rgba(226, 183, 20, 0.4),
+    0 12px 30px rgba(5, 7, 11, 0.7);
 }
 
 .map-gem-marker-img {
@@ -4251,27 +4294,58 @@ textarea {
   line-height: 1;
 }
 
+/* Значок «внутри медиа» — камера / видео. */
+.map-gem-marker-badge {
+  position: absolute;
+  z-index: 2;
+  right: -2px;
+  bottom: -2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid rgba(5, 7, 11, 0.9);
+  background: var(--lux-gold);
+  color: #0b0900;
+  pointer-events: none;
+}
+
+.map-gem-marker-badge svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* Еле заметное дыхание вместо резкого пульса. */
 .map-gem-marker-ring {
   pointer-events: none;
   position: absolute;
-  inset: -6px;
+  inset: -5px;
   border-radius: 50%;
-  border: 1px solid rgba(226, 183, 20, 0.42);
-  animation: map-gem-marker-pulse 1.6s ease-out infinite;
+  border: 1px solid rgba(226, 183, 20, 0.28);
+  opacity: 0.5;
+  animation: map-gem-marker-breathe 5s ease-in-out infinite;
 }
 
-@keyframes map-gem-marker-pulse {
-  0% {
-    transform: scale(0.92);
-    opacity: 0.75;
-  }
-  70% {
-    transform: scale(1.18);
-    opacity: 0;
-  }
+@keyframes map-gem-marker-breathe {
+  0%,
   100% {
-    transform: scale(1.18);
-    opacity: 0;
+    transform: scale(0.97);
+    opacity: 0.28;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-gem-marker,
+  .map-gem-marker-ring,
+  .map-avatar-marker,
+  .map-avatar-marker.is-me {
+    animation: none;
   }
 }
 
@@ -4289,43 +4363,46 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease,
+    border-color 0.3s ease;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
+  animation: map-marker-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .map-avatar-marker:hover,
 .map-avatar-marker.is-selected {
-  transform: scale(1.12);
-  border-color: #fff;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  transform: scale(1.1);
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 10px 28px rgba(5, 7, 11, 0.6);
   z-index: 2;
 }
 
 .map-avatar-marker.is-me {
   width: 52px;
   height: 52px;
-  border-width: 3px;
-  border-color: #5eead4;
+  border-width: 2px;
+  border-color: rgba(0, 245, 212, 0.65);
   box-shadow:
-    0 0 0 4px rgba(94, 234, 212, 0.25),
-    0 12px 32px rgba(0, 0, 0, 0.5);
+    0 0 0 3px rgba(0, 245, 212, 0.14),
+    0 12px 32px rgba(5, 7, 11, 0.55);
   z-index: 3;
-  animation: me-marker-pulse 2.4s ease-in-out infinite;
+  animation: me-marker-breathe 5.5s ease-in-out infinite;
 }
 
-@keyframes me-marker-pulse {
+/* Мягкое дыхание: без резких вспышек и скачков размера. */
+@keyframes me-marker-breathe {
   0%,
   100% {
     box-shadow:
-      0 0 0 4px rgba(94, 234, 212, 0.22),
-      0 12px 32px rgba(0, 0, 0, 0.5);
+      0 0 0 3px rgba(0, 245, 212, 0.1),
+      0 12px 32px rgba(5, 7, 11, 0.55);
   }
   50% {
     box-shadow:
-      0 0 0 8px rgba(94, 234, 212, 0.12),
-      0 12px 32px rgba(0, 0, 0, 0.5);
+      0 0 0 6px rgba(0, 245, 212, 0.16),
+      0 12px 32px rgba(5, 7, 11, 0.55);
   }
 }
 
@@ -5252,6 +5329,7 @@ textarea {
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .map-layers-btn.open,
@@ -5282,6 +5360,19 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transform-origin: top center;
+  animation: map-layers-menu-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes map-layers-menu-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
 }
 
 .map-layers-menu-title {
@@ -5307,6 +5398,12 @@ textarea {
   font-size: 0.88rem;
   font-weight: 700;
   cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.map-layers-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(0, 245, 212, 0.2);
 }
 
 .map-layers-toggle input {
@@ -5323,7 +5420,7 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.18);
   position: relative;
   flex-shrink: 0;
-  transition: background 0.18s ease;
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .map-layers-switch::after {
@@ -5335,16 +5432,18 @@ textarea {
   height: 18px;
   border-radius: 50%;
   background: #f4f5f7;
-  transition: transform 0.18s ease;
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s ease;
 }
 
 .map-layers-toggle input:checked + .map-layers-switch {
   background: var(--lux-emerald-dim);
   border-color: rgba(0, 245, 212, 0.45);
+  box-shadow: 0 0 14px var(--lux-emerald-dim);
 }
 
 .map-layers-toggle input:checked + .map-layers-switch::after {
   transform: translateX(18px);
+  background: var(--lux-emerald);
 }
 
 .ar-footprints {
@@ -5949,10 +6048,21 @@ textarea {
   justify-content: center;
   padding: 16px;
   padding-bottom: calc(6.25rem + env(safe-area-inset-bottom, 0px));
-  background: rgba(3, 5, 10, 0.45);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(5, 7, 11, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.ai-bodyguard-backdrop.is-visible {
+  opacity: 1;
+}
+
+.ai-bodyguard-backdrop.is-visible .ai-bodyguard-card {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 @media (min-width: 640px) {
@@ -5970,18 +6080,22 @@ textarea {
   max-height: min(78svh, 640px);
   display: flex;
   flex-direction: column;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 26px;
+  border: 1px solid var(--lux-glass-border);
   background:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
-    rgba(10, 12, 18, 0.72);
+    linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015)),
+    rgba(5, 7, 11, 0.72);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 28px 70px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 28px 80px rgba(5, 7, 11, 0.7),
+    0 0 60px rgba(59, 47, 110, 0.2);
+  backdrop-filter: blur(32px) saturate(1.3);
+  -webkit-backdrop-filter: blur(32px) saturate(1.3);
   overflow: hidden;
   pointer-events: auto;
+  opacity: 0;
+  transform: translateY(18px) scale(0.98);
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ai-bodyguard-head {
@@ -5990,7 +6104,7 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   padding: 16px 52px 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--lux-glass-border);
 }
 
 .ai-bodyguard-title {
@@ -6010,7 +6124,7 @@ textarea {
 .ai-bodyguard-title p {
   margin: 4px 0 0;
   font-size: 0.72rem;
-  color: rgba(203, 213, 225, 0.75);
+  color: rgba(184, 192, 204, 0.7);
 }
 
 .ai-bodyguard-radar {
@@ -6021,18 +6135,19 @@ textarea {
   height: 36px;
   flex-shrink: 0;
   border-radius: 12px;
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.18);
-  color: #fecaca;
-  animation: ai-radar-spin 6s linear infinite;
+  border: 1px solid rgba(0, 245, 212, 0.28);
+  background: linear-gradient(150deg, rgba(0, 245, 212, 0.16), rgba(91, 33, 182, 0.2));
+  color: var(--lux-emerald);
+  animation: ai-radar-breathe 4.5s ease-in-out infinite;
 }
 
-@keyframes ai-radar-spin {
-  from {
-    transform: rotate(0deg);
+@keyframes ai-radar-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 245, 212, 0);
   }
-  to {
-    transform: rotate(360deg);
+  50% {
+    box-shadow: 0 0 16px 0 rgba(0, 245, 212, 0.28);
   }
 }
 
@@ -6044,6 +6159,24 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.ai-bodyguard-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: ai-bubble-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ai-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .ai-bodyguard-bubble {
@@ -6058,17 +6191,17 @@ textarea {
 
 .ai-bodyguard-bubble.is-user {
   align-self: flex-end;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.1);
-  color: #f1f5f9;
+  border: 1px solid var(--lux-glass-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6ebf2;
   border-bottom-right-radius: 6px;
 }
 
 .ai-bodyguard-bubble.is-ai {
   align-self: flex-start;
-  border: 1px solid rgba(248, 113, 113, 0.28);
-  background: rgba(127, 29, 29, 0.28);
-  color: #fecaca;
+  border: 1px solid rgba(0, 245, 212, 0.2);
+  background: linear-gradient(160deg, rgba(0, 245, 212, 0.07), rgba(59, 47, 110, 0.22));
+  color: #d3e6e2;
   border-bottom-left-radius: 6px;
 }
 
@@ -6081,12 +6214,62 @@ textarea {
 }
 
 .ai-bodyguard-bubble.is-error {
-  border-color: rgba(248, 113, 113, 0.55);
-  background: rgba(69, 10, 10, 0.55);
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(69, 10, 10, 0.5);
   color: #fecaca;
   display: inline-flex;
   align-items: flex-start;
   gap: 8px;
+}
+
+/* Курсор печати ответа. */
+.ai-bodyguard-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--lux-emerald);
+  box-shadow: 0 0 6px var(--lux-emerald-glow);
+  animation: ai-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes ai-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* «Да, погнали» — подтверждение тяжёлого скана медиатеки. */
+.ai-bodyguard-confirm {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 183, 20, 0.45);
+  background: linear-gradient(150deg, rgba(226, 183, 20, 0.2), rgba(226, 183, 20, 0.07));
+  color: #f5d66e;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ai-bodyguard-confirm:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--lux-gold);
+  box-shadow: 0 0 20px rgba(226, 183, 20, 0.28);
+}
+
+.ai-bodyguard-confirm:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .ai-bodyguard-error-icon {
@@ -6105,7 +6288,7 @@ textarea {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: rgba(254, 202, 202, 0.85);
+  background: var(--lux-emerald);
   animation: ai-scan-pulse 1.1s ease-in-out infinite;
 }
 
@@ -6161,7 +6344,7 @@ textarea {
   display: flex;
   gap: 8px;
   padding: 12px 14px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--lux-glass-border);
   pointer-events: auto;
 }
 
@@ -6169,20 +6352,22 @@ textarea {
   flex: 1;
   min-width: 0;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(0, 0, 0, 0.28);
-  color: #f8fafc;
+  border: 1px solid var(--lux-glass-border);
+  background: rgba(0, 0, 0, 0.35);
+  color: #e6ebf2;
   padding: 12px 14px;
   font: inherit;
   font-size: 0.9rem;
   outline: none;
   pointer-events: auto;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
   -webkit-user-select: text;
   user-select: text;
 }
 
 .ai-bodyguard-composer input:focus {
-  border-color: rgba(248, 113, 113, 0.55);
+  border-color: rgba(0, 245, 212, 0.45);
+  box-shadow: 0 0 16px rgba(0, 245, 212, 0.14);
 }
 
 .ai-bodyguard-send {
@@ -6193,11 +6378,17 @@ textarea {
   height: 44px;
   flex-shrink: 0;
   border-radius: 14px;
-  border: 1px solid rgba(248, 113, 113, 0.45);
-  background: rgba(248, 113, 113, 0.22);
-  color: #fecaca;
+  border: 1px solid rgba(0, 245, 212, 0.35);
+  background: linear-gradient(150deg, rgba(0, 245, 212, 0.18), rgba(91, 33, 182, 0.18));
+  color: var(--lux-emerald);
   cursor: pointer;
   pointer-events: auto;
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ai-bodyguard-send:hover:not(:disabled) {
+  border-color: var(--lux-emerald);
+  box-shadow: 0 0 18px rgba(0, 245, 212, 0.25);
 }
 
 .ai-bodyguard-send:disabled {

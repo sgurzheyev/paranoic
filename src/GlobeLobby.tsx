@@ -38,6 +38,7 @@ import {
   startGemPulse,
 } from './mapGemLayers';
 import { buildVisibleGemsContext, gemMapPreviewUrl, type MapGem } from './mapGems';
+import { buildMediaLibraryIndex, formatMediaLibraryBlock } from './mediaLibrary';
 import { fetchMemoryGems, moveOwnedGem } from './memoryGems';
 import { buildGemMarkerElement } from './mapGemMarkers';
 import { configureGemImageElement } from './gemImage';
@@ -710,9 +711,9 @@ export default function GlobeLobby({
     }
   }, [gems, mapReady, showGems]);
 
-  /** Загрузка капсул памяти — только при включённом слое «Капсулы памяти». */
+  /** Капсулы нужны слою «Капсулы памяти» и медиатеке секретаря. */
   useEffect(() => {
-    if (!mapReady || !showGems) return;
+    if (!mapReady || (!showGems && !aiOpen)) return;
     let cancelled = false;
     void (async () => {
       const memory = await fetchMemoryGems();
@@ -721,7 +722,7 @@ export default function GlobeLobby({
     return () => {
       cancelled = true;
     };
-  }, [mapReady, showGems]);
+  }, [mapReady, showGems, aiOpen]);
 
   /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */
   useEffect(() => {
@@ -975,6 +976,14 @@ export default function GlobeLobby({
     });
   };
 
+  /** Метаданные фото/видео семьи для секретаря. */
+  const mediaLibrary = useMemo(
+    () => buildMediaLibraryIndex(gems, authorLabel),
+    // authorLabel читает peopleRef.current, поэтому пересчёт привязан к people.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [gems, people]
+  );
+
   const collectSituationContext = async () => {
     const map = mapRef.current;
     const bounds = map?.getBounds() ?? null;
@@ -1039,6 +1048,7 @@ export default function GlobeLobby({
       placeLabel,
       contacts: contactRows,
       gemsContext,
+      mediaLibraryContext: formatMediaLibraryBlock(mediaLibrary),
       p2pStatus: live?.currentStatus ?? null,
       callState: live?.currentCallState ?? null,
     });
@@ -1316,7 +1326,7 @@ export default function GlobeLobby({
                   setLayersOpen(false);
                   setAiOpen(true);
                 }}
-                aria-label="ИИ-телохранитель"
+                aria-label="Секретарь — ИИ-агент"
                 title="Секретарь"
                 aria-pressed={aiOpen}
               >
@@ -1413,6 +1423,7 @@ export default function GlobeLobby({
       {aiOpen && (
         <AiBodyguardChat
           collectSituationContext={collectSituationContext}
+          getMediaLibrary={() => mediaLibrary}
           onClose={() => setAiOpen(false)}
         />
       )}

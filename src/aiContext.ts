@@ -24,6 +24,8 @@ export type AiRealtimeContextInput = {
   contacts: AiContactSnapshot[];
   /** Уже собранный текст капсул на карте (опционально). */
   gemsContext?: string;
+  /** Метаданные фото/видео семьи (см. mediaLibrary.formatMediaLibraryBlock). */
+  mediaLibraryContext?: string;
   p2pStatus?: P2PStatus | null;
   callState?: CallState | null;
   peerLabel?: string | null;
@@ -140,6 +142,10 @@ export function buildRealtimeSystemBlock(input: AiRealtimeContextInput): string 
     formatContacts(input.contacts),
     `Статус связи: ${formatConnection(input)}`,
   ];
+  if (input.mediaLibraryContext?.trim()) {
+    lines.push('Медиатека семьи (фото/видео из капсул всех связанных аккаунтов):');
+    lines.push(input.mediaLibraryContext.trim());
+  }
   if (input.gemsContext?.trim()) {
     lines.push('Капсулы памяти в текущем обзоре карты:', input.gemsContext.trim());
   }
