@@ -304,22 +304,37 @@ export default function ProfileModal({
           />
         </label>
 
-        <div className="profile-share-row">
-          <div className="profile-share-card profile-share-card--compact">
-            <p className="profile-share-label">
-              <Link2 size={14} /> {t('profileModal.magicLink')}
-            </p>
-            <p className="profile-share-url mono-box profile-share-url--truncate">{shareLink}</p>
-            <button type="button" className="profile-icon-copy" onClick={() => void copyShareLink()} aria-label={t('profileModal.shareLink')}>
-              {copied ? <Check size={15} /> : <Copy size={15} />}
-            </button>
+        <div className="profile-share-stack">
+          <div className="profile-share-card profile-share-card--stacked">
+            <div className="profile-share-card-head">
+              <p className="profile-share-label">
+                <Link2 size={14} /> {t('profileModal.magicLink')}
+              </p>
+              <button
+                type="button"
+                className={`profile-icon-copy${copied ? ' is-copied' : ''}`}
+                onClick={() => void copyShareLink()}
+                aria-label={copied ? t('profileModal.copied') : t('profileModal.copyLink')}
+              >
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+              </button>
+            </div>
+            <p className="profile-share-url mono-box">{shareLink}</p>
           </div>
-          <div className="profile-share-card profile-share-card--compact">
-            <p className="profile-share-label">{t('profileModal.userId')}</p>
-            <p className="profile-share-url mono-box profile-share-url--truncate">{identity.id}</p>
-            <button type="button" className="profile-icon-copy" onClick={() => void copyUserId()} aria-label={t('profileModal.copyId')}>
-              {copiedId ? <Check size={15} /> : <Copy size={15} />}
-            </button>
+
+          <div className="profile-share-card profile-share-card--stacked">
+            <div className="profile-share-card-head">
+              <p className="profile-share-label">{t('profileModal.userId')}</p>
+              <button
+                type="button"
+                className={`profile-icon-copy${copiedId ? ' is-copied' : ''}`}
+                onClick={() => void copyUserId()}
+                aria-label={copiedId ? t('profileModal.copied') : t('profileModal.copyId')}
+              >
+                {copiedId ? <Check size={15} /> : <Copy size={15} />}
+              </button>
+            </div>
+            <p className="profile-share-url mono-box">{identity.id}</p>
           </div>
         </div>
 
