@@ -116,6 +116,24 @@ export function whenMapStyleReady(
   };
 }
 
+export function applyMapThemePreset(
+  map: StyleReadyMap | null | undefined,
+  preset: MapboxLightPreset
+): boolean {
+  if (!map?.setConfigProperty) return false;
+  try {
+    if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return false;
+  } catch {
+    return false;
+  }
+  try {
+    map.setConfigProperty('basemap', 'lightPreset', preset);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function applyMapboxStandardNight(map: StyleReadyMap | null | undefined): boolean {
   if (!map?.setConfigProperty) return false;
   try {

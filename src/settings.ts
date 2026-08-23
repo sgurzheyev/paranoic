@@ -1,4 +1,4 @@
-/** Локальные настройки приложения (приватность, уведомления, язык). */
+import { applyThemeSpectrum, themeSpectrumFromSettings } from './themeSpectrum';
 
 export type AppLanguage =
   | 'en'
@@ -58,6 +58,8 @@ export type AppSettings = {
   powerSaving: boolean;
   /** Язык интерфейса. */
   language: AppLanguage;
+  /** Zip Lift theme position 0–100. */
+  themeSpectrum: number;
 };
 
 const STORAGE_KEY = 'paranoic-settings-v1';
@@ -69,6 +71,7 @@ const DEFAULTS: AppSettings = {
   notificationPreview: true,
   powerSaving: false,
   language: 'en',
+  themeSpectrum: 0,
 };
 
 export function normalizeLanguage(raw: unknown): AppLanguage {
@@ -102,6 +105,10 @@ export function loadSettings(): AppSettings {
           : Boolean(parsed.notificationPreview),
       powerSaving: Boolean(parsed.powerSaving),
       language: normalizeLanguage(parsed.language),
+      themeSpectrum:
+        typeof parsed.themeSpectrum === 'number' && Number.isFinite(parsed.themeSpectrum)
+          ? Math.max(0, Math.min(100, Math.round(parsed.themeSpectrum)))
+          : DEFAULTS.themeSpectrum,
     };
   } catch {
     return { ...DEFAULTS };
@@ -122,7 +129,7 @@ export function applySettingsSideEffects(settings: AppSettings = loadSettings())
   const locale = languageLocale(settings.language);
   document.documentElement.lang = locale;
   document.documentElement.dir = settings.language === 'ar' ? 'rtl' : 'ltr';
-  document.documentElement.classList.toggle('theme-ua', settings.language === 'ua');
+  applyThemeSpectrum(themeSpectrumFromSettings(settings.themeSpectrum));
   document.documentElement.classList.toggle('power-saving', settings.powerSaving);
   document.body.classList.toggle('power-saving', settings.powerSaving);
 }

@@ -22,12 +22,18 @@ import {
 import { initials } from './identity';
 import { useLanguage } from './i18n';
 import {
+  applyMapThemePreset,
   applyMapboxAccessToken,
-  applyMapboxStandardNight,
-  applyUaMapTheme,
   MAPBOX_STANDARD_STYLE_WITH_CONFIG,
   whenMapStyleReady,
 } from './lib/mapbox';
+import { loadSettings } from './settings';
+import {
+  THEME_SPECTRUM_EVENT,
+  interpolateTheme,
+  themeSpectrumFromSettings,
+  type ThemeSpectrumDetail,
+} from './themeSpectrum';
 import ParanoicLogo from './ParanoicLogo';
 import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 import { ANTARCTICA, type PresenceUser } from './presence';
@@ -253,7 +259,7 @@ export default function GlobeLobby({
   currentUserId = '',
   active = true,
 }: GlobeLobbyProps) {
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -561,8 +567,8 @@ export default function GlobeLobby({
     }, 700);
 
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
-      applyMapboxStandardNight(readyMap);
-      if (language === 'ua') applyUaMapTheme(readyMap);
+      const t = themeSpectrumFromSettings(loadSettings().themeSpectrum);
+      applyMapThemePreset(readyMap, interpolateTheme(t).mapPreset);
       forceResize();
       setMapReady(true);
       setMapBootDone(true);
@@ -764,11 +770,26 @@ export default function GlobeLobby({
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map) return;
-    return whenMapStyleReady(map, (readyMap) => {
-      if (language === 'ua') applyUaMapTheme(readyMap);
-      else applyMapboxStandardNight(readyMap);
-    });
-  }, [language, mapReady]);
+
+    const applyFromDetail = (detail: ThemeSpectrumDetail) => {
+      whenMapStyleReady(map, (readyMap) => {
+        applyMapThemePreset(readyMap, detail.mapPreset);
+      });
+    };
+
+    const t0 = themeSpectrumFromSettings(loadSettings().themeSpectrum);
+    const theme0 = interpolateTheme(t0);
+    applyFromDetail({ t: t0, mapPreset: theme0.mapPreset, stopId: theme0.stopId });
+
+    const onTheme = (event: Event) => {
+      const detail = (event as CustomEvent<ThemeSpectrumDetail>).detail;
+      if (!detail) return;
+      applyFromDetail(detail);
+    };
+
+    window.addEventListener(THEME_SPECTRUM_EVENT, onTheme);
+    return () => window.removeEventListener(THEME_SPECTRUM_EVENT, onTheme);
+  }, [mapReady]);
 
   /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */
   useEffect(() => {

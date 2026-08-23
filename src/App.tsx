@@ -3248,7 +3248,7 @@ export default function App() {
 
   const shellStyle =
     appMode === 'paranoic'
-      ? ({ background: identity.themeFon } as React.CSSProperties)
+      ? ({ background: 'var(--app-shell-bg, #0a0b0e)' } as React.CSSProperties)
       : undefined;
 
   return (

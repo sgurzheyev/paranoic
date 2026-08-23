@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, Ghost, ImagePlus, Link2, LogOut, Timer, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Copy, ImagePlus, Link2, LogOut, X } from 'lucide-react';
 import Avatar from './Avatar';
 import { useLanguage } from './i18n';
+import ProfilePrivacyIcons from './ProfilePrivacyIcons';
+import ZipLiftSlider from './ZipLiftSlider';
 import {
   buildMagicLink,
   forcePersistSession,
-  THEME_FON_PRESETS,
   updateIdentity,
   validateUsername,
   type UserIdentity,
 } from './identity';
 import { assertUsernameAvailable, isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
 import { saveSettings, type AppSettings } from './settings';
+import { migrateThemeSpectrumFromFon, shellBackgroundAt } from './themeSpectrum';
 
 type ProfileModalProps = {
   identity: UserIdentity;
@@ -21,42 +23,6 @@ type ProfileModalProps = {
   onSettingsChange: (next: AppSettings) => void;
   onSignOut?: () => void | Promise<void>;
 };
-
-function IosToggle({
-  checked,
-  onChange,
-  label,
-  description,
-  icon,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  description: string;
-  icon: ReactNode;
-}) {
-  return (
-    <div className="ios-toggle-row">
-      <div className="ios-toggle-copy">
-        <div className="ios-toggle-label">
-          {icon}
-          <span>{label}</span>
-        </div>
-        <p>{description}</p>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        className={`ios-switch ${checked ? 'on' : ''}`}
-        onClick={() => onChange(!checked)}
-      >
-        <span className="ios-switch-knob" />
-      </button>
-    </div>
-  );
-}
 
 export default function ProfileModal({
   identity,
@@ -70,7 +36,9 @@ export default function ProfileModal({
   const [name, setName] = useState(identity.name);
   const [username, setUsername] = useState(identity.username || '');
   const [avatarUrl, setAvatarUrl] = useState(identity.avatarUrl);
-  const [themeFon, setThemeFon] = useState(identity.themeFon);
+  const [themeSpectrum, setThemeSpectrum] = useState(
+    settings.themeSpectrum ?? migrateThemeSpectrumFromFon(identity.themeFon)
+  );
   const [ghostMode, setGhostMode] = useState(settings.ghostMode);
   const [ephemeral24h, setEphemeral24h] = useState(settings.ephemeral24h);
   const [busy, setBusy] = useState(false);
@@ -78,11 +46,11 @@ export default function ProfileModal({
   const [error, setError] = useState('');
   const [usernameHint, setUsernameHint] = useState('');
   const [password, setPassword] = useState('');
-  const [passwordHint, setPasswordHint] = useState('');
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const themeSnapshot = useRef(themeSpectrum);
 
   const previewIdentity = useMemo(
     () => ({ ...identity, username: username.trim().toLowerCase() }),
@@ -147,6 +115,20 @@ export default function ProfileModal({
     onSettingsChange(saved);
   };
 
+  const onSpectrumChange = (next: number) => {
+    setThemeSpectrum(next);
+    const saved = saveSettings({ themeSpectrum: next });
+    onSettingsChange(saved);
+  };
+
+  const handleDismiss = () => {
+    if (themeSpectrum !== themeSnapshot.current) {
+      const saved = saveSettings({ themeSpectrum: themeSnapshot.current });
+      onSettingsChange(saved);
+    }
+    onClose();
+  };
+
   const copyShareLink = async () => {
     try {
       await navigator.clipboard.writeText(shareLink);
@@ -202,13 +184,16 @@ export default function ProfileModal({
           return;
         }
       }
+      const shellBg = shellBackgroundAt(themeSpectrum / 100);
       const next = updateIdentity({
         name: name.trim() || t('common.you'),
         username: userCheck.value,
         avatarUrl,
-        themeFon,
+        themeFon: shellBg,
       });
       applyPrivacy({ ghostMode, ephemeral24h });
+      saveSettings({ themeSpectrum });
+      themeSnapshot.current = themeSpectrum;
       await syncProfileToSupabase(next, password.trim() ? { password: password.trim() } : undefined);
       const saved = password.trim() ? forcePersistSession(next) : next;
       if (password.trim()) setPassword('');
@@ -222,159 +207,120 @@ export default function ProfileModal({
   };
 
   return (
-    <div className="profile-modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="profile-modal-backdrop" role="presentation" onClick={handleDismiss}>
       <div
-        className="profile-modal"
+        className="profile-modal profile-modal--compact"
         role="dialog"
         aria-labelledby="profile-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="profile-modal-head">
           <h2 id="profile-modal-title">{t('profileModal.title')}</h2>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}>
+          <button type="button" className="icon-btn" onClick={handleDismiss} aria-label={t('common.close')}>
             <X size={16} />
           </button>
         </div>
 
-        <div className="profile-modal-avatar-block">
-          <Avatar name={name || identity.name} color={identity.color} avatarUrl={avatarUrl} size="lg" />
-          <button
-            type="button"
-            className="accept-file-btn"
-            disabled={uploading}
-            onClick={() => fileRef.current?.click()}
-          >
-            <ImagePlus size={16} />
-            {uploading
-              ? t('profileModal.uploading')
-              : avatarUrl
-                ? t('profileModal.changePhoto')
-                : t('profileModal.uploadPhoto')}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(e) => {
-              void onPickAvatar(e.target.files?.[0]);
-              e.target.value = '';
-            }}
+        <div className="profile-modal-top-row">
+          <div className="profile-modal-avatar-block profile-modal-avatar-block--compact">
+            <Avatar name={name || identity.name} color={identity.color} avatarUrl={avatarUrl} size="lg" />
+            <button
+              type="button"
+              className="profile-photo-chip"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+            >
+              <ImagePlus size={14} />
+              {uploading ? t('profileModal.uploading') : avatarUrl ? t('profileModal.changePhoto') : t('profileModal.uploadPhoto')}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                void onPickAvatar(e.target.files?.[0]);
+                e.target.value = '';
+              }}
+            />
+          </div>
+          <ProfilePrivacyIcons
+            ghostMode={ghostMode}
+            ephemeral24h={ephemeral24h}
+            onGhostMode={(next) => applyPrivacy({ ghostMode: next })}
+            onEphemeral={(next) => applyPrivacy({ ephemeral24h: next })}
+            ghostLabel={t('profileModal.ghostMode')}
+            ephemeralLabel={t('profileModal.ephemeral')}
+            disabled={busy || signingOut}
           />
         </div>
 
-        <label className="profile-field">
-          <span>{t('profileModal.displayName')}</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={32}
-            placeholder={t('profileModal.displayNamePlaceholder')}
-          />
-        </label>
+        <ZipLiftSlider
+          value={themeSpectrum}
+          onChange={onSpectrumChange}
+          disabled={busy || signingOut}
+        />
 
-        <label className="profile-field">
-          <span>{t('profileModal.username')}</span>
-          <div className="username-input-row">
-            <span className="username-at">@</span>
+        <div className="profile-fields-grid">
+          <label className="profile-field">
+            <span>{t('profileModal.displayName')}</span>
             <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
-              maxLength={24}
-              placeholder="gurgini"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              aria-describedby="username-hint"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={32}
+              placeholder={t('profileModal.displayNamePlaceholder')}
             />
-          </div>
-          <p id="username-hint" className="profile-field-hint">
-            {usernameHint || t('profileModal.usernameHintDefault')}
-          </p>
-        </label>
+          </label>
 
-        <label className="profile-field">
+          <label className="profile-field">
+            <span>{t('profileModal.username')}</span>
+            <div className="username-input-row">
+              <span className="username-at">@</span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
+                maxLength={24}
+                placeholder="gurgini"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-describedby="username-hint"
+              />
+            </div>
+            <p id="username-hint" className="profile-field-hint">
+              {usernameHint || t('profileModal.usernameHintDefault')}
+            </p>
+          </label>
+        </div>
+
+        <label className="profile-field profile-field--inline">
           <span>{t('profileModal.password')}</span>
           <input
             type="password"
             value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setPasswordHint(
-                e.target.value.trim()
-                  ? t('profileModal.passwordHintSet')
-                  : t('profileModal.passwordHintEmpty')
-              );
-            }}
+            onChange={(e) => setPassword(e.target.value)}
             placeholder={t('profileModal.passwordShort')}
             autoComplete="new-password"
           />
-          <p className="profile-field-hint">{passwordHint || t('profileModal.passwordHintDefault')}</p>
         </label>
 
-        <div className="profile-share-card">
-          <p className="profile-share-label">
-            <Link2 size={14} /> {t('profileModal.magicLink')}
-          </p>
-          <p className="profile-share-url mono-box">{shareLink}</p>
-          <button type="button" className="accept-file-btn" onClick={() => void copyShareLink()}>
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-            {copied ? t('profileModal.copied') : t('profileModal.shareLink')}
-          </button>
-        </div>
-
-        <div className="profile-share-card profile-userid-card">
-          <p className="profile-share-label">{t('profileModal.userId')}</p>
-          <p className="profile-share-url mono-box">{identity.id}</p>
-          <button
-            type="button"
-            className="accept-file-btn"
-            onClick={() => void copyUserId()}
-            aria-label={t('profileModal.copyId')}
-          >
-            {copiedId ? <Check size={16} /> : <Copy size={16} />}
-            {copiedId ? t('profileModal.copied') : t('profileModal.copyId')}
-          </button>
-        </div>
-
-        <div className="profile-field">
-          <span>{t('profileModal.themeBackground')}</span>
-          <div className="theme-fon-grid">
-            {THEME_FON_PRESETS.map((preset) => {
-              const active = themeFon === preset.value;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className={`theme-fon-swatch ${active ? 'active' : ''}`}
-                  style={{ background: preset.value }}
-                  onClick={() => setThemeFon(preset.value)}
-                  aria-label={preset.label}
-                  title={preset.label}
-                >
-                  {active && <Check size={16} />}
-                </button>
-              );
-            })}
+        <div className="profile-share-row">
+          <div className="profile-share-card profile-share-card--compact">
+            <p className="profile-share-label">
+              <Link2 size={14} /> {t('profileModal.magicLink')}
+            </p>
+            <p className="profile-share-url mono-box profile-share-url--truncate">{shareLink}</p>
+            <button type="button" className="profile-icon-copy" onClick={() => void copyShareLink()} aria-label={t('profileModal.shareLink')}>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+            </button>
           </div>
-        </div>
-
-        <div className="profile-privacy-card">
-          <p className="profile-privacy-title">{t('profileModal.privacyTitle')}</p>
-          <IosToggle
-            checked={ghostMode}
-            onChange={(next) => applyPrivacy({ ghostMode: next })}
-            label={t('profileModal.ghostMode')}
-            description={t('profileModal.ghostModeDesc')}
-            icon={<Ghost size={16} />}
-          />
-          <IosToggle
-            checked={ephemeral24h}
-            onChange={(next) => applyPrivacy({ ephemeral24h: next })}
-            label={t('profileModal.ephemeral')}
-            description={t('profileModal.ephemeralDesc')}
-            icon={<Timer size={16} />}
-          />
+          <div className="profile-share-card profile-share-card--compact">
+            <p className="profile-share-label">{t('profileModal.userId')}</p>
+            <p className="profile-share-url mono-box profile-share-url--truncate">{identity.id}</p>
+            <button type="button" className="profile-icon-copy" onClick={() => void copyUserId()} aria-label={t('profileModal.copyId')}>
+              {copiedId ? <Check size={15} /> : <Copy size={15} />}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -383,26 +329,28 @@ export default function ProfileModal({
           </p>
         )}
 
-        <button
-          type="button"
-          className="mega-btn primary compact"
-          disabled={busy || uploading || signingOut}
-          onClick={() => void save()}
-        >
-          {busy ? t('profileModal.saving') : t('profileModal.save')}
-        </button>
-
-        {onSignOut && (
+        <div className="profile-modal-actions">
           <button
             type="button"
-            className="mega-btn profile-logout-btn compact"
-            disabled={signingOut || busy}
-            onClick={() => void handleSignOut()}
+            className="mega-btn primary compact"
+            disabled={busy || uploading || signingOut}
+            onClick={() => void save()}
           >
-            <LogOut size={18} />
-            {signingOut ? t('profileModal.signingOut') : t('profileModal.signOut')}
+            {busy ? t('profileModal.saving') : t('profileModal.save')}
           </button>
-        )}
+          {onSignOut && (
+            <button
+              type="button"
+              className="profile-logout-icon"
+              disabled={signingOut || busy}
+              onClick={() => void handleSignOut()}
+              aria-label={signingOut ? t('profileModal.signingOut') : t('profileModal.signOut')}
+              title={t('profileModal.signOut')}
+            >
+              <LogOut size={17} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
