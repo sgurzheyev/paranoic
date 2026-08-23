@@ -3,6 +3,8 @@
  * Рингтон: HTMLAudioElement.loop + unlock после первого жеста (autoplay policy).
  */
 
+import { loadSettings } from './settings';
+
 let audioCtx: AudioContext | null = null;
 let ringAudio: HTMLAudioElement | null = null;
 let ringDataUrl: string | null = null;
@@ -266,11 +268,13 @@ export function notifyIfHidden(
 ): void {
   if (typeof document === 'undefined') return;
   if (!document.hidden && document.visibilityState === 'visible') return;
-  if (!canNotify()) return;
   try {
+    const s = loadSettings();
+    if (!s.notificationsEnabled) return;
+    if (!canNotify()) return;
     closeActiveNotification();
     const n = new Notification(title, {
-      body: options?.body,
+      body: s.notificationPreview ? options?.body : undefined,
       tag: options?.tag ?? 'paranoic',
       silent: true,
       requireInteraction: options?.tag === 'paranoic-call',

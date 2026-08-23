@@ -398,3 +398,55 @@ export async function loadLastMessagePreviews(
   }
   return out;
 }
+
+export type OwnMediaArchiveItem = {
+  id: string;
+  peerId: string;
+  conversationId: string;
+  message: StoredMessage;
+  category: Extract<ChatMessageCategory, 'media' | 'files' | 'voice'>;
+  createdAt: number;
+  timeLabel: string;
+};
+
+/** Исходящие медиа/файлы/голос из локальной истории — архив профиля. */
+export async function loadOwnMediaArchive(
+  selfId: string,
+  limit = 48
+): Promise<OwnMediaArchiveItem[]> {
+  const out: OwnMediaArchiveItem[] = [];
+  if (!selfId) return out;
+  try {
+    const keys = await messagesDb.keys();
+    for (const raw of keys) {
+      const key = String(raw);
+      const pair = parseChatKey(key);
+      if (!pair) continue;
+      const [a, b] = pair;
+      const peerId = a === selfId ? b : b === selfId ? a : null;
+      if (!peerId) continue;
+      const convId = conversationId(a, b);
+      const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
+      for (let i = history.length - 1; i >= 0; i--) {
+        const message = history[i]!;
+        if (!message.mine) continue;
+        if (message.kind !== 'media' && message.kind !== 'file-transfer') continue;
+        const category = classifyMessageCategory(message);
+        if (category !== 'media' && category !== 'files' && category !== 'voice') continue;
+        out.push({
+          id: message.id,
+          peerId,
+          conversationId: convId,
+          message,
+          category,
+          createdAt: typeof message.createdAt === 'number' ? message.createdAt : 0,
+          timeLabel: previewTimeLabel(message),
+        });
+      }
+    }
+  } catch {
+    /* */
+  }
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out.slice(0, limit);
+}

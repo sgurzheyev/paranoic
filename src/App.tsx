@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import {
   Phone,
   MessageCircle,
-  Copy,
   Check,
   CheckCheck,
   Clock,
@@ -11,22 +10,18 @@ import {
   Send,
   ArrowLeft,
   FileDown,
-  Link2,
-  Pencil,
-  Settings2,
   Paperclip,
-  Ghost,
-  Timer,
   RefreshCw,
   PanelLeft,
   ShieldCheck,
   Shield,
   Ban,
-  Globe2,
   UserCheck,
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
 import ChatSearchPanel from './ChatSearchPanel';
+import SettingsPanel from './SettingsPanel';
+import ProfileHome from './ProfileHome';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
@@ -126,7 +121,7 @@ import {
   type LastMessagePreview,
   type StoredMessage,
 } from './storage';
-import { loadSettings, saveSettings, type AppSettings } from './settings';
+import { applySettingsSideEffects, loadSettings, saveSettings, type AppSettings } from './settings';
 import {
   enqueueOutbox,
   listOutbox,
@@ -148,7 +143,6 @@ import {
   personalInboxRoom,
   resolveMagicRoute,
   restoreIdentityFromProfile,
-  updateIdentity,
   looksLikeUsername,
   type UserIdentity,
 } from './identity';
@@ -204,7 +198,11 @@ export default function App() {
   const mediaPresence = useMediaDevicePresence();
   const callMediaBlocked = isCallMediaBlocked(mediaPresence);
   const [identity, setIdentity] = useState<UserIdentity>(() => getOrCreateIdentity());
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const loaded = loadSettings();
+    applySettingsSideEffects(loaded);
+    return loaded;
+  });
   /** checking → login (AuthScreen) → ok (приложение). */
   const [authGate, setAuthGate] = useState<'checking' | 'login' | 'ok'>(() =>
     hasSupabaseConfig() ? 'checking' : 'ok'
@@ -258,10 +256,9 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
   const [geo, setGeo] = useState<GeoPoint | null>(null);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(identity.name);
   const [profileOpen, setProfileOpen] = useState(false);
   const [peerProfileOpen, setPeerProfileOpen] = useState(false);
+  const [accountHint, setAccountHint] = useState('');
   const [adminOpen, setAdminOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isBanned, setIsBanned] = useState(false);
@@ -404,6 +401,23 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (authGate !== 'ok' || !hasSupabaseConfig()) {
+      setAccountHint('');
+      return;
+    }
+    let cancelled = false;
+    void peekAuthSession().then((session) => {
+      if (cancelled) return;
+      const email = session?.user?.email?.trim();
+      const phone = session?.user?.phone?.trim();
+      setAccountHint(email || phone || '');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authGate, identity.id]);
 
   const handleAuthenticated = (next: UserIdentity) => {
     const persisted = forcePersistSession(next);
@@ -3060,6 +3074,7 @@ export default function App() {
   const applyIdentity = (next: UserIdentity) => {
     setIdentity(next);
     identityRef.current = next;
+    setMagicLink(buildMagicLink(next));
     p2pRef.current?.setLocalIdentity({
       userId: next.id,
       name: next.name,
@@ -3098,7 +3113,6 @@ export default function App() {
     setIdentity(next);
     identityRef.current = next;
     setAuthGate('login');
-    setNameDraft(next.name);
     setContacts([]);
     setMessages([]);
     setPeerId(null);
@@ -3144,12 +3158,6 @@ export default function App() {
     setScreen('home');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authGate]);
-
-  const saveName = () => {
-    const next = updateIdentity({ name: nameDraft.trim() || 'Я' });
-    applyIdentity(next);
-    setEditingName(false);
-  };
 
   const connected = p2pStatus === 'connected';
   const callLive = callState === 'calling' || callState === 'in-call';
@@ -3603,170 +3611,35 @@ export default function App() {
                 )}
 
                 {mainTab === 'settings' && (
-                  <div className="tab-panel liquid-glass-card contacts-panel settings-tab">
-                    <div className="contacts-head">
-                      <h2>Настройки</h2>
-                    </div>
-                    <div className="profile-privacy-card" style={{ marginTop: 8 }}>
-                      <p className="profile-privacy-title">Приватность</p>
-                      <div className="ios-toggle-row">
-                        <div className="ios-toggle-copy">
-                          <div className="ios-toggle-label">
-                            <Ghost size={16} />
-                            <span>Ghost Mode</span>
-                          </div>
-                          <p>На карте вы в Антарктиде, GPS выключен.</p>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={settings.ghostMode}
-                          className={`ios-switch ${settings.ghostMode ? 'on' : ''}`}
-                          onClick={() => {
-                            const saved = saveSettings({ ghostMode: !settings.ghostMode });
-                            setSettings(saved);
-                          }}
-                        />
-                      </div>
-                      <div className="ios-toggle-row">
-                        <div className="ios-toggle-copy">
-                          <div className="ios-toggle-label">
-                            <Timer size={16} />
-                            <span>Удалять через 24 часа</span>
-                          </div>
-                          <p>Старые сообщения стираются из локального хранилища.</p>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={settings.ephemeral24h}
-                          className={`ios-switch ${settings.ephemeral24h ? 'on' : ''}`}
-                          onClick={() => {
-                            const saved = saveSettings({
-                              ephemeral24h: !settings.ephemeral24h,
-                            });
-                            setSettings(saved);
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="mega-btn primary compact"
-                      style={{ marginTop: 16 }}
-                      onClick={() => setAppMode('family')}
-                    >
-                      <Globe2 size={16} />
-                      Открыть карту семьи
-                    </button>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        className="mega-btn media compact"
-                        style={{ marginTop: 10 }}
-                        onClick={() => setAdminOpen(true)}
-                      >
-                        <ShieldCheck size={16} />
-                        Admin Panel
-                      </button>
-                    )}
-                  </div>
+                  <SettingsPanel
+                    settings={settings}
+                    isAdmin={isAdmin}
+                    onSettingsChange={setSettings}
+                    onOpenFamilyMap={() => setAppMode('family')}
+                    onOpenAdmin={() => setAdminOpen(true)}
+                  />
                 )}
 
                 {mainTab === 'profile' && (
-                  <>
-                    <div className="identity-card">
-                      <button
-                        type="button"
-                        className="avatar-hit"
-                        onClick={() => setProfileOpen(true)}
-                        aria-label="Открыть профиль"
-                      >
-                        <Avatar
-                          name={identity.name}
-                          color={identity.color}
-                          avatarUrl={identity.avatarUrl}
-                          online="self"
-                        />
-                      </button>
-                      <div className="identity-meta">
-                        {editingName ? (
-                          <div className="name-edit">
-                            <input
-                              value={nameDraft}
-                              onChange={(e) => setNameDraft(e.target.value)}
-                              maxLength={32}
-                              autoFocus
-                            />
-                            <button type="button" className="text-link" onClick={saveName}>
-                              Сохранить
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="name-btn"
-                            onClick={() => {
-                              setNameDraft(identity.name);
-                              setEditingName(true);
-                            }}
-                          >
-                            <span>{identity.name}</span>
-                            <Pencil size={14} />
-                          </button>
-                        )}
-                        <p className="mono-id">ID · {identity.id}</p>
-                        {settings.ghostMode && (
-                          <p className="ghost-mode-pill">
-                            <Ghost size={12} /> Ghost Mode · Антарктида
-                          </p>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="icon-btn profile-settings-btn"
-                        onClick={() => setProfileOpen(true)}
-                        aria-label="Редактировать профиль"
-                      >
-                        <Settings2 size={16} />
-                      </button>
-                    </div>
-
-                    <div className="room-card magic-card liquid-glass-card">
-                      <Link2 size={20} className="room-card-icon" />
-                      <p className="room-id-label">Ваша магическая ссылка</p>
-                      <p className="mono-box magic-url">{magicLink}</p>
-                      <button
-                        type="button"
-                        className="mega-btn primary compact"
-                        onClick={() => void copyMagicLink()}
-                      >
-                        {copied ? <Check size={18} /> : <Copy size={18} />}
-                        {copied ? 'Скопировано' : 'Скопировать ссылку'}
-                      </button>
-                      <p className="hint">
-                        {identity.username
-                          ? `Короткая ссылка: ?u=${identity.username}`
-                          : 'Задайте никнейм в профиле — ссылка станет короткой.'}
-                      </p>
-                    </div>
-
-                    {!connected ? (
-                      <p className="lead">
-                        Ссылка активна. Поделитесь ею — гости сохранят вас в контакты.
-                      </p>
-                    ) : (
-                      <p className="lead">
-                        На связи: <strong>{peerLabel}</strong>
-                      </p>
-                    )}
-
-                    {keyString && (
-                      <p className="hint muted-sep">
-                        E2EE активен · {hostingSelf ? 'свой инбокс' : 'гостевой'}
-                      </p>
-                    )}
-                  </>
+                  <ProfileHome
+                    identity={identity}
+                    magicLink={magicLink}
+                    accountHint={accountHint}
+                    ghostMode={settings.ghostMode}
+                    connected={connected}
+                    peerLabel={peerLabel}
+                    e2eeHint={
+                      keyString
+                        ? `E2EE активен · ${hostingSelf ? 'свой инбокс' : 'гостевой'}`
+                        : undefined
+                    }
+                    onIdentityChange={(next) => {
+                      applyIdentity(next);
+                    }}
+                    onOpenEditor={() => setProfileOpen(true)}
+                    onCopyMagicLink={() => void copyMagicLink()}
+                    copiedLink={copied}
+                  />
                 )}
               </>
             )}
