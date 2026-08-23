@@ -40,6 +40,7 @@ export const dePatch: LocalePatch = {
     noAccount: 'Kein Konto? Registrieren',
     confirmEmail: 'Bestätige deine E-Mail über den Link und melde dich dann an.',
     failed: 'Anmeldung fehlgeschlagen',
+    downloadAndroid: 'Android-App herunterladen',
   },
   chats: {
     title: 'Chats',

@@ -40,6 +40,7 @@ export const ptPatch: LocalePatch = {
     noAccount: 'Sem conta? Cadastre-se',
     confirmEmail: 'Confirme seu e-mail pelo link e depois entre.',
     failed: 'Não foi possível entrar',
+    downloadAndroid: 'Baixar app Android',
   },
   chats: {
     title: 'Conversas',

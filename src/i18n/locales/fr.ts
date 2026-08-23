@@ -40,6 +40,7 @@ export const frPatch: LocalePatch = {
     noAccount: 'Pas de compte ? S\'inscrire',
     confirmEmail: 'Confirmez votre e-mail via le lien, puis connectez-vous.',
     failed: 'Impossible de se connecter',
+    downloadAndroid: 'Télécharger l\'app Android',
   },
   chats: {
     title: 'Discussions',

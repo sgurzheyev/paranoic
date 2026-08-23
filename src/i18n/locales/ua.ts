@@ -40,6 +40,7 @@ export const uaPatch: LocalePatch = {
     noAccount: 'Немає облікового запису? Зареєструватися',
     confirmEmail: 'Підтвердіть email за посиланням з листа, потім увійдіть.',
     failed: 'Не вдалося увійти',
+    downloadAndroid: 'Завантажити додаток для Android',
   },
   chats: {
     title: 'Чати',

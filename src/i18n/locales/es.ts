@@ -40,6 +40,7 @@ export const esPatch: LocalePatch = {
     noAccount: '¿No tienes cuenta? Regístrate',
     confirmEmail: 'Confirma tu correo con el enlace y luego inicia sesión.',
     failed: 'No se pudo iniciar sesión',
+    downloadAndroid: 'Descargar app para Android',
   },
   chats: {
     title: 'Chats',

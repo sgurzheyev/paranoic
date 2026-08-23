@@ -1,3 +1,4 @@
+import { Download, Smartphone } from 'lucide-react';
 import { useState } from 'react';
 import { signInWithEmailPassword, signUpWithEmailPassword } from './authCredentials';
 import { useLanguage } from './i18n';
@@ -144,6 +145,14 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         <button type="button" className="auth-screen__toggle" disabled={busy} onClick={toggleMode}>
           {mode === 'login' ? t('auth.noAccount') : t('auth.haveAccount')}
         </button>
+
+        <a href="/app-release.apk" download className="auth-screen__download">
+          <span className="auth-screen__download-icon" aria-hidden>
+            <Smartphone size={15} strokeWidth={2} />
+            <Download size={13} strokeWidth={2.5} />
+          </span>
+          {t('auth.downloadAndroid')}
+        </a>
       </div>
     </div>
   );

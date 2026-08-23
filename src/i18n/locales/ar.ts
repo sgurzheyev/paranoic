@@ -40,6 +40,7 @@ export const arPatch: LocalePatch = {
     noAccount: 'ليس لديك حساب؟ سجّل',
     confirmEmail: 'أكّد بريدك عبر الرابط، ثم سجّل الدخول.',
     failed: 'تعذّر تسجيل الدخول',
+    downloadAndroid: 'تحميل تطبيق Android',
   },
   chats: {
     title: 'المحادثات',

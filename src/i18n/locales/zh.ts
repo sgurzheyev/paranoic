@@ -40,6 +40,7 @@ export const zhPatch: LocalePatch = {
     noAccount: '没有账户？注册',
     confirmEmail: '请通过邮件中的链接确认邮箱，然后登录。',
     failed: '无法登录',
+    downloadAndroid: '下载 Android 应用',
   },
   chats: {
     title: '聊天',

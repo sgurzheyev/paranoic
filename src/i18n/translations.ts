@@ -50,6 +50,7 @@ const en: TranslationDict = {
     noAccount: 'No account? Sign up',
     confirmEmail: 'Confirm your email via the link, then sign in.',
     failed: 'Could not sign in',
+    downloadAndroid: 'Download Android App',
   },
   chats: {
     title: 'Chats',
@@ -306,6 +307,7 @@ const ru: TranslationDict = {
     noAccount: 'Нет аккаунта? Создать',
     confirmEmail: 'Подтвердите email по ссылке из письма, затем войдите.',
     failed: 'Не удалось выполнить вход',
+    downloadAndroid: 'Скачать приложение для Android',
   },
   chats: {
     title: 'Чаты',
@@ -563,6 +565,7 @@ const pl: TranslationDict = {
     noAccount: 'Brak konta? Zarejestruj się',
     confirmEmail: 'Potwierdź email linkiem z wiadomości, potem zaloguj się.',
     failed: 'Nie udało się zalogować',
+    downloadAndroid: 'Pobierz aplikację na Androida',
   },
   chats: {
     title: 'Czaty',

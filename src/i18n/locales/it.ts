@@ -40,6 +40,7 @@ export const itPatch: LocalePatch = {
     noAccount: 'Nessun account? Registrati',
     confirmEmail: 'Conferma la tua email tramite il link, poi accedi.',
     failed: 'Impossibile accedere',
+    downloadAndroid: 'Scarica app Android',
   },
   chats: {
     title: 'Chat',

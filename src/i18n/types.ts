@@ -52,6 +52,7 @@ export type TranslationDict = {
     noAccount: string;
     confirmEmail: string;
     failed: string;
+    downloadAndroid: string;
   };
   chats: {
     title: string;
