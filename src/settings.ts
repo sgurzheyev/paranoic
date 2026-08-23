@@ -1,6 +1,47 @@
 /** Локальные настройки приложения (приватность, уведомления, язык). */
 
-export type AppLanguage = 'ru' | 'en';
+export type AppLanguage =
+  | 'ru'
+  | 'en'
+  | 'uk'
+  | 'de'
+  | 'fr'
+  | 'es'
+  | 'it'
+  | 'pt'
+  | 'pl'
+  | 'tr'
+  | 'ar'
+  | 'zh'
+  | 'ja'
+  | 'ko';
+
+export type AppLanguageOption = {
+  id: AppLanguage;
+  label: string;
+  /** BCP 47 tag for document.documentElement.lang */
+  locale: string;
+};
+
+/** Порядок в горизонтальном скролле настроек. */
+export const APP_LANGUAGES: AppLanguageOption[] = [
+  { id: 'ru', label: 'Русский', locale: 'ru' },
+  { id: 'en', label: 'English', locale: 'en' },
+  { id: 'uk', label: 'Українська', locale: 'uk' },
+  { id: 'de', label: 'Deutsch', locale: 'de' },
+  { id: 'fr', label: 'Français', locale: 'fr' },
+  { id: 'es', label: 'Español', locale: 'es' },
+  { id: 'it', label: 'Italiano', locale: 'it' },
+  { id: 'pt', label: 'Português', locale: 'pt' },
+  { id: 'pl', label: 'Polski', locale: 'pl' },
+  { id: 'tr', label: 'Türkçe', locale: 'tr' },
+  { id: 'ar', label: 'العربية', locale: 'ar' },
+  { id: 'zh', label: '中文', locale: 'zh-CN' },
+  { id: 'ja', label: '日本語', locale: 'ja' },
+  { id: 'ko', label: '한국어', locale: 'ko' },
+];
+
+const LANGUAGE_IDS = new Set<string>(APP_LANGUAGES.map((l) => l.id));
 
 export type AppSettings = {
   /** Скрыть реальный GPS — Presence шлёт Антарктиду. */
@@ -28,8 +69,13 @@ const DEFAULTS: AppSettings = {
   language: 'ru',
 };
 
-function normalizeLanguage(raw: unknown): AppLanguage {
-  return raw === 'en' ? 'en' : 'ru';
+export function normalizeLanguage(raw: unknown): AppLanguage {
+  if (typeof raw === 'string' && LANGUAGE_IDS.has(raw)) return raw as AppLanguage;
+  return DEFAULTS.language;
+}
+
+export function languageLocale(code: AppLanguage): string {
+  return APP_LANGUAGES.find((l) => l.id === code)?.locale ?? code;
 }
 
 export function loadSettings(): AppSettings {
@@ -67,7 +113,9 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
 /** Применить побочные эффекты (lang, класс энергосбережения). */
 export function applySettingsSideEffects(settings: AppSettings = loadSettings()): void {
   if (typeof document === 'undefined') return;
-  document.documentElement.lang = settings.language;
+  const locale = languageLocale(settings.language);
+  document.documentElement.lang = locale;
+  document.documentElement.dir = settings.language === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.classList.toggle('power-saving', settings.powerSaving);
   document.body.classList.toggle('power-saving', settings.powerSaving);
 }

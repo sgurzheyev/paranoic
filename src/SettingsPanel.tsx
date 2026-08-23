@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Bell,
   BellOff,
@@ -16,6 +16,7 @@ import {
 import { ensureNotifyPermission } from './notify';
 import { EPHEMERAL_TTL_MS, purgeExpiredMessages } from './storage';
 import {
+  APP_LANGUAGES,
   saveSettings,
   type AppLanguage,
   type AppSettings,
@@ -182,6 +183,15 @@ export default function SettingsPanel({
     patch({ language });
   };
 
+  const langRailRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const rail = langRailRef.current;
+    if (!rail) return;
+    const active = rail.querySelector<HTMLElement>('.settings-lang-btn.is-active');
+    active?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, [settings.language]);
+
   return (
     <div className="tab-panel liquid-glass-card contacts-panel settings-tab">
       <div className="contacts-head">
@@ -262,24 +272,31 @@ export default function SettingsPanel({
 
       <Section title="Язык интерфейса">
         <div className="settings-lang-row">
-          <div className="settings-row-icon">
+          <div className="settings-row-icon" aria-hidden>
             <Languages size={16} />
           </div>
-          <div className="settings-lang-options">
-            <button
-              type="button"
-              className={`settings-lang-btn${settings.language === 'ru' ? ' is-active' : ''}`}
-              onClick={() => setLanguage('ru')}
-            >
-              Русский
-            </button>
-            <button
-              type="button"
-              className={`settings-lang-btn${settings.language === 'en' ? ' is-active' : ''}`}
-              onClick={() => setLanguage('en')}
-            >
-              English
-            </button>
+          <div
+            ref={langRailRef}
+            className="settings-lang-options"
+            role="listbox"
+            aria-label="Язык интерфейса"
+            tabIndex={0}
+          >
+            {APP_LANGUAGES.map((lang) => {
+              const active = settings.language === lang.id;
+              return (
+                <button
+                  key={lang.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`settings-lang-btn${active ? ' is-active' : ''}`}
+                  onClick={() => setLanguage(lang.id)}
+                >
+                  {lang.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       </Section>
