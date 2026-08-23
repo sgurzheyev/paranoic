@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gem, ImagePlus, Lock, Type, Video, X } from 'lucide-react';
+import { useLanguage } from './i18n';
 import {
   FREE_MAP_GEM_LIMIT,
   createMapGem,
   isFreeGemLimitReached,
   uploadGemMedia,
+  type GemVisibility,
   type MapGem,
   type MapGemType,
 } from './mapGems';
@@ -35,7 +37,9 @@ export default function MemoryGemComposer({
   const [phase, setPhase] = useState<'idle' | 'upload' | 'save'>('idle');
   const [error, setError] = useState('');
   const [paywallOpen, setPaywallOpen] = useState(false);
+  const [visibility, setVisibility] = useState<GemVisibility>('family');
   const fileRef = useRef<HTMLInputElement>(null);
+  const { t } = useLanguage();
 
   useEffect(() => {
     return () => {
@@ -111,6 +115,7 @@ export default function MemoryGemComposer({
         type,
         mediaUrl,
         content: text.trim() || null,
+        visibility,
       });
       playSuccessSound();
       onCreated(gem);
@@ -256,6 +261,35 @@ export default function MemoryGemComposer({
               />
             </div>
           )}
+
+          <div className="gem-visibility-picker" role="radiogroup" aria-label={t('gems.visibility')}>
+            <p className="gem-visibility-label">{t('gems.visibility')}</p>
+            {(
+              [
+                ['private', 'gems.visibilityPrivate', 'gems.visibilityPrivateDesc'],
+                ['family', 'gems.visibilityFamily', 'gems.visibilityFamilyDesc'],
+                ['public', 'gems.visibilityPublic', 'gems.visibilityPublicDesc'],
+              ] as const
+            ).map(([vis, labelKey, descKey]) => (
+              <label
+                key={vis}
+                className={`gem-visibility-option${visibility === vis ? ' is-active' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="gem-visibility"
+                  value={vis}
+                  checked={visibility === vis}
+                  onChange={() => setVisibility(vis)}
+                  disabled={busy}
+                />
+                <span className="gem-visibility-copy">
+                  <strong>{t(labelKey)}</strong>
+                  <span>{t(descKey)}</span>
+                </span>
+              </label>
+            ))}
+          </div>
 
           {busy && (
             <div

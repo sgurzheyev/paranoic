@@ -42,6 +42,7 @@ import {
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
   blockUser,
+  bootstrapPeerRelations,
   isBlocked,
   isTrusted,
   loadBlockedIds,
@@ -421,6 +422,14 @@ export default function App() {
     };
   }, [authGate, identity.id]);
 
+  useEffect(() => {
+    if (authGate !== 'ok') return;
+    void bootstrapPeerRelations().then(({ trusted, blocked }) => {
+      setTrustedIds(trusted);
+      setBlockedIds(blocked);
+    });
+  }, [authGate, identity.id]);
+
   const handleAuthenticated = (next: UserIdentity) => {
     const persisted = forcePersistSession(next);
     applyIdentity(persisted);
@@ -430,6 +439,10 @@ export default function App() {
     setScreen('home');
     setSessionEpoch((n) => n + 1);
     void loadContacts().then(setContacts);
+    void bootstrapPeerRelations().then(({ trusted, blocked }) => {
+      setTrustedIds(trusted);
+      setBlockedIds(blocked);
+    });
   };
 
   const onlineIds = useMemo(
@@ -3226,7 +3239,7 @@ export default function App() {
   const handleBlockPeer = async () => {
     const id = activePeerId;
     if (!id) return;
-    blockUser(id);
+    await blockUser(id);
     setTrustedIds(loadTrustedIds());
     setBlockedIds(loadBlockedIds());
     setError(`«${peerLabel}» заблокирован. Сообщения и звонки от этого ID игнорируются.`);

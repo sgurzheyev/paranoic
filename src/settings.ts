@@ -10,7 +10,7 @@ export type AppLanguage =
   | 'zh'
   | 'pt'
   | 'ar'
-  | 'it';
+  | 'ua';
 
 export type AppLanguageOption = {
   id: AppLanguage;
@@ -32,11 +32,12 @@ export const APP_LANGUAGES: AppLanguageOption[] = [
   { id: 'zh', label: '中文', flag: '🇨🇳', locale: 'zh-CN' },
   { id: 'pt', label: 'Português', flag: '🇵🇹', locale: 'pt' },
   { id: 'ar', label: 'العربية', flag: '🇸🇦', locale: 'ar' },
-  { id: 'it', label: 'Italiano', flag: '🇮🇹', locale: 'it' },
+  { id: 'ua', label: 'Українська', flag: '🇺🇦', locale: 'uk' },
 ];
 
 const LEGACY_LANGUAGE_ALIASES: Record<string, AppLanguage> = {
-  uk: 'ru',
+  uk: 'ua',
+  it: 'en',
   tr: 'en',
   ja: 'en',
   ko: 'en',
@@ -121,6 +122,7 @@ export function applySettingsSideEffects(settings: AppSettings = loadSettings())
   const locale = languageLocale(settings.language);
   document.documentElement.lang = locale;
   document.documentElement.dir = settings.language === 'ar' ? 'rtl' : 'ltr';
+  document.documentElement.classList.toggle('theme-ua', settings.language === 'ua');
   document.documentElement.classList.toggle('power-saving', settings.powerSaving);
   document.body.classList.toggle('power-saving', settings.powerSaving);
 }

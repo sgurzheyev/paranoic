@@ -22,10 +22,13 @@ import { initials } from './identity';
 import GemMediaImage from './GemMediaImage';
 import {
   formatGemTime,
+  gemVisibility,
   isGemOwner,
   uploadGemMedia,
+  type GemVisibility,
   type MapGem,
 } from './mapGems';
+import { useLanguage } from './i18n';
 import {
   deleteOwnedGem,
   updateOwnedGem,
@@ -88,7 +91,7 @@ export default function MemoryGemDrawer({
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const [editPrivate, setEditPrivate] = useState(false);
+  const [editVisibility, setEditVisibility] = useState<GemVisibility>('public');
   const [editFile, setEditFile] = useState<File | null>(null);
   const [editPreview, setEditPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -105,6 +108,7 @@ export default function MemoryGemDrawer({
   const isOwner = Boolean(
     gem && isGemOwner(gem, currentUserId, { isAdmin, allowDevOverride: true })
   );
+  const { t } = useLanguage();
   const resolveAuthorRef = useRef(resolveAuthor);
   resolveAuthorRef.current = resolveAuthor;
 
@@ -162,7 +166,7 @@ export default function MemoryGemDrawer({
     if (!gem || !editing) return;
     setEditTitle(gem.content || '');
     setEditDescription(gem.description || '');
-    setEditPrivate(Boolean(gem.is_private));
+    setEditVisibility(gem ? gemVisibility(gem) : 'public');
   }, [gem, editing]);
 
   useEffect(() => {
@@ -232,9 +236,15 @@ export default function MemoryGemDrawer({
 
   if (!gem) return null;
 
+  const visibilityBadge = (vis: GemVisibility) => {
+    if (vis === 'private') return t('gems.privateBadge');
+    if (vis === 'family') return t('gems.familyBadge');
+    return t('gems.publicBadge');
+  };
+
   const typeLabel =
     gem.type === 'photo' ? 'Фото' : gem.type === 'video' ? 'Видео' : 'Текст';
-  const supportsPrivacy = gem.source === 'memory_gems';
+  const supportsPrivacy = true;
 
   const onTouchStart = (e: TouchEvent) => {
     if (editing) return;
@@ -356,7 +366,7 @@ export default function MemoryGemDrawer({
       const updated = await updateOwnedGem(gem, {
         content: editTitle.trim() || null,
         description: supportsPrivacy ? editDescription.trim() || null : undefined,
-        is_private: supportsPrivacy ? editPrivate : undefined,
+        visibility: editVisibility,
         mediaUrl,
         mediaUrls,
         type: mediaUrl ? type : undefined,
@@ -394,7 +404,7 @@ export default function MemoryGemDrawer({
             <div>
               <p className="memory-gem-eyebrow">
                 Memory Gem · {typeLabel}
-                {gem.is_private ? ' · Приватная' : ''}
+                {` · ${visibilityBadge(gemVisibility(gem))}`}
               </p>
               <p className="memory-gem-meta">
                 {authorLabel(gem.author_id)}
@@ -464,14 +474,33 @@ export default function MemoryGemDrawer({
                     placeholder="Короткое описание"
                   />
                 </label>
-                <label className="memory-gem-edit__toggle">
-                  <input
-                    type="checkbox"
-                    checked={editPrivate}
-                    onChange={(e) => setEditPrivate(e.target.checked)}
-                  />
-                  Приватная капсула
-                </label>
+                <div className="gem-visibility-picker gem-visibility-picker--compact" role="radiogroup" aria-label={t('gems.visibility')}>
+                  <p className="gem-visibility-label">{t('gems.visibility')}</p>
+                  {(
+                    [
+                      ['private', 'gems.visibilityPrivate', 'gems.visibilityPrivateDesc'],
+                      ['family', 'gems.visibilityFamily', 'gems.visibilityFamilyDesc'],
+                      ['public', 'gems.visibilityPublic', 'gems.visibilityPublicDesc'],
+                    ] as const
+                  ).map(([vis, labelKey, descKey]) => (
+                    <label
+                      key={vis}
+                      className={`gem-visibility-option${editVisibility === vis ? ' is-active' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="edit-gem-visibility"
+                        value={vis}
+                        checked={editVisibility === vis}
+                        onChange={() => setEditVisibility(vis)}
+                      />
+                      <span className="gem-visibility-copy">
+                        <strong>{t(labelKey)}</strong>
+                        <span>{t(descKey)}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </>
             )}
             <div className="memory-gem-edit__media">

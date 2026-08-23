@@ -10,7 +10,7 @@ export type I18nLocale =
   | 'zh'
   | 'pt'
   | 'ar'
-  | 'it';
+  | 'ua';
 
 export type TranslationDict = {
   common: {
@@ -197,6 +197,61 @@ export type TranslationDict = {
   };
   search: {
     category: string;
+  };
+  gems: {
+    createTitle: string;
+    createEyebrow: string;
+    visibility: string;
+    visibilityPrivate: string;
+    visibilityFamily: string;
+    visibilityPublic: string;
+    visibilityPrivateDesc: string;
+    visibilityFamilyDesc: string;
+    visibilityPublicDesc: string;
+    privateBadge: string;
+    familyBadge: string;
+    publicBadge: string;
+  };
+  profileModal: {
+    title: string;
+    uploadPhoto: string;
+    changePhoto: string;
+    uploading: string;
+    displayName: string;
+    displayNamePlaceholder: string;
+    username: string;
+    usernameHintDefault: string;
+    usernameHintNoNick: string;
+    usernameHintTaken: string;
+    usernameHintFree: string;
+    password: string;
+    passwordHintEmpty: string;
+    passwordHintSet: string;
+    passwordHintDefault: string;
+    magicLink: string;
+    shareLink: string;
+    copied: string;
+    copyLink: string;
+    userId: string;
+    copyId: string;
+    themeBackground: string;
+    privacyTitle: string;
+    ghostMode: string;
+    ghostModeDesc: string;
+    ephemeral: string;
+    ephemeralDesc: string;
+    save: string;
+    saving: string;
+    signOut: string;
+    signingOut: string;
+    signOutConfirm: string;
+    uploadFailed: string;
+    copyLinkFailed: string;
+    copyIdFailed: string;
+    saveFailed: string;
+    signOutFailed: string;
+    passwordShort: string;
+    passwordNeedsUsername: string;
   };
 };
 

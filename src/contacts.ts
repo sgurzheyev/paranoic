@@ -100,7 +100,7 @@ export async function trustAndUpsertContact(
     username?: string;
   }
 ): Promise<Contact[]> {
-  trustUser(contact.id);
+  await trustUser(contact.id);
   return upsertContact({
     ...contact,
     trusted: true,

@@ -8517,3 +8517,96 @@ html.memory-gem-active .liquid-nav {
   flex-shrink: 0;
   margin-top: 2px;
 }
+
+/* —— Gem visibility picker —— */
+.gem-visibility-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.gem-visibility-picker--compact {
+  margin-top: 4px;
+}
+
+.gem-visibility-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gem-visibility-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.gem-visibility-option.is-active {
+  border-color: rgba(0, 245, 212, 0.35);
+  background: rgba(0, 245, 212, 0.1);
+}
+
+.gem-visibility-option input {
+  margin-top: 3px;
+  accent-color: var(--lux-emerald);
+}
+
+.gem-visibility-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.gem-visibility-copy strong {
+  font-size: 0.82rem;
+  color: var(--text-strong);
+}
+
+.gem-visibility-copy span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* —— Ukrainian flag dev theme (language = ua) —— */
+html.theme-ua {
+  --lux-bg: #0a192f;
+  --lux-bg-elevated: #1e3a8a;
+  --lux-emerald: #fbbf24;
+  --lux-emerald-dim: rgba(251, 191, 36, 0.18);
+  --lux-emerald-glow: rgba(245, 158, 11, 0.38);
+  --lux-gold: #f59e0b;
+  --lux-gold-dim: rgba(245, 158, 11, 0.2);
+  --lux-gold-glow: rgba(251, 191, 36, 0.34);
+  --lux-indigo: #1e3a8a;
+  --lux-purple: #172554;
+  --lux-indigo-glow: rgba(30, 58, 138, 0.45);
+  --lux-purple-glow: rgba(245, 158, 11, 0.15);
+  --accent: #fbbf24;
+  --accent-dim: rgba(251, 191, 36, 0.16);
+  --call: #fbbf24;
+  --media: #f59e0b;
+  --premium: #f59e0b;
+  --glass-border: rgba(251, 191, 36, 0.22);
+  --glass-glow: 0 0 32px rgba(245, 158, 11, 0.2);
+}
+
+html.theme-ua .mega-btn.primary,
+html.theme-ua .liquid-nav-btn.is-active,
+html.theme-ua .language-picker-option.is-active {
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.25);
+}
+
+html.theme-ua .mapboxgl-ctrl-group {
+  border-color: rgba(251, 191, 36, 0.25);
+}

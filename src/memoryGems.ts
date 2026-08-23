@@ -4,15 +4,16 @@ import {
   getSupabase,
   hasSupabaseConfig,
 } from './lib/supabase';
+import { deleteGemMedia } from './s3Storage';
 import {
-  deleteMapGem,
-  updateMapGem,
-  updateMapGemLocation,
+  canViewGem,
+  gemVisibility,
+  type CreateMapGemInput,
+  type GemVisibility,
   type MapGem,
   type MapGemType,
   type UpdateGemInput,
 } from './mapGems';
-import { deleteGemMedia } from './s3Storage';
 
 export const MEMORY_GEMS_TABLE = 'memory_gems';
 
@@ -22,14 +23,14 @@ export type MemoryGemRow = {
   address: string | null;
   media_urls: string[] | null;
   metadata: Record<string, unknown> | null;
-  /** Колонки БД memory_gems */
   latitude?: number | null;
   longitude?: number | null;
-  /** Legacy / metadata fallback */
   lat?: number | null;
   lng?: number | null;
   created_at: string;
   user_id?: string | null;
+  gem_type?: string | null;
+  visibility?: GemVisibility | null;
   is_private?: boolean | null;
 };
 
@@ -55,42 +56,45 @@ function extractCoords(row: MemoryGemRow): { lat: number; lng: number } | null {
   return { lat, lng };
 }
 
+function resolveVisibility(row: Record<string, unknown>): GemVisibility {
+  const raw = row.visibility;
+  if (raw === 'private' || raw === 'family' || raw === 'public') return raw;
+  if (row.is_private === true) return 'private';
+  return 'public';
+}
+
+function resolveGemType(row: Record<string, unknown>, preview: string | null): MapGemType {
+  const raw = row.gem_type ?? (row.metadata as Record<string, unknown> | null)?.gem_type;
+  if (raw === 'photo' || raw === 'video' || raw === 'text') return raw;
+  if (preview) return mediaTypeFromUrl(preview);
+  return 'text';
+}
+
 export function mapMemoryGemRow(row: Record<string, unknown>): MapGem | null {
   const mediaUrls = Array.isArray(row.media_urls)
     ? row.media_urls.filter((u): u is string => typeof u === 'string' && u.length > 0)
     : [];
   const preview = mediaUrls[0] ?? null;
+  const visibility = resolveVisibility(row);
   const coords = extractCoords({
     id: String(row.id),
     title: (row.title as string | null) ?? null,
     address: (row.address as string | null) ?? null,
     media_urls: mediaUrls,
     metadata: (row.metadata as Record<string, unknown> | null) ?? null,
-    lat:
-      row.latitude != null
-        ? Number(row.latitude)
-        : row.lat != null
-          ? Number(row.lat)
-          : null,
-    lng:
-      row.longitude != null
-        ? Number(row.longitude)
-        : row.lng != null
-          ? Number(row.lng)
-          : null,
+    latitude: row.latitude != null ? Number(row.latitude) : row.lat != null ? Number(row.lat) : null,
+    longitude:
+      row.longitude != null ? Number(row.longitude) : row.lng != null ? Number(row.lng) : null,
     created_at: String(row.created_at ?? new Date().toISOString()),
     user_id: (row.user_id as string | null) ?? null,
-    is_private: (row.is_private as boolean | null) ?? false,
+    visibility,
+    is_private: visibility === 'private',
   });
   if (!coords) return null;
 
-  const type: MapGemType = preview ? mediaTypeFromUrl(preview) : 'text';
-  const title =
-    (typeof row.title === 'string' && row.title.trim()) ||
-    null;
-  const address =
-    (typeof row.address === 'string' && row.address.trim()) ||
-    null;
+  const type = resolveGemType(row, preview);
+  const title = typeof row.title === 'string' && row.title.trim() ? row.title.trim() : null;
+  const address = typeof row.address === 'string' && row.address.trim() ? row.address.trim() : null;
   const meta = (row.metadata as Record<string, unknown> | null) ?? null;
   const owner =
     (typeof row.user_id === 'string' && row.user_id.trim()) ||
@@ -109,13 +113,19 @@ export function mapMemoryGemRow(row: Record<string, unknown>): MapGem | null {
     description: address,
     created_at: String(row.created_at ?? new Date().toISOString()),
     source: 'memory_gems',
-    is_private: Boolean(row.is_private),
+    visibility,
+    is_private: visibility === 'private',
     media_urls: mediaUrls,
   };
 }
 
-/** Загрузка всех Memory GEMs из Supabase → MapGem для карты и drawer. */
-export async function fetchMemoryGems(): Promise<MapGem[]> {
+export type FetchMemoryGemsOpts = {
+  viewerId?: string;
+  contactIds?: ReadonlySet<string>;
+};
+
+/** Load memory gems visible to the current viewer. */
+export async function fetchMemoryGems(opts: FetchMemoryGemsOpts = {}): Promise<MapGem[]> {
   if (!hasSupabaseConfig()) return [];
   try {
     await ensureAuthSession().catch(() => undefined);
@@ -126,13 +136,81 @@ export async function fetchMemoryGems(): Promise<MapGem[]> {
       return [];
     }
     const rows = (data as Record<string, unknown>[] | null) ?? [];
-    const gems = rows.map(mapMemoryGemRow).filter((g): g is MapGem => g != null);
-    console.log(`💎 Загружено ${gems.length} капсул памяти на карту`);
-    return gems;
+    const mapped = rows.map(mapMemoryGemRow).filter((g): g is MapGem => g != null);
+    const viewerId = opts.viewerId ?? '';
+    const contactIds = opts.contactIds ?? new Set<string>();
+    const visible = mapped.filter((g) => canViewGem(g, viewerId, contactIds));
+    console.log(`💎 Loaded ${visible.length}/${mapped.length} memory gems for map`);
+    return visible;
   } catch (e) {
     console.warn('[paranoic memory_gems] fetch failed', e);
     return [];
   }
+}
+
+export async function countOwnMemoryGems(): Promise<number> {
+  if (!hasSupabaseConfig()) return 0;
+  try {
+    const uid = await getAuthUserId();
+    if (!uid) return 0;
+    const sb = getSupabase();
+    const { count, error } = await sb
+      .from(MEMORY_GEMS_TABLE)
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', uid);
+    if (error) {
+      console.warn('[paranoic memory_gems] count', error.message);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (e) {
+    console.warn('[paranoic memory_gems] count failed', e);
+    return 0;
+  }
+}
+
+/** INSERT into memory_gems (unified gem storage). */
+export async function createMemoryGem(input: CreateMapGemInput): Promise<MapGem> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+
+  const sb = getSupabase();
+  const {
+    data: { session: rawSession },
+  } = await sb.auth.getSession();
+  const session =
+    rawSession?.user?.id != null ? rawSession : await ensureAuthSession();
+  const uid = session.user.id;
+  if (!uid) throw new Error('Сессия Auth отсутствует');
+
+  const visibility = input.visibility ?? 'public';
+  const mediaUrls = input.mediaUrl ? [input.mediaUrl] : [];
+
+  const row = {
+    user_id: uid,
+    latitude: input.lat,
+    longitude: input.lng,
+    lat: input.lat,
+    lng: input.lng,
+    title: input.content ?? null,
+    address: null,
+    media_urls: mediaUrls,
+    gem_type: input.type,
+    visibility,
+    is_private: visibility === 'private',
+    metadata: { gem_type: input.type },
+  };
+
+  const { data, error } = await sb.from(MEMORY_GEMS_TABLE).insert(row).select('*').single();
+  if (error) {
+    const msg = error.message || 'Не удалось сохранить капсулу';
+    if (/row-level security|RLS/i.test(msg)) {
+      throw new Error('RLS блокирует запись memory_gems. Проверьте политики INSERT.');
+    }
+    throw new Error(msg);
+  }
+  const mapped = mapMemoryGemRow(data as Record<string, unknown>);
+  if (!mapped) throw new Error('Капсула без координат');
+  return mapped;
 }
 
 export async function updateMemoryGemLocation(
@@ -151,7 +229,7 @@ export async function updateMemoryGemLocation(
   const sb = getSupabase();
   const { data, error } = await sb
     .from(MEMORY_GEMS_TABLE)
-    .update({ latitude, longitude })
+    .update({ latitude, longitude, lat: latitude, lng: longitude })
     .eq('id', gemId)
     .eq('user_id', uid)
     .select('*')
@@ -162,20 +240,27 @@ export async function updateMemoryGemLocation(
   return mapped;
 }
 
-export async function updateMemoryGem(
-  gemId: string,
-  patch: UpdateGemInput
-): Promise<MapGem> {
+export async function updateMemoryGem(gemId: string, patch: UpdateGemInput): Promise<MapGem> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   await ensureAuthSession();
   const uid = await getAuthUserId();
   const row: Record<string, unknown> = {};
   if (patch.content !== undefined) row.title = patch.content;
   if (patch.description !== undefined) row.address = patch.description;
-  if (patch.is_private !== undefined) row.is_private = patch.is_private;
+  if (patch.visibility !== undefined) {
+    row.visibility = patch.visibility;
+    row.is_private = patch.visibility === 'private';
+  } else if (patch.is_private !== undefined) {
+    row.visibility = patch.is_private ? 'private' : 'public';
+    row.is_private = patch.is_private;
+  }
   if (patch.mediaUrls !== undefined) row.media_urls = patch.mediaUrls;
   else if (patch.mediaUrl !== undefined) {
     row.media_urls = patch.mediaUrl ? [patch.mediaUrl] : [];
+  }
+  if (patch.type !== undefined) {
+    row.gem_type = patch.type;
+    row.metadata = { gem_type: patch.type };
   }
   if (Object.keys(row).length === 0) throw new Error('Нет изменений');
 
@@ -200,10 +285,7 @@ export async function deleteMemoryGem(gem: MapGem): Promise<void> {
     throw new Error('Можно удалить только свою капсулу');
   }
 
-  const urls = [
-    gem.media_url,
-    ...(gem.media_urls ?? []),
-  ].filter((u): u is string => Boolean(u));
+  const urls = [gem.media_url, ...(gem.media_urls ?? [])].filter((u): u is string => Boolean(u));
   for (const url of [...new Set(urls)]) {
     try {
       await deleteGemMedia(url);
@@ -224,34 +306,16 @@ export async function deleteMemoryGem(gem: MapGem): Promise<void> {
   if (!data) throw new Error('Капсула не найдена или уже удалена');
 }
 
-/** Удаление с учётом источника (map_gems / memory_gems). */
 export async function deleteOwnedGem(gem: MapGem): Promise<void> {
-  if (gem.source === 'memory_gems') {
-    await deleteMemoryGem(gem);
-    return;
-  }
-  await deleteMapGem(gem);
+  await deleteMemoryGem(gem);
 }
 
-/** Перемещение пина. */
-export async function moveOwnedGem(
-  gem: MapGem,
-  lat: number,
-  lng: number
-): Promise<MapGem> {
-  if (gem.source === 'memory_gems') {
-    return updateMemoryGemLocation(gem.id, lat, lng);
-  }
-  return updateMapGemLocation(gem.id, lat, lng);
+export async function moveOwnedGem(gem: MapGem, lat: number, lng: number): Promise<MapGem> {
+  return updateMemoryGemLocation(gem.id, lat, lng);
 }
 
-/** Редактирование полей капсулы. */
-export async function updateOwnedGem(
-  gem: MapGem,
-  patch: UpdateGemInput
-): Promise<MapGem> {
-  if (gem.source === 'memory_gems') {
-    return updateMemoryGem(gem.id, patch);
-  }
-  return updateMapGem(gem.id, patch);
+export async function updateOwnedGem(gem: MapGem, patch: UpdateGemInput): Promise<MapGem> {
+  return updateMemoryGem(gem.id, patch);
 }
+
+export { gemVisibility };

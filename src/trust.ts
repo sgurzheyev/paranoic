@@ -1,30 +1,20 @@
-/** Доверенные и заблокированные peer id — localStorage. */
+/** Доверенные и заблокированные peer id — local cache + Supabase sync. */
 
-const TRUSTED_KEY = 'paranoic-trusted-ids-v1';
-const BLOCKED_KEY = 'paranoic-blocked-ids-v1';
+import {
+  readLocalRelations,
+  setCloudRelation,
+  syncRelationsFromCloud,
+  type PeerRelations,
+} from './trustSync';
 
-function readIdSet(key: string): Set<string> {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0));
-  } catch {
-    return new Set();
-  }
-}
-
-function writeIdSet(key: string, ids: Set<string>): void {
-  localStorage.setItem(key, JSON.stringify([...ids]));
-}
+export type { PeerRelations };
 
 export function loadTrustedIds(): Set<string> {
-  return readIdSet(TRUSTED_KEY);
+  return readLocalRelations().trusted;
 }
 
 export function loadBlockedIds(): Set<string> {
-  return readIdSet(BLOCKED_KEY);
+  return readLocalRelations().blocked;
 }
 
 export function isTrusted(userId: string): boolean {
@@ -37,39 +27,28 @@ export function isBlocked(userId: string): boolean {
   return loadBlockedIds().has(userId);
 }
 
+/** Pull relations from Supabase on login / bootstrap. */
+export async function bootstrapPeerRelations(): Promise<PeerRelations> {
+  return syncRelationsFromCloud();
+}
+
 /** Жёстко закрепить контакт как доверенный; снять блок, если был. */
-export function trustUser(userId: string): Set<string> {
-  const trusted = loadTrustedIds();
-  trusted.add(userId);
-  writeIdSet(TRUSTED_KEY, trusted);
-
-  const blocked = loadBlockedIds();
-  if (blocked.delete(userId)) writeIdSet(BLOCKED_KEY, blocked);
-
-  return trusted;
+export async function trustUser(userId: string): Promise<Set<string>> {
+  const next = await setCloudRelation(userId, 'trusted');
+  return next.trusted;
 }
 
-export function untrustUser(userId: string): Set<string> {
-  const trusted = loadTrustedIds();
-  trusted.delete(userId);
-  writeIdSet(TRUSTED_KEY, trusted);
-  return trusted;
+export async function untrustUser(userId: string): Promise<Set<string>> {
+  const next = await setCloudRelation(userId, null);
+  return next.trusted;
 }
 
-export function blockUser(userId: string): Set<string> {
-  const blocked = loadBlockedIds();
-  blocked.add(userId);
-  writeIdSet(BLOCKED_KEY, blocked);
-
-  const trusted = loadTrustedIds();
-  if (trusted.delete(userId)) writeIdSet(TRUSTED_KEY, trusted);
-
-  return blocked;
+export async function blockUser(userId: string): Promise<Set<string>> {
+  const next = await setCloudRelation(userId, 'blocked');
+  return next.blocked;
 }
 
-export function unblockUser(userId: string): Set<string> {
-  const blocked = loadBlockedIds();
-  blocked.delete(userId);
-  writeIdSet(BLOCKED_KEY, blocked);
-  return blocked;
+export async function unblockUser(userId: string): Promise<Set<string>> {
+  const next = await setCloudRelation(userId, null);
+  return next.blocked;
 }

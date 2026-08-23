@@ -24,6 +24,7 @@ import { useLanguage } from './i18n';
 import {
   applyMapboxAccessToken,
   applyMapboxStandardNight,
+  applyUaMapTheme,
   MAPBOX_STANDARD_STYLE_WITH_CONFIG,
   whenMapStyleReady,
 } from './lib/mapbox';
@@ -252,7 +253,7 @@ export default function GlobeLobby({
   currentUserId = '',
   active = true,
 }: GlobeLobbyProps) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -294,6 +295,18 @@ export default function GlobeLobby({
   const layersSlotRef = useRef<HTMLDivElement>(null);
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const contactIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of people) {
+      if (p.isContact && !p.isMe) ids.add(p.userId);
+    }
+    return ids;
+  }, [people]);
+
+  const [authUid, setAuthUid] = useState('');
+  useEffect(() => {
+    void getAuthUserId().then((id) => setAuthUid(id ?? ''));
+  }, []);
 
   useEffect(() => {
     if (!layersOpen) return;
@@ -549,6 +562,7 @@ export default function GlobeLobby({
 
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
       applyMapboxStandardNight(readyMap);
+      if (language === 'ua') applyUaMapTheme(readyMap);
       forceResize();
       setMapReady(true);
       setMapBootDone(true);
@@ -736,13 +750,25 @@ export default function GlobeLobby({
     if (!mapReady || (!showGems && !aiOpen)) return;
     let cancelled = false;
     void (async () => {
-      const memory = await fetchMemoryGems();
+      const memory = await fetchMemoryGems({
+        viewerId: authUid || currentUserId,
+        contactIds,
+      });
       if (!cancelled) setGems(memory);
     })();
     return () => {
       cancelled = true;
     };
-  }, [mapReady, showGems, aiOpen]);
+  }, [mapReady, showGems, aiOpen, authUid, currentUserId, contactIds]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    return whenMapStyleReady(map, (readyMap) => {
+      if (language === 'ua') applyUaMapTheme(readyMap);
+      else applyMapboxStandardNight(readyMap);
+    });
+  }, [language, mapReady]);
 
   /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */
   useEffect(() => {

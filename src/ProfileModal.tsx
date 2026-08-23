@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, Ghost, ImagePlus, Link2, LogOut, Timer, X } from 'lucide-react';
 import Avatar from './Avatar';
+import { useLanguage } from './i18n';
 import {
   buildMagicLink,
   forcePersistSession,
@@ -65,6 +66,7 @@ export default function ProfileModal({
   onSettingsChange,
   onSignOut,
 }: ProfileModalProps) {
+  const { t } = useLanguage();
   const [name, setName] = useState(identity.name);
   const [username, setUsername] = useState(identity.username || '');
   const [avatarUrl, setAvatarUrl] = useState(identity.avatarUrl);
@@ -86,7 +88,6 @@ export default function ProfileModal({
     () => ({ ...identity, username: username.trim().toLowerCase() }),
     [identity, username]
   );
-  // Короткая ссылка при заданном никнейме, иначе fallback на id.
   const shareLink = useMemo(() => {
     const u = previewIdentity.username;
     return u ? buildMagicLink(u) : buildMagicLink(identity.id);
@@ -99,29 +100,29 @@ export default function ProfileModal({
       return;
     }
     if (!check.value) {
-      setUsernameHint('Без никнейма ссылка будет с вашим ID.');
+      setUsernameHint(t('profileModal.usernameHintNoNick'));
       return;
     }
     if (check.value === (identity.username || '')) {
-      setUsernameHint(`Ссылка: ${buildMagicLink({ ...identity, username: check.value })}`);
+      setUsernameHint(`${t('profile.magicLink')}: ${buildMagicLink({ ...identity, username: check.value })}`);
       return;
     }
     let cancelled = false;
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       void isUsernameAvailable(check.value, identity.id).then((free) => {
         if (cancelled) return;
         setUsernameHint(
           free
-            ? `Свободен · ${buildMagicLink(check.value)}`
-            : 'Имя занято'
+            ? t('profileModal.usernameHintFree', { link: buildMagicLink(check.value) })
+            : t('profileModal.usernameHintTaken')
         );
       });
     }, 350);
     return () => {
       cancelled = true;
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
     };
-  }, [username, identity]);
+  }, [username, identity, t]);
 
   const onPickAvatar = async (file: File | undefined) => {
     if (!file) return;
@@ -131,7 +132,7 @@ export default function ProfileModal({
       const url = await uploadAvatar(identity.id, file);
       setAvatarUrl(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось загрузить аватар');
+      setError(e instanceof Error ? e.message : t('profileModal.uploadFailed'));
     } finally {
       setUploading(false);
     }
@@ -152,7 +153,7 @@ export default function ProfileModal({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
-      setError('Не удалось скопировать ссылку');
+      setError(t('profileModal.copyLinkFailed'));
     }
   };
 
@@ -162,25 +163,19 @@ export default function ProfileModal({
       setCopiedId(true);
       window.setTimeout(() => setCopiedId(false), 1800);
     } catch {
-      setError('Не удалось скопировать User ID');
+      setError(t('profileModal.copyIdFailed'));
     }
   };
 
   const handleSignOut = async () => {
     if (!onSignOut || signingOut) return;
-    if (
-      !window.confirm(
-        'Выйти из аккаунта? Локальный профиль будет сброшен. Вы сможете войти по никнейму и паролю или создать новый аккаунт.'
-      )
-    ) {
-      return;
-    }
+    if (!window.confirm(t('profileModal.signOutConfirm'))) return;
     setSigningOut(true);
     setError('');
     try {
       await onSignOut();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось выйти');
+      setError(e instanceof Error ? e.message : t('profileModal.signOutFailed'));
       setSigningOut(false);
     }
   };
@@ -199,16 +194,16 @@ export default function ProfileModal({
       }
       if (password.trim()) {
         if (password.trim().length < 4) {
-          setError('Пароль: минимум 4 символа');
+          setError(t('profileModal.passwordShort'));
           return;
         }
         if (!userCheck.value) {
-          setError('Задайте никнейм перед установкой пароля');
+          setError(t('profileModal.passwordNeedsUsername'));
           return;
         }
       }
       const next = updateIdentity({
-        name: name.trim() || 'Я',
+        name: name.trim() || t('common.you'),
         username: userCheck.value,
         avatarUrl,
         themeFon,
@@ -220,7 +215,7 @@ export default function ProfileModal({
       onSaved(saved);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сохранить');
+      setError(e instanceof Error ? e.message : t('profileModal.saveFailed'));
     } finally {
       setBusy(false);
     }
@@ -235,8 +230,8 @@ export default function ProfileModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="profile-modal-head">
-          <h2 id="profile-modal-title">Профиль</h2>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <h2 id="profile-modal-title">{t('profileModal.title')}</h2>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t('common.close')}>
             <X size={16} />
           </button>
         </div>
@@ -250,7 +245,11 @@ export default function ProfileModal({
             onClick={() => fileRef.current?.click()}
           >
             <ImagePlus size={16} />
-            {uploading ? 'Загрузка…' : avatarUrl ? 'Сменить фото' : 'Загрузить фото'}
+            {uploading
+              ? t('profileModal.uploading')
+              : avatarUrl
+                ? t('profileModal.changePhoto')
+                : t('profileModal.uploadPhoto')}
           </button>
           <input
             ref={fileRef}
@@ -265,17 +264,17 @@ export default function ProfileModal({
         </div>
 
         <label className="profile-field">
-          <span>Отображаемое имя</span>
+          <span>{t('profileModal.displayName')}</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={32}
-            placeholder="Ваше имя"
+            placeholder={t('profileModal.displayNamePlaceholder')}
           />
         </label>
 
         <label className="profile-field">
-          <span>Ваш никнейм (username)</span>
+          <span>{t('profileModal.username')}</span>
           <div className="username-input-row">
             <span className="username-at">@</span>
             <input
@@ -290,12 +289,12 @@ export default function ProfileModal({
             />
           </div>
           <p id="username-hint" className="profile-field-hint">
-            {usernameHint || 'Латиница, цифры и _. Короткая ссылка без длинного ID.'}
+            {usernameHint || t('profileModal.usernameHintDefault')}
           </p>
         </label>
 
         <label className="profile-field">
-          <span>Пароль (для входа на другом устройстве)</span>
+          <span>{t('profileModal.password')}</span>
           <input
             type="password"
             value={password}
@@ -303,47 +302,43 @@ export default function ProfileModal({
               setPassword(e.target.value);
               setPasswordHint(
                 e.target.value.trim()
-                  ? 'Сохраните профиль — пароль будет записан в облако.'
-                  : 'Оставьте пустым, если не меняете пароль.'
+                  ? t('profileModal.passwordHintSet')
+                  : t('profileModal.passwordHintEmpty')
               );
             }}
-            placeholder="Минимум 4 символа"
+            placeholder={t('profileModal.passwordShort')}
             autoComplete="new-password"
           />
-          <p className="profile-field-hint">{passwordHint || 'Вход по email + пароль. Никнейм по умолчанию — часть email до @; здесь можно задать свой.'}</p>
+          <p className="profile-field-hint">{passwordHint || t('profileModal.passwordHintDefault')}</p>
         </label>
 
         <div className="profile-share-card">
           <p className="profile-share-label">
-            <Link2 size={14} /> Ваша магическая ссылка
+            <Link2 size={14} /> {t('profileModal.magicLink')}
           </p>
           <p className="profile-share-url mono-box">{shareLink}</p>
-          <button
-            type="button"
-            className="accept-file-btn"
-            onClick={() => void copyShareLink()}
-          >
+          <button type="button" className="accept-file-btn" onClick={() => void copyShareLink()}>
             {copied ? <Check size={16} /> : <Copy size={16} />}
-            {copied ? 'Скопировано' : 'Поделиться ссылкой'}
+            {copied ? t('profileModal.copied') : t('profileModal.shareLink')}
           </button>
         </div>
 
         <div className="profile-share-card profile-userid-card">
-          <p className="profile-share-label">User ID</p>
+          <p className="profile-share-label">{t('profileModal.userId')}</p>
           <p className="profile-share-url mono-box">{identity.id}</p>
           <button
             type="button"
             className="accept-file-btn"
             onClick={() => void copyUserId()}
-            aria-label="Копировать User ID"
+            aria-label={t('profileModal.copyId')}
           >
             {copiedId ? <Check size={16} /> : <Copy size={16} />}
-            {copiedId ? 'Скопировано' : 'Копировать в буфер'}
+            {copiedId ? t('profileModal.copied') : t('profileModal.copyId')}
           </button>
         </div>
 
         <div className="profile-field">
-          <span>Фон интерфейса</span>
+          <span>{t('profileModal.themeBackground')}</span>
           <div className="theme-fon-grid">
             {THEME_FON_PRESETS.map((preset) => {
               const active = themeFon === preset.value;
@@ -365,19 +360,19 @@ export default function ProfileModal({
         </div>
 
         <div className="profile-privacy-card">
-          <p className="profile-privacy-title">Приватность</p>
+          <p className="profile-privacy-title">{t('profileModal.privacyTitle')}</p>
           <IosToggle
             checked={ghostMode}
             onChange={(next) => applyPrivacy({ ghostMode: next })}
-            label="Ghost Mode"
-            description="Режим невидимки: на карте вы в условной Антарктиде, GPS выключен."
+            label={t('profileModal.ghostMode')}
+            description={t('profileModal.ghostModeDesc')}
             icon={<Ghost size={16} />}
           />
           <IosToggle
             checked={ephemeral24h}
             onChange={(next) => applyPrivacy({ ephemeral24h: next })}
-            label="Удалять через 24 часа"
-            description="Старые сообщения автоматически стираются из локального хранилища чата."
+            label={t('profileModal.ephemeral')}
+            description={t('profileModal.ephemeralDesc')}
             icon={<Timer size={16} />}
           />
         </div>
@@ -394,7 +389,7 @@ export default function ProfileModal({
           disabled={busy || uploading || signingOut}
           onClick={() => void save()}
         >
-          {busy ? 'Сохраняем…' : 'Сохранить'}
+          {busy ? t('profileModal.saving') : t('profileModal.save')}
         </button>
 
         {onSignOut && (
@@ -405,7 +400,7 @@ export default function ProfileModal({
             onClick={() => void handleSignOut()}
           >
             <LogOut size={18} />
-            {signingOut ? 'Выходим…' : 'Выйти из аккаунта'}
+            {signingOut ? t('profileModal.signingOut') : t('profileModal.signOut')}
           </button>
         )}
       </div>

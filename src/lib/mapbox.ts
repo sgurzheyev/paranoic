@@ -133,3 +133,28 @@ export function applyMapboxStandardNight(map: StyleReadyMap | null | undefined):
   }
   return true;
 }
+
+/** Ukrainian flag-inspired map palette (deep blue + golden dusk). */
+export const MAPBOX_UA_BASEMAP_CONFIG = {
+  ...MAPBOX_STANDARD_BASEMAP_CONFIG,
+  lightPreset: 'dusk' as MapboxLightPreset,
+  theme: 'default',
+} as const;
+
+export function applyUaMapTheme(map: StyleReadyMap | null | undefined): boolean {
+  if (!map?.setConfigProperty) return false;
+  try {
+    if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return false;
+  } catch {
+    return false;
+  }
+
+  for (const [key, value] of Object.entries(MAPBOX_UA_BASEMAP_CONFIG)) {
+    try {
+      map.setConfigProperty('basemap', key, value);
+    } catch {
+      /* */
+    }
+  }
+  return true;
+}
