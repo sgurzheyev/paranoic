@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Bell,
   BellOff,
@@ -14,6 +14,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useLanguage } from './i18n';
+import LanguagePickerModal from './i18n/LanguagePickerModal';
 import { ensureNotifyPermission } from './notify';
 import { EPHEMERAL_TTL_MS, purgeExpiredMessages } from './storage';
 import {
@@ -130,6 +131,7 @@ export default function SettingsPanel({
   onOpenAdmin,
 }: SettingsPanelProps) {
   const { t, language, setLanguage } = useLanguage();
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [storageLabel, setStorageLabel] = useState(t('settings.counting'));
   const [purging, setPurging] = useState(false);
   const [purgeHint, setPurgeHint] = useState('');
@@ -191,14 +193,8 @@ export default function SettingsPanel({
     onSettingsChange(loadSettings());
   };
 
-  const langRailRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const rail = langRailRef.current;
-    if (!rail) return;
-    const active = rail.querySelector<HTMLElement>('.settings-lang-btn.is-active');
-    active?.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
-  }, [language]);
+  const currentLanguage =
+    APP_LANGUAGES.find((lang) => lang.id === language) ?? APP_LANGUAGES[0];
 
   return (
     <div className="tab-panel liquid-glass-card contacts-panel settings-tab">
@@ -279,38 +275,39 @@ export default function SettingsPanel({
       </Section>
 
       <Section title={t('settings.language')}>
-        <div className="settings-lang-row">
-          <div className="settings-row-icon" aria-hidden>
+        <button
+          type="button"
+          className="settings-row settings-row--btn settings-lang-trigger"
+          aria-haspopup="dialog"
+          aria-expanded={languagePickerOpen}
+          aria-label={t('settings.languageAria')}
+          onClick={() => setLanguagePickerOpen(true)}
+        >
+          <span className="settings-row-icon" aria-hidden>
             <Languages size={16} />
-          </div>
-          <div
-            ref={langRailRef}
-            className="settings-lang-options"
-            role="listbox"
-            aria-label={t('settings.languageAria')}
-            tabIndex={0}
-          >
-            {APP_LANGUAGES.map((lang) => {
-              const active = language === lang.id;
-              return (
-                <button
-                  key={lang.id}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  className={`settings-lang-btn${active ? ' is-active' : ''}`}
-                  onClick={() => changeLanguage(lang.id)}
-                >
-                  <span className="settings-lang-flag" aria-hidden>
-                    {lang.flag}
-                  </span>
-                  <span className="settings-lang-name">{lang.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+          </span>
+          <span className="settings-row-copy">
+            <span className="settings-row-label">{t('settings.language')}</span>
+            <p className="settings-lang-current">
+              <span className="settings-lang-flag" aria-hidden>
+                {currentLanguage.flag}
+              </span>
+              {currentLanguage.label}
+            </p>
+          </span>
+          <ChevronRight className="settings-row-chevron" size={16} aria-hidden />
+        </button>
       </Section>
+
+      <LanguagePickerModal
+        open={languagePickerOpen}
+        language={language}
+        title={t('settings.languagePickerTitle')}
+        ariaLabel={t('settings.languagePickerAria')}
+        closeLabel={t('common.close')}
+        onClose={() => setLanguagePickerOpen(false)}
+        onSelect={changeLanguage}
+      />
 
       <div className="settings-footer-actions">
         <button type="button" className="mega-btn primary compact" onClick={onOpenFamilyMap}>

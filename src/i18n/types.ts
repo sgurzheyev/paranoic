@@ -1,6 +1,16 @@
 /** Типы локализации Paranoic. */
 
-export type I18nLocale = 'en' | 'ru' | 'pl';
+export type I18nLocale =
+  | 'en'
+  | 'ru'
+  | 'pl'
+  | 'es'
+  | 'fr'
+  | 'de'
+  | 'zh'
+  | 'pt'
+  | 'ar'
+  | 'it';
 
 export type TranslationDict = {
   common: {
@@ -103,6 +113,8 @@ export type TranslationDict = {
     powerSavingDesc: string;
     language: string;
     languageAria: string;
+    languagePickerTitle: string;
+    languagePickerAria: string;
     adminPanel: string;
   };
   profile: {

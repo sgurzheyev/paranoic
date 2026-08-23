@@ -1,20 +1,16 @@
 /** Локальные настройки приложения (приватность, уведомления, язык). */
 
 export type AppLanguage =
-  | 'ru'
   | 'en'
-  | 'uk'
-  | 'de'
-  | 'fr'
-  | 'es'
-  | 'it'
-  | 'pt'
+  | 'ru'
   | 'pl'
-  | 'tr'
-  | 'ar'
+  | 'es'
+  | 'fr'
+  | 'de'
   | 'zh'
-  | 'ja'
-  | 'ko';
+  | 'pt'
+  | 'ar'
+  | 'it';
 
 export type AppLanguageOption = {
   id: AppLanguage;
@@ -25,23 +21,26 @@ export type AppLanguageOption = {
   locale: string;
 };
 
-/** Порядок в вертикальном списке настроек. */
+/** Top 10 interface languages (ordered for the picker). */
 export const APP_LANGUAGES: AppLanguageOption[] = [
-  { id: 'ru', label: 'Русский', flag: '🇷🇺', locale: 'ru' },
   { id: 'en', label: 'English', flag: '🇬🇧', locale: 'en' },
-  { id: 'uk', label: 'Українська', flag: '🇺🇦', locale: 'uk' },
-  { id: 'de', label: 'Deutsch', flag: '🇩🇪', locale: 'de' },
-  { id: 'fr', label: 'Français', flag: '🇫🇷', locale: 'fr' },
-  { id: 'es', label: 'Español', flag: '🇪🇸', locale: 'es' },
-  { id: 'it', label: 'Italiano', flag: '🇮🇹', locale: 'it' },
-  { id: 'pt', label: 'Português', flag: '🇵🇹', locale: 'pt' },
+  { id: 'ru', label: 'Русский', flag: '🇷🇺', locale: 'ru' },
   { id: 'pl', label: 'Polski', flag: '🇵🇱', locale: 'pl' },
-  { id: 'tr', label: 'Türkçe', flag: '🇹🇷', locale: 'tr' },
-  { id: 'ar', label: 'العربية', flag: '🇸🇦', locale: 'ar' },
+  { id: 'es', label: 'Español', flag: '🇪🇸', locale: 'es' },
+  { id: 'fr', label: 'Français', flag: '🇫🇷', locale: 'fr' },
+  { id: 'de', label: 'Deutsch', flag: '🇩🇪', locale: 'de' },
   { id: 'zh', label: '中文', flag: '🇨🇳', locale: 'zh-CN' },
-  { id: 'ja', label: '日本語', flag: '🇯🇵', locale: 'ja' },
-  { id: 'ko', label: '한국어', flag: '🇰🇷', locale: 'ko' },
+  { id: 'pt', label: 'Português', flag: '🇵🇹', locale: 'pt' },
+  { id: 'ar', label: 'العربية', flag: '🇸🇦', locale: 'ar' },
+  { id: 'it', label: 'Italiano', flag: '🇮🇹', locale: 'it' },
 ];
+
+const LEGACY_LANGUAGE_ALIASES: Record<string, AppLanguage> = {
+  uk: 'ru',
+  tr: 'en',
+  ja: 'en',
+  ko: 'en',
+};
 
 const LANGUAGE_IDS = new Set<string>(APP_LANGUAGES.map((l) => l.id));
 
@@ -72,7 +71,11 @@ const DEFAULTS: AppSettings = {
 };
 
 export function normalizeLanguage(raw: unknown): AppLanguage {
-  if (typeof raw === 'string' && LANGUAGE_IDS.has(raw)) return raw as AppLanguage;
+  if (typeof raw === 'string') {
+    if (LANGUAGE_IDS.has(raw)) return raw as AppLanguage;
+    const legacy = LEGACY_LANGUAGE_ALIASES[raw];
+    if (legacy) return legacy;
+  }
   return DEFAULTS.language;
 }
 

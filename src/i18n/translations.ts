@@ -1,4 +1,14 @@
 import type { I18nLocale, TranslationDict } from './types';
+import { mergeLocale } from './mergeLocale';
+import {
+  arPatch,
+  dePatch,
+  esPatch,
+  frPatch,
+  itPatch,
+  ptPatch,
+  zhPatch,
+} from './locales';
 
 const en: TranslationDict = {
   common: {
@@ -102,6 +112,8 @@ const en: TranslationDict = {
     powerSavingDesc: 'Fewer animations and less background UI activity.',
     language: 'Interface language',
     languageAria: 'Interface language',
+    languagePickerTitle: 'Choose language',
+    languagePickerAria: 'Choose interface language',
     adminPanel: 'Admin Panel',
   },
   profile: {
@@ -290,6 +302,8 @@ const ru: TranslationDict = {
     powerSavingDesc: 'Меньше анимаций и фоновой активности интерфейса.',
     language: 'Язык интерфейса',
     languageAria: 'Язык интерфейса',
+    languagePickerTitle: 'Выберите язык',
+    languagePickerAria: 'Выбор языка интерфейса',
     adminPanel: 'Admin Panel',
   },
   profile: {
@@ -479,6 +493,8 @@ const pl: TranslationDict = {
     powerSavingDesc: 'Mniej animacji i aktywności tła interfejsu.',
     language: 'Język interfejsu',
     languageAria: 'Język interfejsu',
+    languagePickerTitle: 'Wybierz język',
+    languagePickerAria: 'Wybierz język interfejsu',
     adminPanel: 'Admin Panel',
   },
   profile: {
@@ -570,6 +586,13 @@ export const TRANSLATIONS: Record<I18nLocale, TranslationDict> = {
   en,
   ru,
   pl,
+  es: mergeLocale(en, esPatch),
+  fr: mergeLocale(en, frPatch),
+  de: mergeLocale(en, dePatch),
+  zh: mergeLocale(en, zhPatch),
+  pt: mergeLocale(en, ptPatch),
+  ar: mergeLocale(en, arPatch),
+  it: mergeLocale(en, itPatch),
 };
 
 export const DEFAULT_I18N_LOCALE: I18nLocale = 'en';

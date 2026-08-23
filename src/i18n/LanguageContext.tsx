@@ -30,11 +30,9 @@ type LanguageContextValue = {
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
 
-/** Языки с полным словарём → иначе English. */
+/** Map stored preference to a loaded translation dictionary. */
 export function resolveI18nLocale(lang: AppLanguage): I18nLocale {
-  if (lang === 'ru' || lang === 'uk') return 'ru';
-  if (lang === 'pl') return 'pl';
-  return 'en';
+  return lang;
 }
 
 function getByPath(dict: unknown, path: string): string | undefined {
