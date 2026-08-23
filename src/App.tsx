@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
 import ChatSearchPanel from './ChatSearchPanel';
+import ContactsSearchPanel from './ContactsSearchPanel';
 import SettingsPanel from './SettingsPanel';
 import ProfileHome from './ProfileHome';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -159,7 +160,7 @@ import {
   validateContactForCall,
   type Contact,
 } from './contacts';
-import { syncProfileToSupabase, fetchRemoteProfile, PROFILE_STALE_MESSAGE } from './profile';
+import { syncProfileToSupabase, fetchRemoteProfile, PROFILE_STALE_MESSAGE, type RemoteProfile } from './profile';
 import { startNativePush } from './pushNotifications';
 import {
   clearCallResidueState,
@@ -257,6 +258,8 @@ export default function App() {
   const [joining, setJoining] = useState(false);
   const [signalingStatus, setSignalingStatus] = useState<SignalingDebugStatus>('');
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsSearchQuery, setContactsSearchQuery] = useState('');
+  const [contactsSearchAdding, setContactsSearchAdding] = useState<string | null>(null);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
   const [geo, setGeo] = useState<GeoPoint | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -3213,6 +3216,39 @@ export default function App() {
     });
   }, [contacts, lastPreviews]);
 
+  const contactsFiltered = useMemo(() => {
+    const q = contactsSearchQuery.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q) ||
+        (c.username || '').toLowerCase().includes(q)
+    );
+  }, [contacts, contactsSearchQuery]);
+
+  const handleContactsSearchQuery = useCallback((query: string) => {
+    setContactsSearchQuery(query);
+  }, []);
+
+  const handleAddGlobalContact = useCallback(async (profile: RemoteProfile) => {
+    if (contactsSearchAdding) return;
+    setContactsSearchAdding(profile.id);
+    try {
+      await upsertContact({
+        id: profile.id,
+        name: profile.name,
+        color: profile.color,
+        avatarUrl: profile.avatar_url ?? '',
+        username: profile.username ?? undefined,
+        source: 'manual',
+      });
+      setContacts(await loadContacts());
+    } finally {
+      setContactsSearchAdding(null);
+    }
+  }, [contactsSearchAdding]);
+
   const goMainTab = (tab: LiquidNavTab) => {
     setMainTab(tab);
     setScreen('home');
@@ -3587,16 +3623,32 @@ export default function App() {
                       <h2>{t('contacts.title')}</h2>
                       <span className="contacts-count">{contacts.length}</span>
                     </div>
-                    <p className="hint" style={{ marginTop: 0 }}>
-                      {t('contacts.hint')}
-                    </p>
+                    <ContactsSearchPanel
+                      selfId={identity.id}
+                      contacts={contacts}
+                      onQueryChange={handleContactsSearchQuery}
+                      addingId={contactsSearchAdding}
+                      onStartChat={(profile) => {
+                        void connectToUser(profile.id, profile.name, { openChat: true });
+                      }}
+                      onAddContact={(profile) => handleAddGlobalContact(profile)}
+                    />
+                    {!contactsSearchQuery.trim() && (
+                      <p className="hint contacts-hint">
+                        {t('contacts.hint')}
+                      </p>
+                    )}
                     {contacts.length === 0 ? (
                       <p className="empty-contacts">
                         {t('contacts.empty')}
                       </p>
+                    ) : contactsFiltered.length === 0 ? (
+                      <p className="empty-contacts">
+                        {t('contacts.searchLocalEmpty')}
+                      </p>
                     ) : (
                       <ul className="contacts-list">
-                        {contacts.map((c) => {
+                        {contactsFiltered.map((c) => {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
                           const rowDisabled = connected && peerId === c.id;

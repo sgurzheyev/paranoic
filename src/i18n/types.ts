@@ -83,6 +83,16 @@ export type TranslationDict = {
     trusted: string;
     callAria: string;
     chatAria: string;
+    searchPlaceholder: string;
+    searchScanning: string;
+    searchGlobalTitle: string;
+    searchEmpty: string;
+    searchLocalEmpty: string;
+    addContact: string;
+    addContactShort: string;
+    startChat: string;
+    startChatShort: string;
+    globalBadge: string;
   };
   settings: {
     title: string;

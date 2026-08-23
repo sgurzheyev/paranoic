@@ -168,6 +168,105 @@ export function looksLikeUuid(value: string): boolean {
   return UUID_RE.test(value.trim());
 }
 
+/** Extract `?u=` handle from a magic link URL or query fragment. */
+export function extractMagicLinkHandle(query: string): string | null {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const paramMatch = /[?&]u=([^&\s#]+)/i.exec(trimmed);
+  if (paramMatch?.[1]) {
+    try {
+      return decodeURIComponent(paramMatch[1]).trim();
+    } catch {
+      return paramMatch[1].trim();
+    }
+  }
+
+  if (/^https?:\/\//i.test(trimmed) || trimmed.includes('://')) {
+    try {
+      const u = new URL(trimmed).searchParams.get('u');
+      if (u?.trim()) return u.trim();
+    } catch {
+      /* not a valid URL */
+    }
+  }
+
+  return null;
+}
+
+function escapeIlikeTerm(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
+}
+
+/** Whether the query is worth a remote profiles lookup. */
+export function shouldSearchProfilesGlobally(query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return false;
+  if (extractMagicLinkHandle(trimmed)) return true;
+  if (looksLikeUuid(trimmed.replace(/^@+/, ''))) return true;
+  if (trimmed.startsWith('@')) return trimmed.length >= 2;
+  return trimmed.length >= 2;
+}
+
+/** Search `profiles` globally by id, username, magic link, or name. */
+export async function searchProfilesGlobally(
+  rawQuery: string,
+  opts?: { excludeUserId?: string; limit?: number }
+): Promise<RemoteProfile[]> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 8, 20));
+  const exclude = opts?.excludeUserId?.trim();
+  const query = rawQuery.trim();
+  if (!query || !hasSupabaseConfig()) return [];
+
+  const results: RemoteProfile[] = [];
+  const seen = new Set<string>();
+
+  const push = (profile: RemoteProfile | null | undefined) => {
+    if (!profile?.id || profile.is_banned) return;
+    if (exclude && profile.id === exclude) return;
+    if (seen.has(profile.id)) return;
+    seen.add(profile.id);
+    results.push(profile);
+  };
+
+  const magicHandle = extractMagicLinkHandle(query);
+  if (magicHandle) {
+    push(await resolveMagicLinkProfile(magicHandle));
+    if (results.length >= limit) return results.slice(0, limit);
+  }
+
+  const stripped = query.replace(/^@+/, '').trim();
+  if (looksLikeUuid(stripped)) {
+    push(await fetchRemoteProfile(stripped));
+    if (results.length >= limit) return results.slice(0, limit);
+  }
+
+  if (query.startsWith('@') || looksLikeUsername(stripped)) {
+    push(await fetchProfileByUsername(stripped));
+  }
+
+  const term = escapeIlikeTerm(stripped);
+  if (term.length >= 2) {
+    try {
+      const sb = getSupabase();
+      let request = sb.from(PROFILES_TABLE).select(PROFILE_PUBLIC_COLUMNS);
+      if (exclude) request = request.neq('id', exclude);
+      const { data, error } = await request
+        .or(`username.ilike.%${term}%,name.ilike.%${term}%,id.ilike.%${term}%`)
+        .limit(limit);
+      if (error) {
+        console.warn('[paranoic] profile search', error.message);
+      } else if (data) {
+        for (const row of data as RemoteProfile[]) push(row);
+      }
+    } catch (e) {
+      console.warn('[paranoic] profile search failed', e);
+    }
+  }
+
+  return results.slice(0, limit);
+}
+
 /** Сообщение UI, когда профиль по id не найден в БД. */
 export const PROFILE_STALE_MESSAGE = 'Контакт устарел или удален';
 
