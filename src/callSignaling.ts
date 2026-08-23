@@ -60,6 +60,13 @@ function channelName(userId: string): string {
   return `calls:${userId}`;
 }
 
+/** Повторы отправки в call-канал и таймаут подписки Realtime. */
+const CALL_CHANNEL_SEND_ATTEMPTS = 5;
+const CALL_CHANNEL_SUBSCRIBE_TIMEOUT_MS = 15_000;
+const CALL_OFFER_OUTER_RETRIES = 3;
+/** Presence may flicker offline for a few seconds — do not block signaling on stale heartbeat alone. */
+const CALL_PRESENCE_GRACE_MS = 90_000;
+
 function audit(stage: string, detail?: unknown): void {
   if (detail !== undefined) console.log('[P2P_DEBUG]', stage, detail);
   else console.log('[P2P_DEBUG]', stage);
@@ -73,8 +80,8 @@ async function sendToUserChannel(
   userId: string,
   event: string,
   payload: CallRingEvent
-): Promise<void> {
-  if (!hasSupabaseConfig()) return;
+): Promise<boolean> {
+  if (!hasSupabaseConfig()) return false;
   const session = await waitForRealtimeAuth(`call-out:${event}`);
   console.log('[SIGNAL OUT]', event, {
     to: userId,
@@ -85,14 +92,17 @@ async function sendToUserChannel(
   let lastError: unknown;
   const chName = channelName(userId);
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= CALL_CHANNEL_SEND_ATTEMPTS; attempt++) {
     const ch = sb.channel(chName, {
       config: { broadcast: { self: false } },
     });
 
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(() => reject(new Error('call channel timeout')), 8_000);
+        const timer = window.setTimeout(
+          () => reject(new Error('call channel timeout')),
+          CALL_CHANNEL_SUBSCRIBE_TIMEOUT_MS
+        );
         const logStatus = logRealtimeStatus(chName, { attempt, fromUid: session.user.id });
         ch.subscribe((status, err) => {
           logStatus(status, err);
@@ -115,11 +125,11 @@ async function sendToUserChannel(
         throw new Error(`call send ${String(result)}`);
       }
       audit('call ring sent', { event, to: userId, attempt, callId: payload.callId });
-      return;
+      return true;
     } catch (e) {
       lastError = e;
       audit('call ring send retry', { event, to: userId, attempt, error: String(e) });
-      await new Promise((r) => setTimeout(r, 200 * attempt));
+      await new Promise((r) => setTimeout(r, 250 * attempt));
     } finally {
       try {
         await sb.removeChannel(ch);
@@ -130,6 +140,7 @@ async function sendToUserChannel(
   }
 
   console.warn('[P2P Audit] call ring send failed', event, lastError);
+  return false;
 }
 
 /**
@@ -282,18 +293,27 @@ export class CallInbox {
 
   /** Инициатор → получателю: Caller ID до WebRTC.
    *  Строка call_sessions пишется отдельно (`from_user_id` / `to_user_id`, не sender/recipient).
+   *  Offer отправляется даже если presence кратко offline — inbox может разбудить callee.
    */
-  async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<void> {
-    if (!toUserId || toUserId === from.id) return;
+  async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<boolean> {
+    if (!toUserId || toUserId === from.id) return false;
     const check = await checkCalleeOnline(toUserId);
-    if (!check.ok || check.needsOfflineConfirm || check.missingProfile) {
-      console.warn('[SIGNAL OUT] skip call_offer — callee offline, busy, or missing', {
+    if (check.missingProfile) {
+      console.warn('[SIGNAL OUT] skip call_offer — profile missing', { to: toUserId });
+      return false;
+    }
+    if (!check.ok) {
+      console.warn('[SIGNAL OUT] skip call_offer — callee busy', {
         to: toUserId,
         status: check.peer.status,
-        isOnline: check.peer.isOnline,
-        missingProfile: check.missingProfile,
       });
-      return;
+      return false;
+    }
+    if (check.appearsOffline) {
+      audit('call offer while callee appears offline — sending anyway', {
+        to: toUserId,
+        lastSeen: check.peer.lastSeen,
+      });
     }
     const payload: CallOfferEvent = {
       type: 'call_offer',
@@ -302,7 +322,16 @@ export class CallInbox {
       from,
       at: Date.now(),
     };
-    await sendToUserChannel(toUserId, 'call_offer', payload);
+
+    for (let round = 1; round <= CALL_OFFER_OUTER_RETRIES; round++) {
+      const sent = await sendToUserChannel(toUserId, 'call_offer', payload);
+      if (sent) return true;
+      if (round < CALL_OFFER_OUTER_RETRIES) {
+        audit('call offer outer retry', { to: toUserId, round, callId });
+        await new Promise((r) => setTimeout(r, 700 * round));
+      }
+    }
+    return false;
   }
 
   /** Получатель отклонил → инициатору. */
@@ -345,13 +374,15 @@ export function callerDisplayName(info: Pick<CallerInfo, 'name' | 'username' | '
 
 /**
  * Перед SDP / call_offer: прямой SELECT is_online, last_seen.
- * Offline (is_online = false или last_seen старше 45с) → не звонить, UI про Push.
+ * Offline presence не блокирует звонок — только busy (in_call) и отсутствие профиля.
  */
 export async function checkCalleeOnline(toUserId: string): Promise<{
   ok: boolean;
   peer: PeerPresenceInfo;
-  /** true = пользователь offline, нужен confirm про уведомление */
+  /** @deprecated Use appearsOffline — kept for callers that still read it */
   needsOfflineConfirm: boolean;
+  /** Presence выглядит offline — informational, звонок всё равно можно пробовать */
+  appearsOffline: boolean;
   /** true = профиля нет в БД (устаревший / удалённый контакт) */
   missingProfile?: boolean;
 }> {
@@ -360,6 +391,7 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
       ok: false,
       peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
       needsOfflineConfirm: false,
+      appearsOffline: true,
       missingProfile: true,
     };
   }
@@ -373,11 +405,11 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
       .maybeSingle();
     if (error || !data) {
       if (error) console.warn('[presence] callee check', error.message);
-      // maybeSingle: нет строки → data=null без error; .single → PGRST116
       return {
         ok: false,
         peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
         needsOfflineConfirm: false,
+        appearsOffline: true,
         missingProfile: true,
       };
     }
@@ -388,35 +420,44 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
     };
     const lastSeen = row.last_seen ?? null;
     const online = isHeartbeatOnline(row.is_online, lastSeen);
+    const recentlySeen = isRecentlySeenForCall(lastSeen);
+    const appearsOffline = !online && !recentlySeen;
     const statusRaw = String(row.presence_status ?? '').toLowerCase();
     if (online && statusRaw === 'in_call') {
       return {
         ok: false,
         peer: { userId: toUserId, status: 'in_call', isOnline: true, lastSeen },
         needsOfflineConfirm: false,
+        appearsOffline: false,
       };
     }
-    if (!online) {
-      return {
-        ok: true,
-        peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen },
-        needsOfflineConfirm: true,
-      };
-    }
+    const peerStatus: PresenceStatus = online
+      ? 'online'
+      : recentlySeen
+        ? 'away'
+        : 'offline';
     return {
       ok: true,
-      peer: { userId: toUserId, status: 'online', isOnline: true, lastSeen },
+      peer: { userId: toUserId, status: peerStatus, isOnline: online || recentlySeen, lastSeen },
       needsOfflineConfirm: false,
+      appearsOffline,
     };
   } catch (e) {
     console.warn('[presence] callee check failed', e);
     return {
-      ok: false,
+      ok: true,
       peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
       needsOfflineConfirm: false,
-      missingProfile: true,
+      appearsOffline: true,
     };
   }
+}
+
+function isRecentlySeenForCall(lastSeen: string | null | undefined): boolean {
+  if (!lastSeen) return false;
+  const t = new Date(lastSeen).getTime();
+  if (!Number.isFinite(t)) return false;
+  return Date.now() - t <= CALL_PRESENCE_GRACE_MS;
 }
 
 /** Оба участника → in_call (занятость в profiles). */

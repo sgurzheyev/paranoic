@@ -93,15 +93,20 @@ type SignalIce = { peerId: string; candidate: RTCIceCandidateInit };
 type SignalReject = { type: 'reject'; peerId: string; targetPeerId: string };
 
 /**
- * Публичные STUN (Google) + Open Relay TURN — без платных API.
- * iceTransportPolicy: 'all' (host / srflx / relay).
+ * Public STUN + optional TURN (Open Relay defaults + VITE_TURN_* env override).
+ * iceTransportPolicy: 'all' (host / srflx / relay) for mobile NAT traversal.
  */
-const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
+const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.services.mozilla.com:3478' },
+];
+
+const DEFAULT_TURN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:openrelay.metered.ca:80' },
   {
     urls: 'turn:openrelay.metered.ca:80',
@@ -119,6 +124,30 @@ const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
     credential: 'openrelayproject',
   },
 ];
+
+/** @deprecated use buildIceServers() */
+const PUBLIC_ICE_SERVERS: RTCIceServer[] = [...DEFAULT_STUN_SERVERS, ...DEFAULT_TURN_SERVERS];
+
+function readEnvTurnServers(): RTCIceServer[] {
+  const urlsRaw = import.meta.env.VITE_TURN_URLS as string | undefined;
+  const username = import.meta.env.VITE_TURN_USERNAME as string | undefined;
+  const credential = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
+  if (!urlsRaw?.trim() || !username?.trim() || !credential?.trim()) return [];
+  return urlsRaw
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((url) => ({ urls: url, username: username.trim(), credential: credential.trim() }));
+}
+
+/** ICE servers for RTCPeerConnection — STUN + TURN with optional env credentials. */
+function buildIceServers(): RTCIceServer[] {
+  const envTurn = readEnvTurnServers();
+  if (envTurn.length > 0) {
+    return [...DEFAULT_STUN_SERVERS, ...envTurn];
+  }
+  return [...DEFAULT_STUN_SERVERS, ...DEFAULT_TURN_SERVERS];
+}
 
 function p2pDebug(stage: string, detail?: unknown): void {
   if (detail !== undefined) console.log('[P2P_DEBUG]', stage, detail);
@@ -171,10 +200,10 @@ const FILE_CHUNK_MARKER = 0x01;
 const FILE_ACK_EVERY = 4;
 const FILE_ACK_TIMEOUT_MS = 45_000;
 const FILE_TRANSFER_LOST = 'Связь потеряна';
-const ICE_CONNECT_TIMEOUT_MS = 25_000;
+const ICE_CONNECT_TIMEOUT_MS = 30_000;
 /** Быстрее мягкий ICE при кратком обрыве / смене IP. */
 const ICE_SOFT_RESTART_DELAY_MS = 700;
-/** Гость ждёт offer от хоста; хост ждёт join. */
+/** Гость ждёт offer от хоста; хост ждёт join (≥20s для медленного Realtime). */
 const WAIT_FOR_PEER_TIMEOUT_MS = 45_000;
 const ICE_CONNECT_TIMEOUT_ERROR =
   'Таймаут соединения. VPN или провайдер блокирует трафик.';
@@ -212,9 +241,9 @@ export function isCallFailureUserAlert(message: string): boolean {
 const MEDIA_WATCH_MS = 2_500;
 const MEDIA_STALL_BYTES_THRESHOLD = 500;
 const NETWORK_WATCH_MS = 2_000;
-const BROADCAST_RETRIES = 4;
+const BROADCAST_RETRIES = 6;
 const JOIN_RETRY_MS = 1_200;
-const CALL_INVITE_RETRY_MS = 1_400;
+const CALL_INVITE_RETRY_MS = 1_200;
 
 const VIDEO_LEVEL_CONSTRAINTS: Record<
   Exclude<VideoAdaptLevel, 'audio-only'>,
@@ -687,15 +716,8 @@ export class P2PConnection {
     this.remotePeerId = null;
     this.handshakeStarted = false;
     this.pendingCandidates = [];
-    this.cachedIceServers =
-      this.cachedIceServers?.length ? this.cachedIceServers : PUBLIC_ICE_SERVERS;
-    if (!this.cachedIceServers.some((s) => String(s.urls).includes('stun:'))) {
-      this.cachedIceServers = [
-        { urls: 'stun:stun.l.google.com:19302' },
-        ...this.cachedIceServers,
-      ];
-    }
-    logIceServers('public Google STUN + Open Relay', this.cachedIceServers);
+    this.cachedIceServers = buildIceServers();
+    logIceServers('buildIceServers', this.cachedIceServers);
     this.setStatus(options.isHost ? 'waiting-answer' : 'connecting');
     this.setSignalingStatus('Подключаемся к сокетам...');
     p2pAudit('joinRoom start', { roomId, isHost: options.isHost, peerId: this.peerId });
@@ -1646,7 +1668,7 @@ export class P2PConnection {
 
     try {
       if (!this.cachedIceServers) {
-        this.cachedIceServers = PUBLIC_ICE_SERVERS;
+        this.cachedIceServers = buildIceServers();
       }
       if (!this.pc) {
         const pc = await this.createPeerConnection();
@@ -2092,10 +2114,7 @@ export class P2PConnection {
   }
 
   private async createPeerConnection(): Promise<RTCPeerConnection> {
-    let iceServers = this.cachedIceServers ?? PUBLIC_ICE_SERVERS;
-    if (!iceServers.some((s) => String(s.urls).includes('stun:'))) {
-      iceServers = [{ urls: 'stun:stun.l.google.com:19302' }, ...iceServers];
-    }
+    const iceServers = buildIceServers();
     this.cachedIceServers = iceServers;
     p2pAudit('createPeerConnection', {
       peerId: this.peerId,
@@ -2110,10 +2129,7 @@ export class P2PConnection {
       rtcpMuxPolicy: 'require',
       iceTransportPolicy: 'all',
     });
-    console.log('[ICE CONFIG]', {
-      iceServerCount: iceServers.length,
-      urls: iceServers.flatMap((s) => (Array.isArray(s.urls) ? s.urls : [s.urls])),
-    });
+    logIceServers('RTCPeerConnection', iceServers);
 
     pc.onsignalingstatechange = () => {
       console.log('[SIGNALING STATE]:', pc.signalingState);
@@ -3010,4 +3026,4 @@ export class P2PConnection {
   }
 }
 
-export { MAX_FILE_BYTES, PUBLIC_ICE_SERVERS as ICE_SERVERS };
+export { MAX_FILE_BYTES, buildIceServers, PUBLIC_ICE_SERVERS as ICE_SERVERS };

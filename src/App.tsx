@@ -2371,24 +2371,16 @@ export default function App() {
           setError(PROFILE_STALE_MESSAGE);
           return false;
         }
-        if (check.peer.status === 'in_call') {
+        if (!check.ok) {
           setError('Пользователь сейчас разговаривает. Попробуйте позже.');
           return false;
         }
-        if (check.needsOfflineConfirm) {
-          const sendNotify = window.confirm(
-            'Пользователь не в сети. Отправить уведомление (Push)?'
-          );
-          if (sendNotify) {
-            void upsertCallSession({
-              callId: newCallId(),
-              fromUserId: me.id,
-              toUserId: callTarget,
-              status: 'ringing',
-            });
-            setError('Уведомление отправлено.');
-          }
-          return false;
+        // Presence может кратко показывать offline — всё равно шлём offer через call inbox.
+        if (check.appearsOffline) {
+          console.log('[paranoic] callee appears offline — attempting call via inbox anyway', {
+            callTarget,
+            lastSeen: check.peer.lastSeen,
+          });
         }
         return true;
       };
