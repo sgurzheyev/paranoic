@@ -4098,6 +4098,7 @@ export default function App() {
               )}
             </div>
 
+            <div className="chat-compose-bar">
             <div
               className={`typing-indicator${peerTyping ? ' visible' : ''}`}
               aria-live="polite"
@@ -4160,6 +4161,7 @@ export default function App() {
                 />
               )}
             </form>
+            </div>
             </div>
           </section>
         )}

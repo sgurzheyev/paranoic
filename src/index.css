@@ -169,7 +169,7 @@ svg.lucide {
   height: 100svh;
   min-height: 100svh;
   margin: 0;
-  padding-bottom: 12px;
+  padding-bottom: 0;
   overflow: hidden;
 }
 
@@ -2206,12 +2206,27 @@ svg.lucide {
   box-shadow: var(--glass-shadow);
 }
 
+/** Bottom input stack — typing indicator + compose; clears Android nav / home indicator. */
+.chat-compose-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 12px);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .chat-compose-bar {
+    padding-bottom: calc(max(env(safe-area-inset-bottom, 0px), 16px) + 12px);
+  }
+}
+
 .typing-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 22px;
-  margin: 0 4px 6px;
+  margin: 0 4px 0;
   padding: 0 10px;
   font-size: 0.82rem;
   font-weight: 500;
