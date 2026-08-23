@@ -57,6 +57,7 @@ create policy "messages_delete_anon"
   using (true);
 
 -- Private bucket for encrypted blobs (Zero-Knowledge: delete after client decrypt).
+-- Path: {auth.uid()}/{to_user_id}/{id}.bin — see messages_rls_fix.sql for production RLS.
 insert into storage.buckets (id, name, public)
 values ('offline-transfers', 'offline-transfers', false)
 on conflict (id) do update set public = false;
@@ -85,3 +86,6 @@ create policy "offline_transfers_delete"
   on storage.objects for delete
   to anon, authenticated
   using (bucket_id = 'offline-transfers');
+
+-- NOTE: For production auth RLS, run messages_rls_fix.sql (or harden_rls_policies.sql)
+-- after enabling authenticated sessions. Demo policies above are open for local/dev.

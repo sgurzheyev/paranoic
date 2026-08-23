@@ -3,6 +3,10 @@
  * - шифрование на клиенте (ключ инбокса получателя)
  * - таблица `messages` + Storage `offline-transfers`
  * - после расшифровки у получателя — немедленное удаление (ZK).
+ *
+ * Storage path: `{auth.uid()}/{toUserId}/{id}.bin`
+ * RLS INSERT требует первую папку = auth.uid(); SELECT/DELETE —
+ * своя папка или объект, указанный в messages.to_user_id = auth.uid().
  */
 
 import {
@@ -62,8 +66,69 @@ export type IngestedPendingMedia = {
   createdAt: number;
 };
 
-function storagePathFor(toUserId: string, id: string): string {
-  return `${toUserId}/${id}.bin`;
+/** Путь в бакете: папка отправителя (= auth.uid()) → получатель → файл. */
+function storagePathFor(fromUserId: string, toUserId: string, id: string): string {
+  return `${fromUserId}/${toUserId}/${id}.bin`;
+}
+
+function rlsHint(message: string, table: 'messages' | 'storage'): string {
+  if (/row-level security|rls/i.test(message)) {
+    return table === 'storage'
+      ? `${message} (Storage: путь должен начинаться с auth.uid(); выполните supabase/messages_rls_fix.sql)`
+      : `${message} (messages: from_user_id должен быть auth.uid(); выполните supabase/messages_rls_fix.sql)`;
+  }
+  return message;
+}
+
+async function requireAuthUid(): Promise<string> {
+  const session = await ensureAuthSession();
+  const uid = session.user.id?.trim();
+  if (!uid) {
+    throw new Error('Нужен вход. Войдите по email, паролю или через Google.');
+  }
+  // Обновляем JWT на клиенте перед INSERT (иначе RLS видит auth.uid() = null).
+  const sb = getSupabase();
+  const { data, error } = await sb.auth.getSession();
+  if (error || !data.session?.access_token) {
+    const refreshed = await sb.auth.refreshSession();
+    if (refreshed.error || !refreshed.data.session?.user?.id) {
+      throw new Error('Сессия истекла. Войдите снова.');
+    }
+    return refreshed.data.session.user.id;
+  }
+  return data.session.user.id;
+}
+
+async function insertMessageRow(
+  row: Omit<PendingMessageRow, 'created_at'> & { created_at: string }
+): Promise<void> {
+  const sb = getSupabase();
+  const { error } = await sb.from(MESSAGES_TABLE).insert(row);
+  if (!error) return;
+
+  // Повтор после обрыва сети — обновляем свою же строку.
+  if (/duplicate|unique|already exists/i.test(error.message)) {
+    const { error: upErr } = await sb
+      .from(MESSAGES_TABLE)
+      .update({
+        pending_delivery: row.pending_delivery,
+        cipher: row.cipher,
+        iv: row.iv,
+        sender_name: row.sender_name,
+        media_mime: row.media_mime,
+        media_name: row.media_name,
+        media_size: row.media_size,
+        storage_path: row.storage_path,
+      })
+      .eq('id', row.id)
+      .eq('from_user_id', row.from_user_id);
+    if (upErr) {
+      throw new Error(rlsHint(upErr.message || 'Не удалось обновить офлайн-сообщение', 'messages'));
+    }
+    return;
+  }
+
+  throw new Error(rlsHint(error.message || 'Не удалось сохранить сообщение офлайн', 'messages'));
 }
 
 /** Загрузить зашифрованный текст в Supabase (pending_delivery). */
@@ -77,35 +142,43 @@ export async function uploadPendingText(opts: {
   if (!hasSupabaseConfig()) {
     throw new Error('Supabase не настроен');
   }
-  const session = await ensureAuthSession();
-  const fromUserId = session.user.id;
+  if (!opts.toUserId?.trim()) {
+    throw new Error('Не указан получатель');
+  }
 
-  const roomId = personalInboxRoom(opts.toUserId);
+  const fromUserId = await requireAuthUid();
+  if (opts.fromUserId && opts.fromUserId !== fromUserId) {
+    console.warn('[paranoic SAF] fromUserId ≠ auth.uid(), using auth.uid()', {
+      optsFrom: opts.fromUserId,
+      authUid: fromUserId,
+    });
+  }
+
+  const toUserId = opts.toUserId.trim();
+  const roomId = personalInboxRoom(toUserId);
   const key = await deriveKeyFromRoom(roomId);
   const { cipher, iv } = await encryptMessage(opts.plaintext, key);
-  const conv = conversationId(fromUserId, opts.toUserId);
-  const sb = getSupabase();
+  const conv = conversationId(fromUserId, toUserId);
 
-  const row: Omit<PendingMessageRow, 'created_at'> & { created_at?: string } = {
+  const row = {
     id: opts.id,
     from_user_id: fromUserId,
-    to_user_id: opts.toUserId,
+    to_user_id: toUserId,
     conversation_id: conv,
     room_id: roomId,
-    kind: 'text',
+    kind: 'text' as const,
     pending_delivery: true,
     cipher,
     iv,
     sender_name: opts.senderName,
-    media_mime: null,
-    media_name: null,
-    media_size: null,
-    storage_path: null,
+    media_mime: null as string | null,
+    media_name: null as string | null,
+    media_size: null as number | null,
+    storage_path: null as string | null,
     created_at: new Date().toISOString(),
   };
 
-  const { error } = await sb.from(MESSAGES_TABLE).upsert(row, { onConflict: 'id' });
-  if (error) throw new Error(error.message || 'Не удалось сохранить сообщение офлайн');
+  await insertMessageRow(row);
 }
 
 /** Зашифровать файл и положить в Storage + строку messages. */
@@ -120,13 +193,23 @@ export async function uploadPendingMedia(opts: {
   if (!hasSupabaseConfig()) {
     throw new Error('Supabase не настроен');
   }
+  if (!opts.toUserId?.trim()) {
+    throw new Error('Не указан получатель');
+  }
   if (opts.file.size > MAX_OFFLINE_FILE_BYTES) {
     throw new Error('Файл слишком большой (макс. 16 МБ)');
   }
-  const session = await ensureAuthSession();
-  const fromUserId = session.user.id;
 
-  const roomId = personalInboxRoom(opts.toUserId);
+  const fromUserId = await requireAuthUid();
+  if (opts.fromUserId && opts.fromUserId !== fromUserId) {
+    console.warn('[paranoic SAF] fromUserId ≠ auth.uid(), using auth.uid()', {
+      optsFrom: opts.fromUserId,
+      authUid: fromUserId,
+    });
+  }
+
+  const toUserId = opts.toUserId.trim();
+  const roomId = personalInboxRoom(toUserId);
   const key = await deriveKeyFromRoom(roomId);
   opts.onProgress?.(0.05);
 
@@ -135,7 +218,7 @@ export async function uploadPendingMedia(opts: {
   opts.onProgress?.(0.45);
 
   const cipherBytes = base64ToBytes(cipher);
-  const path = storagePathFor(opts.toUserId, opts.id);
+  const path = storagePathFor(fromUserId, toUserId, opts.id);
   const sb = getSupabase();
 
   const { error: upErr } = await sb.storage
@@ -145,14 +228,16 @@ export async function uploadPendingMedia(opts: {
       contentType: 'application/octet-stream',
       cacheControl: '0',
     });
-  if (upErr) throw new Error(upErr.message || 'Не удалось загрузить файл офлайн');
+  if (upErr) {
+    throw new Error(rlsHint(upErr.message || 'Не удалось загрузить файл офлайн', 'storage'));
+  }
   opts.onProgress?.(0.85);
 
-  const conv = conversationId(fromUserId, opts.toUserId);
+  const conv = conversationId(fromUserId, toUserId);
   const row = {
     id: opts.id,
     from_user_id: fromUserId,
-    to_user_id: opts.toUserId,
+    to_user_id: toUserId,
     conversation_id: conv,
     room_id: roomId,
     kind: 'media' as const,
@@ -167,16 +252,19 @@ export async function uploadPendingMedia(opts: {
     created_at: new Date().toISOString(),
   };
 
-  const { error } = await sb.from(MESSAGES_TABLE).upsert(row, { onConflict: 'id' });
-  if (error) {
+  try {
+    await insertMessageRow(row);
+  } catch (e) {
     await sb.storage.from(OFFLINE_TRANSFERS_BUCKET).remove([path]).catch(() => undefined);
-    throw new Error(error.message || 'Не удалось сохранить метаданные файла');
+    throw e;
   }
   opts.onProgress?.(1);
 }
 
 /** Удалить ciphertext из Storage и строку из messages (Zero-Knowledge). */
-export async function purgePendingDelivery(row: Pick<PendingMessageRow, 'id' | 'storage_path'>): Promise<void> {
+export async function purgePendingDelivery(
+  row: Pick<PendingMessageRow, 'id' | 'storage_path'>
+): Promise<void> {
   if (!hasSupabaseConfig()) return;
   await ensureAuthSession();
   const sb = getSupabase();
@@ -194,7 +282,7 @@ async function downloadCipherBlob(path: string): Promise<ArrayBuffer> {
   const sb = getSupabase();
   const { data, error } = await sb.storage.from(OFFLINE_TRANSFERS_BUCKET).download(path);
   if (error || !data) {
-    throw new Error(error?.message || 'Не удалось скачать офлайн-файл');
+    throw new Error(rlsHint(error?.message || 'Не удалось скачать офлайн-файл', 'storage'));
   }
   return data.arrayBuffer();
 }
@@ -212,14 +300,22 @@ export async function syncPendingDeliveries(
 ): Promise<{ text: number; media: number }> {
   if (!hasSupabaseConfig() || !myUserId) return { text: 0, media: 0 };
 
-  await ensureAuthSession();
+  const authUid = await requireAuthUid();
+  const selfId = authUid === myUserId ? myUserId : authUid;
+  if (authUid !== myUserId) {
+    console.warn('[paranoic SAF] sync myUserId ≠ auth.uid(), using auth.uid()', {
+      myUserId,
+      authUid,
+    });
+  }
+
   const sb = getSupabase();
   const { data, error } = await sb
     .from(MESSAGES_TABLE)
     .select(
       'id,from_user_id,to_user_id,conversation_id,room_id,kind,pending_delivery,cipher,iv,sender_name,media_mime,media_name,media_size,storage_path,created_at'
     )
-    .eq('to_user_id', myUserId)
+    .eq('to_user_id', selfId)
     .eq('pending_delivery', true)
     .order('created_at', { ascending: true });
 
@@ -234,7 +330,7 @@ export async function syncPendingDeliveries(
 
   for (const row of rows) {
     try {
-      const roomId = row.room_id || personalInboxRoom(myUserId);
+      const roomId = row.room_id || personalInboxRoom(selfId);
       const key = await deriveKeyFromRoom(roomId);
       const createdAt = Date.parse(row.created_at) || Date.now();
       const senderName = row.sender_name || 'Близкий';
@@ -244,7 +340,7 @@ export async function syncPendingDeliveries(
         const text = await decryptMessage(row.cipher, row.iv, key);
         await handlers.onText({
           id: row.id,
-          conversationId: row.conversation_id || conversationId(row.from_user_id, myUserId),
+          conversationId: row.conversation_id || conversationId(row.from_user_id, selfId),
           fromUserId: row.from_user_id,
           senderName,
           text,
@@ -267,7 +363,7 @@ export async function syncPendingDeliveries(
         const blob = new Blob([plain], { type: mime });
         await handlers.onMedia({
           id: row.id,
-          conversationId: row.conversation_id || conversationId(row.from_user_id, myUserId),
+          conversationId: row.conversation_id || conversationId(row.from_user_id, selfId),
           fromUserId: row.from_user_id,
           senderName,
           mime,
