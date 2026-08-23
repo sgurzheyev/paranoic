@@ -6,6 +6,7 @@ import App from './App.tsx';
 import InAppBrowserFallback from './InAppBrowserFallback';
 import { isInAppBrowser } from './inAppBrowser';
 import { P2PProvider } from './P2PProvider';
+import { LanguageProvider } from './i18n';
 
 if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
   document.documentElement.classList.add('capacitor-android');
@@ -19,7 +20,9 @@ createRoot(document.getElementById('root')!).render(
       <InAppBrowserFallback />
     ) : (
       <P2PProvider>
-        <App />
+        <LanguageProvider>
+          <App />
+        </LanguageProvider>
       </P2PProvider>
     )}
   </StrictMode>

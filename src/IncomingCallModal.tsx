@@ -1,6 +1,7 @@
 import { Phone, PhoneOff } from 'lucide-react';
 import Avatar from './Avatar';
 import { callerDisplayName, type CallerInfo } from './callSignaling';
+import { useLanguage } from './i18n';
 import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 
 type IncomingCallModalProps = {
@@ -17,19 +18,25 @@ export default function IncomingCallModal({
   onAccept,
   onReject,
 }: IncomingCallModalProps) {
+  const { t } = useLanguage();
   const label = callerDisplayName(caller);
   const sub =
     caller.username && caller.name && caller.name !== 'Я'
       ? caller.name
       : caller.username
-        ? 'Вам звонят в Paranoic'
+        ? 'Paranoic'
         : `ID ${caller.id.slice(0, 12)}`;
 
   return (
-    <div className="incoming-call-modal" role="dialog" aria-modal="true" aria-label="Входящий звонок">
+    <div
+      className="incoming-call-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('call.incoming')}
+    >
       <div className="incoming-call-modal-glow" aria-hidden />
       <div className="incoming-call-modal-card">
-        <p className="incoming-call-modal-eyebrow">Входящий вызов</p>
+        <p className="incoming-call-modal-eyebrow">{t('call.incoming')}</p>
         <div className="incoming-call-modal-avatar-wrap">
           <span className="incoming-call-modal-ring" aria-hidden />
           <Avatar
@@ -48,20 +55,20 @@ export default function IncomingCallModal({
             type="button"
             className="incoming-call-reject"
             onClick={onReject}
-            aria-label="Отклонить"
+            aria-label={t('call.decline')}
           >
             <PhoneOff size={28} />
-            <span>Сбросить</span>
+            <span>{t('call.decline')}</span>
           </button>
           <button
             type="button"
             className={`incoming-call-accept${mediaBlocked ? ' is-media-blocked' : ''}`}
             onClick={onAccept}
-            aria-label="Принять"
+            aria-label={t('call.accept')}
             title={mediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
           >
             <Phone size={28} />
-            <span>Принять</span>
+            <span>{t('call.accept')}</span>
           </button>
         </div>
       </div>

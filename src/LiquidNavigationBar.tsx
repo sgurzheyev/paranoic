@@ -1,4 +1,5 @@
 import { Camera, MessageCircle, Settings2, UserRound, Users } from 'lucide-react';
+import { useLanguage } from './i18n';
 
 export type LiquidNavTab = 'chats' | 'contacts' | 'settings' | 'profile';
 
@@ -13,12 +14,13 @@ type LiquidNavigationBarProps = {
   onProfile: () => void;
 };
 
-const TABS: { id: LiquidNavTab; label: string; icon: typeof MessageCircle }[] = [
-  { id: 'chats', label: 'Чаты', icon: MessageCircle },
-  { id: 'contacts', label: 'Контакты', icon: Users },
-  { id: 'settings', label: 'Настройки', icon: Settings2 },
-  { id: 'profile', label: 'Профиль', icon: UserRound },
-];
+const TAB_IDS: LiquidNavTab[] = ['chats', 'contacts', 'settings', 'profile'];
+const TAB_ICONS = {
+  chats: MessageCircle,
+  contacts: Users,
+  settings: Settings2,
+  profile: UserRound,
+} as const;
 
 /**
  * Фиксированный Bottom Tab Bar (iOS / modern Android).
@@ -31,10 +33,14 @@ export default function LiquidNavigationBar({
   onSettings,
   onProfile,
 }: LiquidNavigationBarProps) {
-  const activeIndex = Math.max(
-    0,
-    TABS.findIndex((t) => t.id === active)
-  );
+  const { t } = useLanguage();
+  const labels: Record<LiquidNavTab, string> = {
+    chats: t('nav.chats'),
+    contacts: t('nav.contacts'),
+    settings: t('nav.settings'),
+    profile: t('nav.profile'),
+  };
+  const activeIndex = Math.max(0, TAB_IDS.findIndex((id) => id === active));
 
   const handlers: Record<LiquidNavTab, () => void> = {
     chats: onChats,
@@ -44,7 +50,7 @@ export default function LiquidNavigationBar({
   };
 
   return (
-    <nav className="liquid-nav" aria-label="Главная навигация">
+    <nav className="liquid-nav" aria-label={t('nav.aria')}>
       <div className="liquid-nav-panel liquid-nav-panel--tabs4">
         <span
           className="liquid-nav-blob liquid-nav-blob--tabs4"
@@ -53,20 +59,21 @@ export default function LiquidNavigationBar({
             transform: `translateX(${activeIndex * 100}%)`,
           }}
         />
-        {TABS.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = tab.id === active;
+        {TAB_IDS.map((id) => {
+          const Icon = TAB_ICONS[id];
+          const isActive = id === active;
+          const label = labels[id];
           return (
             <button
-              key={tab.id}
+              key={id}
               type="button"
               className={`liquid-nav-btn${isActive ? ' is-active' : ''}`}
               aria-current={isActive ? 'page' : undefined}
-              aria-label={tab.label}
-              onClick={handlers[tab.id]}
+              aria-label={label}
+              onClick={handlers[id]}
             >
               <Icon size={18} />
-              <span className="liquid-nav-label">{tab.label}</span>
+              <span className="liquid-nav-label">{label}</span>
             </button>
           );
         })}

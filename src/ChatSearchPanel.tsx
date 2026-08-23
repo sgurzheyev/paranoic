@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import type { Contact } from './contacts';
+import { useLanguage } from './i18n';
 import {
   classifyMessageCategory,
   loadMediaBlob,
@@ -19,22 +20,22 @@ import {
 
 const FILTERS: Array<{
   id: ChatSearchFilter;
-  label: string;
+  labelKey: string;
   icon: typeof Search;
 }> = [
-  { id: 'all', label: 'Все', icon: Search },
-  { id: 'media', label: 'Медиа', icon: ImageIcon },
-  { id: 'links', label: 'Ссылки', icon: Link2 },
-  { id: 'files', label: 'Файлы', icon: FileText },
-  { id: 'voice', label: 'Голосовые', icon: Mic },
+  { id: 'all', labelKey: 'chats.filterAll', icon: Search },
+  { id: 'media', labelKey: 'chats.filterMedia', icon: ImageIcon },
+  { id: 'links', labelKey: 'chats.filterLinks', icon: Link2 },
+  { id: 'files', labelKey: 'chats.filterFiles', icon: FileText },
+  { id: 'voice', labelKey: 'chats.filterVoice', icon: Mic },
 ];
 
-const CATEGORY_LABEL: Record<string, string> = {
-  media: 'Медиа',
-  links: 'Ссылка',
-  files: 'Файл',
-  voice: 'Голос',
-  text: 'Текст',
+const CATEGORY_KEYS: Record<string, string> = {
+  media: 'chats.badgeMedia',
+  links: 'chats.badgeLink',
+  files: 'chats.badgeFile',
+  voice: 'chats.badgeVoice',
+  text: 'chats.badgeText',
 };
 
 type ChatSearchPanelProps = {
@@ -106,6 +107,7 @@ export default function ChatSearchPanel({
   onResultsModeChange,
   onOpenPeer,
 }: ChatSearchPanelProps) {
+  const { t } = useLanguage();
   const inputId = useId();
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -182,7 +184,7 @@ export default function ChatSearchPanel({
           type="search"
           enterKeyHint="search"
           autoComplete="off"
-          placeholder="Поиск в чатах и медиатеке"
+          placeholder={t('chats.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -196,7 +198,7 @@ export default function ChatSearchPanel({
           <button
             type="button"
             className="chat-search-clear"
-            aria-label="Очистить поиск"
+            aria-label={t('common.close')}
             onMouseDown={(e) => e.preventDefault()}
             onClick={clearSearch}
           >
@@ -206,7 +208,7 @@ export default function ChatSearchPanel({
       </label>
 
       {searchActive && (
-        <div className="chat-search-tabs" role="tablist" aria-label="Тип контента">
+        <div className="chat-search-tabs" role="tablist" aria-label={t('search.category')}>
           {FILTERS.map((tab) => {
             const Icon = tab.icon;
             const active = filter === tab.id;
@@ -221,7 +223,7 @@ export default function ChatSearchPanel({
                 onClick={() => setFilter(tab.id)}
               >
                 <Icon size={12} strokeWidth={1.75} aria-hidden />
-                {tab.label}
+                {t(tab.labelKey)}
               </button>
             );
           })}
@@ -229,12 +231,12 @@ export default function ChatSearchPanel({
       )}
 
       {showResults && (
-        <div className="chat-search-results" role="listbox" aria-label="Результаты поиска">
+        <div className="chat-search-results" role="listbox" aria-label={t('chats.searchPlaceholder')}>
           {scanning && (
-            <p className="chat-search-status">Сканирую локальную историю…</p>
+            <p className="chat-search-status">{t('chats.searchScanning')}</p>
           )}
           {empty && (
-            <p className="chat-search-status">Ничего не найдено в этой категории.</p>
+            <p className="chat-search-status">{t('chats.searchEmpty')}</p>
           )}
 
           {contactHits.map((c) => (
@@ -252,7 +254,7 @@ export default function ChatSearchPanel({
               <span className="chat-search-hit-body">
                 <span className="chat-search-hit-top">
                   <span className="chat-search-hit-title">{c.name}</span>
-                  <span className="chat-search-hit-badge">Чат</span>
+                  <span className="chat-search-hit-badge">{t('chats.badgeChat')}</span>
                 </span>
                 <span className="chat-search-hit-sub truncate">
                   {c.username ? `@${c.username}` : c.id}
@@ -292,8 +294,11 @@ export default function ChatSearchPanel({
                   </span>
                   <span className="chat-search-hit-sub">
                     <span className="chat-search-hit-badge">
-                      {CATEGORY_LABEL[classifyMessageCategory(hit.message)] ||
-                        CATEGORY_LABEL[hit.category]}
+                      {t(
+                        CATEGORY_KEYS[classifyMessageCategory(hit.message)] ||
+                          CATEGORY_KEYS[hit.category] ||
+                          'chats.badgeText'
+                      )}
                     </span>
                     <span className="truncate">{peer}</span>
                   </span>

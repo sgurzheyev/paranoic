@@ -122,6 +122,7 @@ import {
   type StoredMessage,
 } from './storage';
 import { applySettingsSideEffects, loadSettings, saveSettings, type AppSettings } from './settings';
+import { useLanguage } from './i18n';
 import {
   enqueueOutbox,
   listOutbox,
@@ -189,6 +190,7 @@ function nowTime() {
 }
 
 export default function App() {
+  const { t } = useLanguage();
   const {
     setStatus: mirrorP2pStatus,
     setCallState: mirrorCallState,
@@ -3481,7 +3483,7 @@ export default function App() {
                 {mainTab === 'chats' && (
                   <div className="tab-panel liquid-glass-card contacts-panel">
                     <div className="contacts-head">
-                      <h2>Чаты</h2>
+                      <h2>{t('chats.title')}</h2>
                       <span className="contacts-count">{contacts.length}</span>
                     </div>
                     <ChatSearchPanel
@@ -3497,7 +3499,7 @@ export default function App() {
                     {connected && peerId && !chatsSearchMode && (
                       <div className="active-session-card">
                         <p className="lead" style={{ margin: 0 }}>
-                          На связи: <strong>{peerLabel}</strong>
+                          {t('chats.onCall')}: <strong>{peerLabel}</strong>
                         </p>
                         <div className="mega-grid" style={{ marginTop: 12 }}>
                           <button
@@ -3514,7 +3516,7 @@ export default function App() {
                             }}
                           >
                             <Phone size={18} />
-                            Позвонить
+                            {t('common.call')}
                           </button>
                           <button
                             type="button"
@@ -3522,7 +3524,7 @@ export default function App() {
                             onClick={() => setScreen('chat')}
                           >
                             <MessageCircle size={18} />
-                            Открыть чат
+                            {t('chats.openChat')}
                           </button>
                         </div>
                         <button
@@ -3531,14 +3533,13 @@ export default function App() {
                           onClick={disconnect}
                           style={{ marginTop: 8 }}
                         >
-                          <Unplug size={16} /> Разорвать связь
+                          <Unplug size={16} /> {t('chats.disconnect')}
                         </button>
                       </div>
                     )}
                     {chatsSearchMode ? null : contacts.length === 0 ? (
                       <p className="empty-contacts">
-                        Пока нет чатов. Откройте чужую ссылку или дождитесь, пока кто-то откроет
-                        вашу — контакт сохранится автоматически.
+                        {t('chats.empty')} {t('chats.emptyHint')}
                       </p>
                     ) : (
                       <ul className="contacts-list">
@@ -3570,16 +3571,15 @@ export default function App() {
                 {mainTab === 'contacts' && (
                   <div className="tab-panel liquid-glass-card contacts-panel">
                     <div className="contacts-head">
-                      <h2>Контакты</h2>
+                      <h2>{t('contacts.title')}</h2>
                       <span className="contacts-count">{contacts.length}</span>
                     </div>
                     <p className="hint" style={{ marginTop: 0 }}>
-                      Доверенные контакты закреплены навсегда. Карта семьи — в настройках.
+                      {t('contacts.hint')}
                     </p>
                     {contacts.length === 0 ? (
                       <p className="empty-contacts">
-                        Записная книжка пуста. Перейдите по чужой ссылке — хост сохранится
-                        автоматически.
+                        {t('contacts.empty')}
                       </p>
                     ) : (
                       <ul className="contacts-list">
@@ -3661,9 +3661,9 @@ export default function App() {
                     navigateHome();
                   }}
                 >
-                  <ArrowLeft size={16} /> Чаты
+                  <ArrowLeft size={16} /> {t('chats.title')}
                 </button>
-                <h2>Чаты</h2>
+                <h2>{t('chats.title')}</h2>
               </div>
               <div className="messenger-sidebar-search">
                 <ChatSearchPanel
@@ -3682,7 +3682,7 @@ export default function App() {
               {sidebarSearchMode ? null : (
               <ul className="messenger-contacts">
                 {contacts.length === 0 ? (
-                  <li className="empty-contacts">Пока нет контактов</li>
+                  <li className="empty-contacts">{t('chats.noContacts')}</li>
                 ) : (
                   contacts.map((c) => {
                     const online = onlineIds.has(c.id);
@@ -3758,7 +3758,7 @@ export default function App() {
                   navigateHome();
                 }}
               >
-                <ArrowLeft size={16} /> Назад
+                <ArrowLeft size={16} /> {t('chat.back')}
               </button>
               <button
                 type="button"
@@ -3778,7 +3778,11 @@ export default function App() {
                 <div className="chat-peer-meta">
                   <span className="chat-peer-name">{peerLabel}</span>
                   <span className="chat-peer-sub">
-                    {peerTyping ? 'печатает…' : connected ? 'на связи' : 'офлайн'}
+                    {peerTyping
+                      ? t('chat.typing')
+                      : connected
+                        ? t('chat.onLink')
+                        : t('chat.offline')}
                   </span>
                 </div>
               </button>
@@ -3792,13 +3796,13 @@ export default function App() {
                   }
                   void dialFromChat();
                 }}
-                aria-label={callLive ? 'Вернуться к звонку' : 'Позвонить'}
+                aria-label={callLive ? t('chat.returnToCall') : t('chat.call')}
                 title={
                   callMediaBlocked
                     ? MEDIA_ACCESS_DENIED_MESSAGE
                     : callLive
-                      ? 'Вернуться к звонку'
-                      : 'Позвонить'
+                      ? t('chat.returnToCall')
+                      : t('chat.call')
                 }
                 disabled={!activePeerId}
                 aria-disabled={!activePeerId || callMediaBlocked}
@@ -3809,7 +3813,7 @@ export default function App() {
                 type="button"
                 className="icon-btn"
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="Прикрепить файл"
+                aria-label={t('chat.attach')}
                 disabled={!peerId}
               >
                 <Paperclip size={17} />
@@ -3821,8 +3825,7 @@ export default function App() {
                 <div className="trust-banner-copy">
                   <Shield size={16} />
                   <p>
-                    Новый собеседник. Добавьте в доверенные, чтобы контакт навсегда остался в
-                    записной книжке.
+                    {t('chat.trustTitle')}
                   </p>
                 </div>
                 <div className="trust-banner-actions">
@@ -3832,7 +3835,7 @@ export default function App() {
                     onClick={() => void handleTrustPeer()}
                   >
                     <UserCheck size={16} />
-                    Доверять
+                    {t('chat.trust')}
                   </button>
                   <button
                     type="button"
@@ -3840,7 +3843,7 @@ export default function App() {
                     onClick={() => void handleBlockPeer()}
                   >
                     <Ban size={16} />
-                    Заблокировать
+                    {t('chat.block')}
                   </button>
                 </div>
               </div>
@@ -3848,7 +3851,7 @@ export default function App() {
 
             <div className="chat-log">
               {messages.length === 0 ? (
-                <p className="empty">Пока тихо. Напишите первое сообщение.</p>
+                <p className="empty">{t('chat.empty')}</p>
               ) : (
                 messages.map((m) => {
                   const progress =

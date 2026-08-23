@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Check, Copy, Link2, X } from 'lucide-react';
 import Avatar from './Avatar';
 import { buildMagicLink } from './identity';
+import { useLanguage } from './i18n';
 import type { StoredMessage } from './storage';
 
 export type PeerProfileData = {
@@ -30,6 +31,7 @@ function isImageUrl(url: string, name?: string): boolean {
  * Закрытие не трогает P2P / conversation — возврат в тот же чат.
  */
 export default function PeerProfileModal({ peer, messages, onClose }: PeerProfileModalProps) {
+  const { t } = useLanguage();
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
 
@@ -63,7 +65,11 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
     }
   };
 
-  const statusLabel = peer.typing ? 'печатает…' : peer.online ? 'на связи' : 'офлайн';
+  const statusLabel = peer.typing
+    ? t('peer.typing')
+    : peer.online
+      ? t('peer.online')
+      : t('peer.offline');
 
   return (
     <div
@@ -79,11 +85,11 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
         onClick={(e) => e.stopPropagation()}
       >
         <header className="peer-profile-head">
-          <h2 id="peer-profile-title">Профиль</h2>
+          <h2 id="peer-profile-title">{t('peer.title')}</h2>
           <button
             type="button"
             className="icon-btn"
-            aria-label="Закрыть"
+            aria-label={t('common.close')}
             onClick={onClose}
           >
             <X size={16} />
@@ -109,7 +115,7 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
         </div>
 
         <section className="peer-profile-section">
-          <p className="peer-profile-label">User ID</p>
+          <p className="peer-profile-label">{t('peer.userId')}</p>
           <div className="peer-profile-row">
             <code className="peer-profile-mono">{peer.id}</code>
             <button
@@ -125,7 +131,7 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
 
         <section className="peer-profile-section">
           <p className="peer-profile-label">
-            <Link2 size={12} aria-hidden /> Ссылка
+            <Link2 size={12} aria-hidden /> {t('peer.link')}
           </p>
           <div className="peer-profile-row">
             <code className="peer-profile-mono">{shareLink}</code>
@@ -141,9 +147,9 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
         </section>
 
         <section className="peer-profile-section">
-          <p className="peer-profile-label">Медиа в этом чате</p>
+          <p className="peer-profile-label">{t('peer.mediaInChat')}</p>
           {mediaItems.length === 0 ? (
-            <p className="peer-profile-empty">Пока нет фото или видео в переписке.</p>
+            <p className="peer-profile-empty">{t('peer.noMedia')}</p>
           ) : (
             <div className="peer-profile-media-grid">
               {mediaItems.map((item) =>

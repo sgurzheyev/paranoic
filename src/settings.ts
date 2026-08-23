@@ -19,26 +19,28 @@ export type AppLanguage =
 export type AppLanguageOption = {
   id: AppLanguage;
   label: string;
+  /** Unicode flag emoji. */
+  flag: string;
   /** BCP 47 tag for document.documentElement.lang */
   locale: string;
 };
 
-/** Порядок в горизонтальном скролле настроек. */
+/** Порядок в вертикальном списке настроек. */
 export const APP_LANGUAGES: AppLanguageOption[] = [
-  { id: 'ru', label: 'Русский', locale: 'ru' },
-  { id: 'en', label: 'English', locale: 'en' },
-  { id: 'uk', label: 'Українська', locale: 'uk' },
-  { id: 'de', label: 'Deutsch', locale: 'de' },
-  { id: 'fr', label: 'Français', locale: 'fr' },
-  { id: 'es', label: 'Español', locale: 'es' },
-  { id: 'it', label: 'Italiano', locale: 'it' },
-  { id: 'pt', label: 'Português', locale: 'pt' },
-  { id: 'pl', label: 'Polski', locale: 'pl' },
-  { id: 'tr', label: 'Türkçe', locale: 'tr' },
-  { id: 'ar', label: 'العربية', locale: 'ar' },
-  { id: 'zh', label: '中文', locale: 'zh-CN' },
-  { id: 'ja', label: '日本語', locale: 'ja' },
-  { id: 'ko', label: '한국어', locale: 'ko' },
+  { id: 'ru', label: 'Русский', flag: '🇷🇺', locale: 'ru' },
+  { id: 'en', label: 'English', flag: '🇬🇧', locale: 'en' },
+  { id: 'uk', label: 'Українська', flag: '🇺🇦', locale: 'uk' },
+  { id: 'de', label: 'Deutsch', flag: '🇩🇪', locale: 'de' },
+  { id: 'fr', label: 'Français', flag: '🇫🇷', locale: 'fr' },
+  { id: 'es', label: 'Español', flag: '🇪🇸', locale: 'es' },
+  { id: 'it', label: 'Italiano', flag: '🇮🇹', locale: 'it' },
+  { id: 'pt', label: 'Português', flag: '🇵🇹', locale: 'pt' },
+  { id: 'pl', label: 'Polski', flag: '🇵🇱', locale: 'pl' },
+  { id: 'tr', label: 'Türkçe', flag: '🇹🇷', locale: 'tr' },
+  { id: 'ar', label: 'العربية', flag: '🇸🇦', locale: 'ar' },
+  { id: 'zh', label: '中文', flag: '🇨🇳', locale: 'zh-CN' },
+  { id: 'ja', label: '日本語', flag: '🇯🇵', locale: 'ja' },
+  { id: 'ko', label: '한국어', flag: '🇰🇷', locale: 'ko' },
 ];
 
 const LANGUAGE_IDS = new Set<string>(APP_LANGUAGES.map((l) => l.id));
@@ -66,7 +68,7 @@ const DEFAULTS: AppSettings = {
   notificationsEnabled: true,
   notificationPreview: true,
   powerSaving: false,
-  language: 'ru',
+  language: 'en',
 };
 
 export function normalizeLanguage(raw: unknown): AppLanguage {

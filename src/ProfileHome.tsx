@@ -11,6 +11,7 @@ import {
   Settings2,
 } from 'lucide-react';
 import Avatar from './Avatar';
+import { useLanguage } from './i18n';
 import { updateIdentity, type UserIdentity } from './identity';
 import { bumpMediaViewCount, getMediaViewCounts } from './mediaViews';
 import { uploadAvatar } from './profile';
@@ -85,6 +86,7 @@ export default function ProfileHome({
   onCopyMagicLink,
   copiedLink,
 }: ProfileHomeProps) {
+  const { t } = useLanguage();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
@@ -129,7 +131,7 @@ export default function ProfileHome({
       const next = updateIdentity({ avatarUrl: url });
       onIdentityChange(next);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось загрузить фото');
+      setError(t('profile.uploadFailed'));
     } finally {
       setUploading(false);
     }
@@ -141,7 +143,7 @@ export default function ProfileHome({
       setCopiedId(true);
       window.setTimeout(() => setCopiedId(false), 1600);
     } catch {
-      setError('Не удалось скопировать User ID');
+      setError(t('profile.copyIdFailed'));
     }
   };
 
@@ -209,7 +211,7 @@ export default function ProfileHome({
             type="button"
             className="icon-btn profile-settings-btn"
             onClick={onOpenEditor}
-            aria-label="Редактировать профиль"
+            aria-label={t('profile.edit')}
           >
             <Settings2 size={16} />
           </button>
@@ -223,11 +225,11 @@ export default function ProfileHome({
             disabled={uploading}
           >
             <ImagePlus size={14} />
-            {uploading ? 'Загрузка…' : 'Фото'}
+            {uploading ? t('profile.uploading') : t('profile.photo')}
           </button>
           <button type="button" className="profile-action-chip" onClick={() => void copyId()}>
             {copiedId ? <Check size={14} /> : <Copy size={14} />}
-            {copiedId ? 'ID скопирован' : 'User ID'}
+            {copiedId ? t('profile.idCopied') : t('profile.userId')}
           </button>
           <button
             type="button"
@@ -235,7 +237,7 @@ export default function ProfileHome({
             onClick={() => void onCopyMagicLink()}
           >
             {copiedLink ? <Check size={14} /> : <Link2 size={14} />}
-            {copiedLink ? 'Ссылка' : 'Magic link'}
+            {copiedLink ? t('common.copied') : t('profile.magicLink')}
           </button>
         </div>
 
@@ -245,8 +247,8 @@ export default function ProfileHome({
         <p className="profile-magic-url mono-box magic-url">{magicLink}</p>
         <p className="hint" style={{ margin: 0 }}>
           {handle
-            ? `Короткая ссылка: ?u=${handle}`
-            : 'Задайте никнейм в редакторе — ссылка станет короткой.'}
+            ? t('profile.shortLinkHint', { handle })
+            : t('profile.setUsernameHint')}
         </p>
         {error ? <p className="profile-home-error">{error}</p> : null}
       </header>
@@ -254,12 +256,12 @@ export default function ProfileHome({
       <section className="profile-archive liquid-glass-card">
         <div className="profile-archive-head">
           <div>
-            <h3>Медиа-архив</h3>
-            <p>Ваши публикации из локальных чатов</p>
+            <h3>{t('profile.mediaArchive')}</h3>
+            <p>{t('profile.mediaArchiveSub')}</p>
           </div>
           <div className="profile-archive-stats">
             <span>
-              <strong>{archive.length}</strong> файлов
+              <strong>{archive.length}</strong> {t('profile.files')}
             </span>
             <span>
               <Eye size={12} /> <strong>{totalViews}</strong>
@@ -268,9 +270,7 @@ export default function ProfileHome({
         </div>
 
         {archive.length === 0 ? (
-          <p className="profile-archive-empty">
-            Пока пусто. Отправьте фото, файл или голосовое — они появятся здесь.
-          </p>
+          <p className="profile-archive-empty">{t('profile.emptyArchive')}</p>
         ) : (
           <div className="profile-archive-grid">
             {archive.map((item) => (
@@ -287,10 +287,10 @@ export default function ProfileHome({
                   <span className="profile-archive-card-title truncate">
                     {item.message.mediaName ||
                       (item.category === 'voice'
-                        ? 'Голосовое'
+                        ? t('profile.voice')
                         : item.category === 'files'
-                          ? 'Файл'
-                          : 'Медиа')}
+                          ? t('profile.file')
+                          : t('profile.media'))}
                   </span>
                   <span className="profile-archive-card-foot">
                     <span className="profile-archive-views">
@@ -312,10 +312,10 @@ export default function ProfileHome({
       <p className="lead" style={{ margin: '4px 2px 0' }}>
         {connected ? (
           <>
-            На связи: <strong>{peerLabel}</strong>
+            {t('profile.onCallWith')}: <strong>{peerLabel}</strong>
           </>
         ) : (
-          'Ссылка активна. Поделитесь ею — гости сохранят вас в контакты.'
+          t('profile.linkActive')
         )}
       </p>
       {e2eeHint ? <p className="hint muted-sep">{e2eeHint}</p> : null}
@@ -332,7 +332,7 @@ export default function ProfileHome({
           <div
             className="profile-archive-preview"
             role="dialog"
-            aria-label="Просмотр медиа"
+            aria-label={t('profile.media')}
             onClick={(e) => e.stopPropagation()}
           >
             {preview.item.category === 'voice' ||
@@ -344,11 +344,11 @@ export default function ProfileHome({
               <img src={preview.url} alt="" className="profile-archive-preview-media" />
             ) : (
               <a href={preview.url} download={preview.item.message.mediaName || 'file'} className="mega-btn primary compact">
-                Скачать файл
+                {t('profile.file')}
               </a>
             )}
             <p className="profile-archive-preview-views">
-              <Eye size={14} /> {views[preview.item.id] ?? 0} просмотров
+              <Eye size={14} /> {views[preview.item.id] ?? 0} {t('profile.views')}
             </p>
           </div>
         </div>

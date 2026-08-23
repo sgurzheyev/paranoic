@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { signInWithEmailPassword, signUpWithEmailPassword } from './authCredentials';
+import { useLanguage } from './i18n';
 import ParanoicLogo from './ParanoicLogo';
 import type { UserIdentity } from './identity';
 
@@ -13,6 +14,7 @@ type AuthMode = 'signup' | 'login';
  * Регистрация / вход: никнейм (только signup), email, пароль → GO PARANOIC.
  */
 export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
+  const { t } = useLanguage();
   const [mode, setMode] = useState<AuthMode>('signup');
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
@@ -38,7 +40,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         return;
       }
       if ('pendingConfirmation' in result && result.pendingConfirmation) {
-        setError('Подтвердите email по ссылке из письма, затем войдите.');
+        setError(t('auth.confirmEmail'));
         setPassword('');
         return;
       }
@@ -47,7 +49,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         onAuthenticated(result.identity);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось выполнить вход');
+      setError(e instanceof Error ? e.message : t('auth.failed'));
     } finally {
       setBusy(false);
     }
@@ -62,14 +64,14 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         <header className="auth-screen__header">
           <ParanoicLogo size={40} compact withWordmark className="auth-screen__logo" />
           <h1 className="auth-screen__title">
-            {mode === 'signup' ? 'Создать аккаунт' : 'Войти'}
+            {mode === 'signup' ? t('auth.createAccount') : t('auth.signIn')}
           </h1>
-          <p className="auth-screen__sub">Paranoic — анонимный мессенджер</p>
+          <p className="auth-screen__sub">{t('auth.subtitle')}</p>
         </header>
 
         {mode === 'signup' && (
           <label className="auth-screen__field">
-            <span>Уникальный никнейм</span>
+            <span>{t('auth.nickname')}</span>
             <input
               type="text"
               className="auth-screen__password auth-screen__username"
@@ -89,7 +91,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         )}
 
         <label className="auth-screen__field">
-          <span>Email</span>
+          <span>{t('auth.email')}</span>
           <input
             type="email"
             className="auth-screen__password"
@@ -109,7 +111,7 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         </label>
 
         <label className="auth-screen__field">
-          <span>Пароль</span>
+          <span>{t('auth.password')}</span>
           <input
             type="password"
             className="auth-screen__password"
@@ -136,11 +138,11 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           disabled={busy}
           onClick={() => void submit()}
         >
-          {busy ? '…' : 'GO PARANOIC'}
+          {busy ? '…' : t('auth.go')}
         </button>
 
         <button type="button" className="auth-screen__toggle" disabled={busy} onClick={toggleMode}>
-          {mode === 'login' ? 'Нет аккаунта? Создать' : 'Уже есть аккаунт? Войти'}
+          {mode === 'login' ? t('auth.noAccount') : t('auth.haveAccount')}
         </button>
       </div>
     </div>

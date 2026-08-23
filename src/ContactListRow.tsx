@@ -1,6 +1,7 @@
 import { Phone, UserCheck } from 'lucide-react';
 import Avatar from './Avatar';
 import type { Contact } from './contacts';
+import { useLanguage } from './i18n';
 import type { LastMessagePreview } from './storage';
 import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 
@@ -28,7 +29,8 @@ export default function ContactListRow({
   onOpen,
   onCall,
 }: ContactListRowProps) {
-  const subtitle = preview?.snippet || (online ? 'в сети' : 'не в сети');
+  const { t } = useLanguage();
+  const subtitle = preview?.snippet || (online ? t('common.online') : t('common.offline'));
 
   return (
     <li className="contact-list-item">
@@ -36,7 +38,7 @@ export default function ContactListRow({
         type="button"
         className="contact-row contact-row--info"
         disabled={disabled}
-        aria-label={`Чат с ${contact.name}`}
+        aria-label={t('contacts.chatAria', { name: contact.name })}
         onClick={onOpen}
       >
         <Avatar
@@ -51,7 +53,7 @@ export default function ContactListRow({
             <span className="contact-name min-w-0 truncate">
               {contact.name}
               {trusted && (
-                <span className="trust-badge" title="Доверенный">
+                <span className="trust-badge" title={t('contacts.trusted')}>
                   <UserCheck size={12} />
                 </span>
               )}
@@ -69,7 +71,7 @@ export default function ContactListRow({
         disabled={disabled}
         aria-disabled={disabled || mediaBlocked}
         title={mediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
-        aria-label={`Позвонить ${contact.name}`}
+        aria-label={t('contacts.callAria', { name: contact.name })}
         onClick={(e) => {
           e.stopPropagation();
           onCall();

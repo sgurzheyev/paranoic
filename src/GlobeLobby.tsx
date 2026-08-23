@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { initials } from './identity';
+import { useLanguage } from './i18n';
 import {
   applyMapboxAccessToken,
   applyMapboxStandardNight,
@@ -251,6 +252,7 @@ export default function GlobeLobby({
   currentUserId = '',
   active = true,
 }: GlobeLobbyProps) {
+  const { t } = useLanguage();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -289,8 +291,28 @@ export default function GlobeLobby({
   const [showContacts, setShowContacts] = useState(true);
   const [showGems, setShowGems] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+  const layersSlotRef = useRef<HTMLDivElement>(null);
   const [arOpen, setArOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+
+  useEffect(() => {
+    if (!layersOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const slot = layersSlotRef.current;
+      if (!slot) return;
+      if (e.target instanceof Node && slot.contains(e.target)) return;
+      setLayersOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLayersOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [layersOpen]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('ar-active', arOpen);
@@ -1093,7 +1115,7 @@ export default function GlobeLobby({
               onClick={onBack}
               className="lux-glass-chip mt-3 px-3 py-1.5 text-xs font-semibold"
             >
-              <ArrowLeft size={16} /> Назад
+              <ArrowLeft size={16} /> {t('map.back')}
             </button>
           </div>
         </div>
@@ -1107,7 +1129,7 @@ export default function GlobeLobby({
               onClick={onBack}
               className="lux-glass-chip map-ui-hit px-3 py-1.5 text-xs font-semibold"
             >
-              <ArrowLeft size={16} /> Назад
+              <ArrowLeft size={16} /> {t('map.back')}
             </button>
             {callAlertActive && (
               <button
@@ -1129,11 +1151,11 @@ export default function GlobeLobby({
                 onClick={onOpenAdmin}
                 className="lux-glass-chip px-3 py-2 text-xs font-extrabold"
               >
-                <ShieldCheck size={14} /> Admin Panel
+                <ShieldCheck size={14} /> {t('settings.adminPanel')}
               </button>
             )}
             <div className="lux-glass-chip px-3 py-1.5 text-xs font-semibold text-slate-300">
-              Family Mode
+              {t('map.familyMode')}
             </div>
           </div>
         </header>
@@ -1142,22 +1164,32 @@ export default function GlobeLobby({
         {/* Единый правый dock: слои, зум/GPS, память, AR, секретарь. */}
         {!isTargetingMode && !movingGem && (
           <aside className="map-side-dock map-ui-hit" aria-label="Управление картой">
-            <div className="map-side-dock__slot">
+            <div className="map-side-dock__slot" ref={layersSlotRef}>
               <button
                 type="button"
                 className={`map-side-dock__fab${layersOpen ? ' is-active' : ''}`}
                 aria-expanded={layersOpen}
-                aria-label="Слои карты"
-                title="Слои"
-                onClick={() => setLayersOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-controls="map-layers-menu"
+                aria-label={t('map.layersAria')}
+                title={t('map.layers')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLayersOpen((v) => !v);
+                }}
               >
                 <Layers size={16} strokeWidth={1.5} aria-hidden />
               </button>
               {layersOpen && (
-                <div className="map-layers-menu map-layers-menu--dock" role="menu">
-                  <p className="map-layers-menu-title">Слои карты</p>
+                <div
+                  id="map-layers-menu"
+                  className="map-layers-menu map-layers-menu--dock"
+                  role="menu"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="map-layers-menu-title">{t('map.layersTitle')}</p>
                   <label className="map-layers-toggle">
-                    <span>Контакты</span>
+                    <span>{t('map.contacts')}</span>
                     <input
                       type="checkbox"
                       checked={showContacts}
@@ -1166,7 +1198,7 @@ export default function GlobeLobby({
                     <span className="map-layers-switch" aria-hidden />
                   </label>
                   <label className="map-layers-toggle">
-                    <span>Капсулы памяти</span>
+                    <span>{t('map.pin')}</span>
                     <input
                       type="checkbox"
                       checked={showGems}
@@ -1176,7 +1208,7 @@ export default function GlobeLobby({
                   </label>
                   <label className="map-layers-toggle">
                     <span className="inline-flex items-center gap-1.5">
-                      <Ghost size={13} /> Режим Антарктиды
+                      <Ghost size={13} /> {t('map.ghostMode')}
                     </span>
                     <input
                       type="checkbox"
@@ -1193,8 +1225,8 @@ export default function GlobeLobby({
               <button
                 type="button"
                 className="map-zoom-dock__btn"
-                aria-label="Приблизить"
-                title="Приблизить"
+                aria-label={t('map.zoomIn')}
+                title={t('map.zoomIn')}
                 onClick={() => nudgeZoom(1.2)}
                 disabled={zoom >= 17.5}
               >
@@ -1203,8 +1235,8 @@ export default function GlobeLobby({
               <button
                 type="button"
                 className="map-zoom-dock__btn map-zoom-dock__btn--center"
-                aria-label="Моё местоположение"
-                title="Моё местоположение"
+                aria-label={t('map.myLocation')}
+                title={t('map.myLocation')}
                 onClick={flyToMyLocation}
               >
                 <Crosshair size={14} strokeWidth={1.5} aria-hidden />
@@ -1212,8 +1244,8 @@ export default function GlobeLobby({
               <button
                 type="button"
                 className="map-zoom-dock__btn"
-                aria-label="Отдалить"
-                title="Отдалить"
+                aria-label={t('map.zoomOut')}
+                title={t('map.zoomOut')}
                 onClick={() => nudgeZoom(-1.2)}
                 disabled={zoom <= 1.4}
               >
@@ -1225,8 +1257,8 @@ export default function GlobeLobby({
               type="button"
               className={`map-side-dock__fab map-side-dock__fab--memory${isTargetingMode ? ' is-active' : ''}`}
               disabled={banned}
-              aria-label="Закрепить фото или видео на карте"
-              title="Закрепить память на карте"
+              aria-label={t('map.memoryPin')}
+              title={t('map.memoryPin')}
               aria-pressed={isTargetingMode}
               onClick={() => {
                 setLayersOpen(false);
@@ -1241,7 +1273,7 @@ export default function GlobeLobby({
               className={`map-side-dock__fab map-side-dock__fab--ar${arOpen ? ' is-active' : ''}`}
               onClick={() => setArOpen(true)}
               aria-label="AR Footprints"
-              title="Дополненная реальность"
+              title={t('map.ar')}
               aria-pressed={arOpen}
             >
               <Box size={16} strokeWidth={1.5} aria-hidden />
@@ -1254,8 +1286,8 @@ export default function GlobeLobby({
                 setLayersOpen(false);
                 setAiOpen(true);
               }}
-              aria-label="Секретарь — ИИ-агент"
-              title="Секретарь"
+              aria-label={t('map.secretary')}
+              title={t('map.secretary')}
               aria-pressed={aiOpen}
             >
               <Radar size={16} strokeWidth={1.5} aria-hidden />

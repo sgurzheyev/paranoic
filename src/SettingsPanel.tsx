@@ -13,10 +13,12 @@ import {
   Timer,
   Zap,
 } from 'lucide-react';
+import { useLanguage } from './i18n';
 import { ensureNotifyPermission } from './notify';
 import { EPHEMERAL_TTL_MS, purgeExpiredMessages } from './storage';
 import {
   APP_LANGUAGES,
+  loadSettings,
   saveSettings,
   type AppLanguage,
   type AppSettings,
@@ -105,18 +107,18 @@ function NavRow({
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '—';
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} ГБ`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function deviceLabel(): string {
+function deviceLabel(fallback: string): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (/iPhone|iPad/i.test(ua)) return 'iOS · Safari';
   if (/Android/i.test(ua)) return 'Android';
   if (/Mac OS X/i.test(ua)) return 'macOS';
   if (/Windows/i.test(ua)) return 'Windows';
-  return 'Это устройство';
+  return fallback;
 }
 
 /** Структурированные настройки в стиле защищённых мессенджеров. */
@@ -127,7 +129,8 @@ export default function SettingsPanel({
   onOpenFamilyMap,
   onOpenAdmin,
 }: SettingsPanelProps) {
-  const [storageLabel, setStorageLabel] = useState('Считаем…');
+  const { t, language, setLanguage } = useLanguage();
+  const [storageLabel, setStorageLabel] = useState(t('settings.counting'));
   const [purging, setPurging] = useState(false);
   const [purgeHint, setPurgeHint] = useState('');
 
@@ -138,6 +141,7 @@ export default function SettingsPanel({
 
   useEffect(() => {
     let cancelled = false;
+    setStorageLabel(t('settings.counting'));
     void (async () => {
       try {
         if (navigator.storage?.estimate) {
@@ -147,7 +151,10 @@ export default function SettingsPanel({
           const quota = est.quota ?? 0;
           setStorageLabel(
             quota > 0
-              ? `${formatBytes(used)} из ${formatBytes(quota)}`
+              ? t('settings.ofQuota', {
+                  used: formatBytes(used),
+                  quota: formatBytes(quota),
+                })
               : formatBytes(used)
           );
           return;
@@ -155,12 +162,12 @@ export default function SettingsPanel({
       } catch {
         /* */
       }
-      if (!cancelled) setStorageLabel('Локально на устройстве');
+      if (!cancelled) setStorageLabel(t('settings.localOnDevice'));
     })();
     return () => {
       cancelled = true;
     };
-  }, [settings.ephemeral24h]);
+  }, [settings.ephemeral24h, t]);
 
   const clearOld = async () => {
     setPurging(true);
@@ -169,18 +176,19 @@ export default function SettingsPanel({
       const result = await purgeExpiredMessages(EPHEMERAL_TTL_MS);
       setPurgeHint(
         result.removed > 0
-          ? `Удалено сообщений: ${result.removed}`
-          : 'Нечего чистить — всё свежее'
+          ? t('settings.cleared', { count: result.removed })
+          : t('settings.nothingToClear')
       );
     } catch {
-      setPurgeHint('Не удалось очистить');
+      setPurgeHint(t('settings.clearFailed'));
     } finally {
       setPurging(false);
     }
   };
 
-  const setLanguage = (language: AppLanguage) => {
-    patch({ language });
+  const changeLanguage = (next: AppLanguage) => {
+    setLanguage(next);
+    onSettingsChange(loadSettings());
   };
 
   const langRailRef = useRef<HTMLDivElement>(null);
@@ -189,44 +197,44 @@ export default function SettingsPanel({
     const rail = langRailRef.current;
     if (!rail) return;
     const active = rail.querySelector<HTMLElement>('.settings-lang-btn.is-active');
-    active?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-  }, [settings.language]);
+    active?.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
+  }, [language]);
 
   return (
     <div className="tab-panel liquid-glass-card contacts-panel settings-tab">
       <div className="contacts-head">
-        <h2>Настройки</h2>
+        <h2>{t('settings.title')}</h2>
       </div>
 
-      <Section title="Конфиденциальность">
+      <Section title={t('settings.privacy')}>
         <ToggleRow
           icon={<Ghost size={16} />}
-          label="Ghost Mode"
-          description="На карте вы в Антарктиде, GPS выключен."
+          label={t('settings.ghostMode')}
+          description={t('settings.ghostModeDesc')}
           checked={settings.ghostMode}
           onChange={(ghostMode) => patch({ ghostMode })}
         />
         <ToggleRow
           icon={<Shield size={16} />}
-          label="Скрывать превью уведомлений"
-          description="В баннере только «Новое сообщение», без текста."
+          label={t('settings.hidePreview')}
+          description={t('settings.hidePreviewDesc')}
           checked={!settings.notificationPreview}
           onChange={(hide) => patch({ notificationPreview: !hide })}
         />
         <ToggleRow
           icon={<Timer size={16} />}
-          label="Удалять через 24 часа"
-          description="Старые сообщения стираются из локального хранилища."
+          label={t('settings.ephemeral')}
+          description={t('settings.ephemeralDesc')}
           checked={settings.ephemeral24h}
           onChange={(ephemeral24h) => patch({ ephemeral24h })}
         />
       </Section>
 
-      <Section title="Уведомления">
+      <Section title={t('settings.notifications')}>
         <ToggleRow
           icon={settings.notificationsEnabled ? <Bell size={16} /> : <BellOff size={16} />}
-          label="Уведомления"
-          description="Звук и баннеры входящих вызовов и сообщений."
+          label={t('settings.notifications')}
+          description={t('settings.notificationsDesc')}
           checked={settings.notificationsEnabled}
           onChange={(notificationsEnabled) => {
             patch({ notificationsEnabled });
@@ -235,42 +243,42 @@ export default function SettingsPanel({
         />
       </Section>
 
-      <Section title="Данные и память">
+      <Section title={t('settings.dataMemory')}>
         <NavRow
           icon={<Database size={16} />}
-          label="Локальное хранилище"
+          label={t('settings.localStorage')}
           description={storageLabel}
         />
         <NavRow
           icon={<Timer size={16} />}
-          label={purging ? 'Очистка…' : 'Очистить старые сообщения'}
-          description={purgeHint || 'Сообщения старше 24 часов и сироты медиа'}
+          label={purging ? t('settings.clearing') : t('settings.clearOld')}
+          description={purgeHint || t('settings.clearOldDesc')}
           onClick={() => {
             if (!purging) void clearOld();
           }}
         />
       </Section>
 
-      <Section title="Устройства">
+      <Section title={t('settings.devices')}>
         <NavRow
           icon={<MonitorSmartphone size={16} />}
-          label={deviceLabel()}
-          description="Активный сеанс · E2EE на этом устройстве"
-          trailing={<span className="settings-pill">Сейчас</span>}
+          label={deviceLabel(t('common.thisDevice'))}
+          description={t('settings.activeSession')}
+          trailing={<span className="settings-pill">{t('common.now')}</span>}
         />
       </Section>
 
-      <Section title="Энергосбережение">
+      <Section title={t('settings.power')}>
         <ToggleRow
           icon={<Zap size={16} />}
-          label="Режим экономии"
-          description="Меньше анимаций и фоновой активности интерфейса."
+          label={t('settings.powerSaving')}
+          description={t('settings.powerSavingDesc')}
           checked={settings.powerSaving}
           onChange={(powerSaving) => patch({ powerSaving })}
         />
       </Section>
 
-      <Section title="Язык интерфейса">
+      <Section title={t('settings.language')}>
         <div className="settings-lang-row">
           <div className="settings-row-icon" aria-hidden>
             <Languages size={16} />
@@ -279,11 +287,11 @@ export default function SettingsPanel({
             ref={langRailRef}
             className="settings-lang-options"
             role="listbox"
-            aria-label="Язык интерфейса"
+            aria-label={t('settings.languageAria')}
             tabIndex={0}
           >
             {APP_LANGUAGES.map((lang) => {
-              const active = settings.language === lang.id;
+              const active = language === lang.id;
               return (
                 <button
                   key={lang.id}
@@ -291,9 +299,12 @@ export default function SettingsPanel({
                   role="option"
                   aria-selected={active}
                   className={`settings-lang-btn${active ? ' is-active' : ''}`}
-                  onClick={() => setLanguage(lang.id)}
+                  onClick={() => changeLanguage(lang.id)}
                 >
-                  {lang.label}
+                  <span className="settings-lang-flag" aria-hidden>
+                    {lang.flag}
+                  </span>
+                  <span className="settings-lang-name">{lang.label}</span>
                 </button>
               );
             })}
@@ -304,12 +315,12 @@ export default function SettingsPanel({
       <div className="settings-footer-actions">
         <button type="button" className="mega-btn primary compact" onClick={onOpenFamilyMap}>
           <Globe2 size={16} />
-          Открыть карту семьи
+          {t('common.map')}
         </button>
         {isAdmin && (
           <button type="button" className="mega-btn media compact" onClick={onOpenAdmin}>
             <ShieldCheck size={16} />
-            Admin Panel
+            {t('settings.adminPanel')}
           </button>
         )}
       </div>
