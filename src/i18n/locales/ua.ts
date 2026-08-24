@@ -170,6 +170,7 @@ export const uaPatch: LocalePatch = {
     layersTitle: 'Шари карти',
     layersAria: 'Шари карти',
     contacts: 'Контакти',
+    showOnMap: 'Показати {name} на карті',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Наблизити',

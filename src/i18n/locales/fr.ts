@@ -159,6 +159,7 @@ export const frPatch: LocalePatch = {
     layersTitle: 'Couches de la carte',
     layersAria: 'Couches de la carte',
     contacts: 'Contacts',
+    showOnMap: 'Afficher {name} sur la carte',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Zoom avant',

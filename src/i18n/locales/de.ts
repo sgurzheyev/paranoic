@@ -159,6 +159,7 @@ export const dePatch: LocalePatch = {
     layersTitle: 'Kartenebenen',
     layersAria: 'Kartenebenen',
     contacts: 'Kontakte',
+    showOnMap: '{name} auf der Karte zeigen',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Vergrößern',

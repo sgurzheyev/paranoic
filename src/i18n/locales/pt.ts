@@ -159,6 +159,7 @@ export const ptPatch: LocalePatch = {
     layersTitle: 'Camadas do mapa',
     layersAria: 'Camadas do mapa',
     contacts: 'Contatos',
+    showOnMap: 'Mostrar {name} no mapa',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Aumentar zoom',

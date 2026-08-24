@@ -179,6 +179,7 @@ export type TranslationDict = {
     layersTitle: string;
     layersAria: string;
     contacts: string;
+    showOnMap: string;
     pin: string;
     ghostMode: string;
     zoomIn: string;

@@ -286,6 +286,7 @@ export default function GlobeLobby({
   const [tokenMissing, setTokenMissing] = useState(false);
   const [selected, setSelected] = useState<MapPerson | null>(null);
   const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
+  const [hoveredContactId, setHoveredContactId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(WORLD_ZOOM);
   const [gems, setGems] = useState<MapGem[]>([]);
   const [openedGem, setOpenedGem] = useState<MapGem | null>(null);
@@ -458,7 +459,7 @@ export default function GlobeLobby({
       essential: true,
       curve: 1.6,
       easing: (t) => 1 - Math.pow(1 - t, 3),
-      padding: { top: 100, bottom: 200, left: 48, right: 48 },
+      padding: { top: 100, bottom: 200, left: 48, right: 132 },
     });
   };
 
@@ -1121,12 +1122,10 @@ export default function GlobeLobby({
     });
   };
 
-  const geoHint =
-    geoSource === 'gps'
-      ? 'Ваша точка — по GPS'
-      : geoSource === 'antarctica'
-        ? 'Ghost Mode / без GPS — условная Антарктида'
-        : 'Запрашиваем геолокацию…';
+  const previewContact =
+    contacts.find((c) => c.userId === hoveredContactId) ??
+    contacts.find((c) => c.userId === focusedContactId) ??
+    null;
 
   return (
     <div className="family-map-root absolute inset-0 h-full w-full overflow-hidden bg-[#05070b] font-[Nunito,system-ui,sans-serif] text-slate-300">
@@ -1342,29 +1341,78 @@ export default function GlobeLobby({
           </aside>
         )}
 
+        {!isTargetingMode && !movingGem && contacts.length > 0 && showContacts && (
+          <aside
+            className="map-contacts-strip map-ui-hit"
+            aria-label={t('map.contacts')}
+            onPointerLeave={() => setHoveredContactId(null)}
+          >
+            {previewContact && (
+              <span className="map-contacts-strip__preview">{previewContact.name}</span>
+            )}
+            <p className="map-contacts-strip__title">{t('map.contacts')}</p>
+            <div className="map-contacts-strip__list">
+              {contacts.map((c) => {
+                const isFocused = focusedContactId === c.userId;
+                const hasCoords = Number.isFinite(c.lat) && Number.isFinite(c.lng);
+                return (
+                  <button
+                    key={c.userId}
+                    type="button"
+                    className={`map-contacts-strip__item${isFocused ? ' is-active' : ''}`}
+                    disabled={!hasCoords}
+                    onPointerEnter={() => setHoveredContactId(c.userId)}
+                    onFocus={() => setHoveredContactId(c.userId)}
+                    onClick={() => {
+                      if (!hasCoords) return;
+                      flyToPerson(c, false);
+                    }}
+                    aria-label={t('map.showOnMap', { name: c.name })}
+                    aria-pressed={isFocused}
+                    title={c.name}
+                  >
+                    <span
+                      className="map-contacts-strip__avatar"
+                      style={{ background: c.avatarUrl ? '#1a1d28' : c.color }}
+                    >
+                      {c.avatarUrl ? (
+                        <img
+                          src={c.avatarUrl}
+                          alt=""
+                          className="map-contacts-strip__photo"
+                          draggable={false}
+                        />
+                      ) : (
+                        <span className="map-contacts-strip__initials">{initials(c.name)}</span>
+                      )}
+                      <span
+                        className={`map-contacts-strip__dot${c.online ? ' is-online' : ''}`}
+                        aria-hidden
+                      />
+                    </span>
+                    <span className="map-contacts-strip__label">{c.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        )}
+
         {banned && (
           <div className="map-banned-banner map-ui-hit">
             Аккаунт заблокирован — звонки и чат с карты недоступны.
           </div>
         )}
 
-        <div className="pointer-events-none px-2 text-center sm:px-3">
-          <p className="mx-auto max-w-md text-xs text-slate-300/90">
-            {isTargetingMode
-              ? 'Двигайте карту — прицел в центре покажет место капсулы'
-              : movingGem
-                ? 'Двигайте карту — сохраните новую позицию метки'
-              : `Чистая карта · контакты Family Mode${showGems ? ' · капсулы включены' : ''}`}
-          </p>
-          {!isTargetingMode && !movingGem && (
-            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/40 px-3 py-1 text-xs text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl">
-              <MapPin size={12} className="lux-text-emerald" /> {geoHint}
-              {showGems && gems.length > 0 && (
-                <span className="ml-1 lux-text-gold">· {gems.length} капсул</span>
-              )}
+        {(isTargetingMode || movingGem) && (
+          <div className="pointer-events-none px-2 text-center sm:px-3">
+            <p className="mx-auto max-w-md text-xs text-slate-300/90">
+              {isTargetingMode
+                ? 'Двигайте карту — прицел в центре покажет место капсулы'
+                : 'Двигайте карту — сохраните новую позицию метки'}
             </p>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="map-chrome-bottom mt-auto flex flex-col gap-3 px-4 sm:px-6">
           {isTargetingMode ? (
@@ -1405,57 +1453,7 @@ export default function GlobeLobby({
                 Отмена
               </button>
             </div>
-          ) : (
-            <>
-          {contacts.length > 0 && showContacts && (
-            <div className="map-ui-panel overflow-x-auto rounded-xl border border-white/10 bg-white/[0.06] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] backdrop-blur-[18px]">
-              <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                Близкие
-              </p>
-              <div className="flex gap-2">
-                {contacts.map((c) => (
-                  <button
-                    key={c.userId}
-                    type="button"
-                    className={`flex w-14 shrink-0 flex-col items-center gap-1 rounded-lg p-1 transition ${
-                      focusedContactId === c.userId
-                        ? 'bg-white/15 ring-1 ring-white/30'
-                        : 'hover:bg-white/10'
-                    }`}
-                    onClick={() => {
-                      // Плавный перелёт камеры к GPS / Антарктиде (Ghost Mode).
-                      flyToPerson(c, false);
-                    }}
-                    aria-label={`Показать ${c.name} на карте`}
-                  >
-                    <span
-                      className="relative h-9 w-9 overflow-hidden rounded-full border border-white/40 shadow-md"
-                      style={{ background: c.avatarUrl ? '#1a1d28' : c.color }}
-                    >
-                      {c.avatarUrl ? (
-                        <img
-                          src={c.avatarUrl}
-                          alt=""
-                          className="h-full w-full rounded-full object-cover"
-                          draggable={false}
-                        />
-                      ) : (
-                        <span className="flex h-full w-full items-center justify-center text-xs font-extrabold text-white">
-                          {initials(c.name)}
-                        </span>
-                      )}
-                      <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#05070b] lux-online-dot" />
-                    </span>
-                    <span className="max-w-full truncate text-[11px] font-bold text-slate-200">
-                      {c.name}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-            </>
-          )}
+          ) : null}
         </div>
       </div>
 

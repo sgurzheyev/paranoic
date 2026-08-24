@@ -157,6 +157,7 @@ export const zhPatch: LocalePatch = {
     layersTitle: '地图图层',
     layersAria: '地图图层',
     contacts: '联系人',
+    showOnMap: '在地图上显示 {name}',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: '放大',

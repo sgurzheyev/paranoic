@@ -159,6 +159,7 @@ export const itPatch: LocalePatch = {
     layersTitle: 'Livelli mappa',
     layersAria: 'Livelli mappa',
     contacts: 'Contatti',
+    showOnMap: 'Mostra {name} sulla mappa',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Ingrandisci',

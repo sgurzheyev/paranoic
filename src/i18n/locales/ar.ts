@@ -159,6 +159,7 @@ export const arPatch: LocalePatch = {
     layersTitle: 'طبقات الخريطة',
     layersAria: 'طبقات الخريطة',
     contacts: 'جهات الاتصال',
+    showOnMap: 'إظهار {name} على الخريطة',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'تكبير',

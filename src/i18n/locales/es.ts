@@ -159,6 +159,7 @@ export const esPatch: LocalePatch = {
     layersTitle: 'Capas del mapa',
     layersAria: 'Capas del mapa',
     contacts: 'Contactos',
+    showOnMap: 'Mostrar a {name} en el mapa',
     pin: 'Pin',
     ghostMode: 'Ghost Mode',
     zoomIn: 'Acercar',
