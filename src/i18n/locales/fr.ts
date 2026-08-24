@@ -73,7 +73,7 @@ export const frPatch: LocalePatch = {
   },
   contacts: {
     title: 'Contacts',
-    hint: 'Les contacts de confiance restent pour toujours. La carte familiale est dans les Paramètres.',
+    hint: 'Vos contacts de confiance. Leur position en temps réel apparaît sur la carte.',
     empty: 'Le carnet d\'adresses est vide. Ouvrez le lien de quelqu\'un — l\'hôte est enregistré automatiquement.',
     trusted: 'De confiance',
     callAria: 'Appeler {name}',

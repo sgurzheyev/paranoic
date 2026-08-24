@@ -73,7 +73,7 @@ export const esPatch: LocalePatch = {
   },
   contacts: {
     title: 'Contactos',
-    hint: 'Los contactos de confianza permanecen para siempre. El mapa familiar está en Ajustes.',
+    hint: 'Tus contactos de confianza. Su ubicación en tiempo real se muestra en el mapa.',
     empty: 'La libreta de direcciones está vacía. Abre el enlace de alguien — el anfitrión se guarda automáticamente.',
     trusted: 'De confianza',
     callAria: 'Llamar a {name}',

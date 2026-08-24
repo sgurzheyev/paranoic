@@ -83,7 +83,7 @@ const en: TranslationDict = {
   },
   contacts: {
     title: 'Contacts',
-    hint: 'Trusted contacts stay forever. Family map is in Settings.',
+    hint: 'Your trusted contacts. Their real-time locations are shown on the map.',
     empty: 'Address book is empty. Open someone’s link — the host is saved automatically.',
     trusted: 'Trusted',
     callAria: 'Call {name}',
@@ -346,7 +346,7 @@ const ru: TranslationDict = {
   },
   contacts: {
     title: 'Контакты',
-    hint: 'Доверенные контакты закреплены навсегда. Карта семьи — в настройках.',
+    hint: 'Ваши доверенные контакты. Их геопозиция отображается на карте.',
     empty: 'Записная книжка пуста. Перейдите по чужой ссылке — хост сохранится автоматически.',
     trusted: 'Доверенный',
     callAria: 'Позвонить {name}',
@@ -610,7 +610,7 @@ const pl: TranslationDict = {
   },
   contacts: {
     title: 'Kontakty',
-    hint: 'Zaufane kontakty zostają na zawsze. Mapa rodziny jest w Ustawieniach.',
+    hint: 'Twoje zaufane kontakty. Ich lokalizacja na żywo jest widoczna na mapie.',
     empty: 'Książka adresowa jest pusta. Otwórz czyjś link — host zapisze się automatycznie.',
     trusted: 'Zaufany',
     callAria: 'Zadzwoń do {name}',

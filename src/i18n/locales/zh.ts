@@ -72,7 +72,7 @@ export const zhPatch: LocalePatch = {
   },
   contacts: {
     title: '联系人',
-    hint: '受信任的联系人将永久保留。家庭地图在设置中。',
+    hint: '你的受信任联系人。他们的实时位置会显示在地图上。',
     empty: '通讯录为空。打开他人的链接 — 对方会自动保存为联系人。',
     trusted: '已信任',
     callAria: '呼叫 {name}',

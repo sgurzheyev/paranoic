@@ -5350,7 +5350,12 @@ body.power-saving {
 }
 
 .contacts-hint {
-  margin-top: 0;
+  margin: 0 0 8px;
+  padding: 0 2px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-align: left;
+  color: var(--muted);
 }
 
 .contacts-search-global {

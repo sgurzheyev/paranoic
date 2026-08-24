@@ -73,7 +73,7 @@ export const ptPatch: LocalePatch = {
   },
   contacts: {
     title: 'Contatos',
-    hint: 'Contatos confiáveis ficam para sempre. O mapa da família está em Configurações.',
+    hint: 'Seus contatos confiáveis. A localização em tempo real deles aparece no mapa.',
     empty: 'A agenda está vazia. Abra o link de alguém — o anfitrião é salvo automaticamente.',
     trusted: 'Confiável',
     callAria: 'Ligar para {name}',

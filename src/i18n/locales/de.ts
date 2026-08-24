@@ -73,7 +73,7 @@ export const dePatch: LocalePatch = {
   },
   contacts: {
     title: 'Kontakte',
-    hint: 'Vertrauenswürdige Kontakte bleiben für immer. Die Familienkarte findest du in den Einstellungen.',
+    hint: 'Deine vertrauenswürdigen Kontakte. Ihre Live-Standorte siehst du auf der Karte.',
     empty: 'Das Adressbuch ist leer. Öffne jemandes Link — der Host wird automatisch gespeichert.',
     trusted: 'Vertrauenswürdig',
     callAria: '{name} anrufen',

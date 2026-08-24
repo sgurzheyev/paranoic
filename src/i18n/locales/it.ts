@@ -73,7 +73,7 @@ export const itPatch: LocalePatch = {
   },
   contacts: {
     title: 'Contatti',
-    hint: 'I contatti fidati restano per sempre. La mappa familiare è nelle Impostazioni.',
+    hint: 'I tuoi contatti fidati. La loro posizione in tempo reale è sulla mappa.',
     empty: 'La rubrica è vuota. Apri il link di qualcuno — l\'host viene salvato automaticamente.',
     trusted: 'Fidato',
     callAria: 'Chiama {name}',
