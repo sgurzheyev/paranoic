@@ -53,6 +53,11 @@ export type TranslationDict = {
     confirmEmail: string;
     failed: string;
     downloadAndroid: string;
+    forgotPassword: string;
+    resetPasswordSent: string;
+    enterEmailForReset: string;
+    resetPasswordFailed: string;
+    invalidEmail: string;
   };
   chats: {
     title: string;

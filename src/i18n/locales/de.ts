@@ -41,6 +41,11 @@ export const dePatch: LocalePatch = {
     confirmEmail: 'Bestätige deine E-Mail über den Link und melde dich dann an.',
     failed: 'Anmeldung fehlgeschlagen',
     downloadAndroid: 'Android-App herunterladen',
+    forgotPassword: 'Passwort vergessen?',
+    resetPasswordSent: 'Prüfe deine E-Mail — wir haben dir einen Link zum Zurücksetzen gesendet.',
+    enterEmailForReset: 'Gib oben deine E-Mail ein, um einen Reset-Link zu erhalten.',
+    resetPasswordFailed: 'Reset-Link konnte nicht gesendet werden',
+    invalidEmail: 'Gib eine gültige E-Mail-Adresse ein',
   },
   chats: {
     title: 'Chats',

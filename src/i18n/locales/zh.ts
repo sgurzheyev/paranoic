@@ -41,6 +41,11 @@ export const zhPatch: LocalePatch = {
     confirmEmail: '请通过邮件中的链接确认邮箱，然后登录。',
     failed: '无法登录',
     downloadAndroid: '下载 Android 应用',
+    forgotPassword: '忘记密码？',
+    resetPasswordSent: '请查收邮件 — 我们已发送密码重置链接。',
+    enterEmailForReset: '请在上方输入邮箱以接收重置链接。',
+    resetPasswordFailed: '无法发送重置链接',
+    invalidEmail: '请输入有效的邮箱地址',
   },
   chats: {
     title: '聊天',

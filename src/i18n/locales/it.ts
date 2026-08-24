@@ -41,6 +41,11 @@ export const itPatch: LocalePatch = {
     confirmEmail: 'Conferma la tua email tramite il link, poi accedi.',
     failed: 'Impossibile accedere',
     downloadAndroid: 'Scarica app Android',
+    forgotPassword: 'Password dimenticata?',
+    resetPasswordSent: 'Controlla la tua email — abbiamo inviato un link per reimpostare la password.',
+    enterEmailForReset: 'Inserisci la tua email sopra per ricevere un link di reimpostazione.',
+    resetPasswordFailed: 'Impossibile inviare il link di reimpostazione',
+    invalidEmail: 'Inserisci un indirizzo email valido',
   },
   chats: {
     title: 'Chat',

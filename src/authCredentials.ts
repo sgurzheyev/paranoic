@@ -397,6 +397,38 @@ export async function signInWithGoogleOAuth(): Promise<AuthResult> {
   }
 }
 
+/** Запрос ссылки для сброса пароля на email. */
+export async function requestPasswordReset(
+  emailRaw: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!hasSupabaseConfig()) {
+    return {
+      ok: false,
+      message: 'Supabase не настроен — восстановление пароля недоступно',
+    };
+  }
+
+  const email = normalizeAuthEmail(emailRaw);
+  if (!isValidAuthEmail(email)) {
+    return { ok: false, message: 'Введите корректный email' };
+  }
+
+  try {
+    const sb = getSupabase();
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      return { ok: false, message: error.message || 'Не удалось отправить ссылку для сброса' };
+    }
+    return { ok: true };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error('[paranoic auth] password reset failed', detail);
+    return { ok: false, message: detail || 'Не удалось отправить ссылку для сброса' };
+  }
+}
+
 /** @deprecated */
 export async function signInWithNicknamePassword(
   emailOrNick: string,

@@ -41,6 +41,11 @@ export const arPatch: LocalePatch = {
     confirmEmail: 'أكّد بريدك عبر الرابط، ثم سجّل الدخول.',
     failed: 'تعذّر تسجيل الدخول',
     downloadAndroid: 'تحميل تطبيق Android',
+    forgotPassword: 'نسيت كلمة المرور؟',
+    resetPasswordSent: 'تحقق من بريدك — أرسلنا رابط إعادة تعيين كلمة المرور.',
+    enterEmailForReset: 'أدخل بريدك أعلاه لتلقي رابط إعادة التعيين.',
+    resetPasswordFailed: 'تعذّر إرسال رابط إعادة التعيين',
+    invalidEmail: 'أدخل عنوان بريد إلكتروني صالحًا',
   },
   chats: {
     title: 'المحادثات',

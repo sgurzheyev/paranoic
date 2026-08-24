@@ -1,6 +1,11 @@
 import { Download, Smartphone } from 'lucide-react';
-import { useState } from 'react';
-import { signInWithEmailPassword, signUpWithEmailPassword } from './authCredentials';
+import { useRef, useState } from 'react';
+import {
+  isValidAuthEmail,
+  requestPasswordReset,
+  signInWithEmailPassword,
+  signUpWithEmailPassword,
+} from './authCredentials';
 import { useLanguage } from './i18n';
 import ParanoicLogo from './ParanoicLogo';
 import type { UserIdentity } from './identity';
@@ -16,20 +21,58 @@ type AuthMode = 'signup' | 'login';
  */
 export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const { t } = useLanguage();
+  const emailRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<AuthMode>('signup');
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [resetNeedsEmail, setResetNeedsEmail] = useState(false);
 
   const toggleMode = () => {
     setMode((m) => (m === 'login' ? 'signup' : 'login'));
     setError('');
+    setSuccess('');
+    setResetNeedsEmail(false);
+  };
+
+  const requestReset = async () => {
+    setError('');
+    setSuccess('');
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setResetNeedsEmail(true);
+      emailRef.current?.focus();
+      return;
+    }
+    setResetNeedsEmail(false);
+    if (!isValidAuthEmail(trimmed)) {
+      setError(t('auth.invalidEmail'));
+      emailRef.current?.focus();
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await requestPasswordReset(trimmed);
+      if (!result.ok) {
+        setError(result.message || t('auth.resetPasswordFailed'));
+        return;
+      }
+      setSuccess(t('auth.resetPasswordSent'));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('auth.resetPasswordFailed'));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async () => {
     setError('');
+    setSuccess('');
+    setResetNeedsEmail(false);
     setBusy(true);
     try {
       const result =
@@ -94,10 +137,15 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         <label className="auth-screen__field">
           <span>{t('auth.email')}</span>
           <input
+            ref={emailRef}
             type="email"
             className="auth-screen__password"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (resetNeedsEmail && e.target.value.trim()) setResetNeedsEmail(false);
+              if (success) setSuccess('');
+            }}
             placeholder="you@example.com"
             autoCapitalize="off"
             autoCorrect="off"
@@ -111,21 +159,45 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           />
         </label>
 
-        <label className="auth-screen__field">
-          <span>{t('auth.password')}</span>
-          <input
-            type="password"
-            className="auth-screen__password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            disabled={busy}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submit();
-            }}
-          />
-        </label>
+        <div className="auth-screen__password-block">
+          <label className="auth-screen__field">
+            <span>{t('auth.password')}</span>
+            <input
+              type="password"
+              className="auth-screen__password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              disabled={busy}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submit();
+              }}
+            />
+          </label>
+          {mode === 'login' && (
+            <button
+              type="button"
+              className="auth-screen__forgot"
+              disabled={busy}
+              onClick={() => void requestReset()}
+            >
+              {t('auth.forgotPassword')}
+            </button>
+          )}
+        </div>
+
+        {resetNeedsEmail && (
+          <p className="auth-screen__reset-hint" role="status">
+            {t('auth.enterEmailForReset')}
+          </p>
+        )}
+
+        {success && (
+          <p className="auth-screen__success" role="status">
+            {success}
+          </p>
+        )}
 
         {error && (
           <p className="auth-screen__error" role="alert">

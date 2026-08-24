@@ -41,6 +41,11 @@ export const ptPatch: LocalePatch = {
     confirmEmail: 'Confirme seu e-mail pelo link e depois entre.',
     failed: 'Não foi possível entrar',
     downloadAndroid: 'Baixar app Android',
+    forgotPassword: 'Esqueceu a senha?',
+    resetPasswordSent: 'Verifique seu e-mail — enviamos um link para redefinir a senha.',
+    enterEmailForReset: 'Digite seu e-mail acima para receber um link de redefinição.',
+    resetPasswordFailed: 'Não foi possível enviar o link de redefinição',
+    invalidEmail: 'Digite um endereço de e-mail válido',
   },
   chats: {
     title: 'Conversas',

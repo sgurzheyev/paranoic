@@ -4239,6 +4239,50 @@ svg.lucide {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.auth-screen__password-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auth-screen__forgot {
+  align-self: flex-end;
+  margin: 0;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: #64748b;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth-screen__forgot:hover:not(:disabled) {
+  color: #94a3b8;
+}
+
+.auth-screen__forgot:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.auth-screen__reset-hint {
+  margin: -2px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: #94a3b8;
+}
+
+.auth-screen__success {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #86efac;
+}
+
 .auth-screen__error {
   margin: 0;
   font-size: 0.8rem;

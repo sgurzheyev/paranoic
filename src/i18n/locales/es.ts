@@ -41,6 +41,11 @@ export const esPatch: LocalePatch = {
     confirmEmail: 'Confirma tu correo con el enlace y luego inicia sesión.',
     failed: 'No se pudo iniciar sesión',
     downloadAndroid: 'Descargar app para Android',
+    forgotPassword: '¿Olvidaste tu contraseña?',
+    resetPasswordSent: 'Revisa tu correo — enviamos un enlace para restablecer la contraseña.',
+    enterEmailForReset: 'Introduce tu correo arriba para recibir un enlace de restablecimiento.',
+    resetPasswordFailed: 'No se pudo enviar el enlace de restablecimiento',
+    invalidEmail: 'Introduce un correo electrónico válido',
   },
   chats: {
     title: 'Chats',

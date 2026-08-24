@@ -41,6 +41,11 @@ export const uaPatch: LocalePatch = {
     confirmEmail: 'Підтвердіть email за посиланням з листа, потім увійдіть.',
     failed: 'Не вдалося увійти',
     downloadAndroid: 'Завантажити додаток для Android',
+    forgotPassword: 'Забули пароль?',
+    resetPasswordSent: 'Перевірте пошту — ми надіслали посилання для скидання пароля.',
+    enterEmailForReset: 'Введіть email вище, щоб отримати посилання для скидання.',
+    resetPasswordFailed: 'Не вдалося надіслати посилання для скидання',
+    invalidEmail: 'Введіть коректний email',
   },
   chats: {
     title: 'Чати',

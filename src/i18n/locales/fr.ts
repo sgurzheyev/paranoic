@@ -41,6 +41,11 @@ export const frPatch: LocalePatch = {
     confirmEmail: 'Confirmez votre e-mail via le lien, puis connectez-vous.',
     failed: 'Impossible de se connecter',
     downloadAndroid: 'Télécharger l\'app Android',
+    forgotPassword: 'Mot de passe oublié ?',
+    resetPasswordSent: 'Consultez votre e-mail — nous avons envoyé un lien de réinitialisation.',
+    enterEmailForReset: 'Saisissez votre e-mail ci-dessus pour recevoir un lien de réinitialisation.',
+    resetPasswordFailed: 'Impossible d\'envoyer le lien de réinitialisation',
+    invalidEmail: 'Saisissez une adresse e-mail valide',
   },
   chats: {
     title: 'Discussions',
