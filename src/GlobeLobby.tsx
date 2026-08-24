@@ -1350,7 +1350,6 @@ export default function GlobeLobby({
             {previewContact && (
               <span className="map-contacts-strip__preview">{previewContact.name}</span>
             )}
-            <p className="map-contacts-strip__title">{t('map.contacts')}</p>
             <div className="map-contacts-strip__list">
               {contacts.map((c) => {
                 const isFocused = focusedContactId === c.userId;
