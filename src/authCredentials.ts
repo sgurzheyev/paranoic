@@ -14,6 +14,7 @@ import {
   type UserIdentity,
 } from './identity';
 import {
+  clearPasswordRecoveryPending,
   getSupabase,
   hasSupabaseConfig,
   markAuthBootstrapReady,
@@ -426,6 +427,48 @@ export async function requestPasswordReset(
     const detail = e instanceof Error ? e.message : String(e);
     console.error('[paranoic auth] password reset failed', detail);
     return { ok: false, message: detail || 'Не удалось отправить ссылку для сброса' };
+  }
+}
+
+/** Сохранение нового пароля после перехода по ссылке из письма (PASSWORD_RECOVERY). */
+export async function completePasswordReset(passwordRaw: string): Promise<AuthResult> {
+  if (!hasSupabaseConfig()) {
+    return {
+      ok: false,
+      reason: 'db_error',
+      message: 'Supabase не настроен — восстановление пароля недоступно',
+    };
+  }
+  const pwd = passwordRaw.trim();
+  if (pwd.length < 4) {
+    return { ok: false, reason: 'invalid_input', message: 'Пароль: минимум 4 символа' };
+  }
+  try {
+    const sb = getSupabase();
+    const { error } = await sb.auth.updateUser({ password: pwd });
+    if (error) {
+      return { ok: false, reason: 'db_error', message: error.message || 'Не удалось сохранить пароль' };
+    }
+    const { data, error: sessionErr } = await sb.auth.getSession();
+    if (sessionErr || !data.session?.user?.id) {
+      return {
+        ok: false,
+        reason: 'db_error',
+        message: sessionErr?.message || 'Войдите с новым паролем',
+      };
+    }
+    clearPasswordRecoveryPending();
+    try {
+      const path = `${window.location.pathname}${window.location.search}`;
+      window.history.replaceState({}, document.title, path.split('#')[0] || '/');
+    } catch {
+      /* ignore */
+    }
+    const identity = await finishAuthenticatedSession(data.session);
+    return { ok: true, identity };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return { ok: false, reason: 'db_error', message: detail || 'Не удалось сохранить пароль' };
   }
 }
 

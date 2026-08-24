@@ -12,6 +12,25 @@ const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 let client: SupabaseClient | null = null;
+let passwordRecoveryPending = false;
+
+/** Hash/query from the email reset link — must run before getSession consumes the URL. */
+export function notePasswordRecoveryFromLocation(): boolean {
+  if (typeof window === 'undefined') return passwordRecoveryPending;
+  const blob = `${window.location.search} ${window.location.hash}`;
+  if (/type=recovery/i.test(blob)) {
+    passwordRecoveryPending = true;
+  }
+  return passwordRecoveryPending;
+}
+
+export function isPasswordRecoveryPending(): boolean {
+  return passwordRecoveryPending;
+}
+
+export function clearPasswordRecoveryPending(): void {
+  passwordRecoveryPending = false;
+}
 
 export function hasSupabaseConfig(): boolean {
   return Boolean(url && anonKey);
@@ -43,6 +62,9 @@ function createClientIfNeeded(): SupabaseClient {
       },
     });
     client.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        passwordRecoveryPending = true;
+      }
       console.log('[AUTH STATE]', event, {
         uid: session?.user?.id ?? null,
         hasJwt: Boolean(session?.access_token),

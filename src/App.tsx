@@ -104,7 +104,15 @@ import {
   resolveRoom,
   setMagicUserInUrl,
 } from './room';
-import { hasSupabaseConfig, peekAuthSession, pauseAuthBootstrap, signOutAndReset, waitForRealtimeAuth } from './lib/supabase';
+import {
+  hasSupabaseConfig,
+  isPasswordRecoveryPending,
+  notePasswordRecoveryFromLocation,
+  peekAuthSession,
+  pauseAuthBootstrap,
+  signOutAndReset,
+  waitForRealtimeAuth,
+} from './lib/supabase';
 import AuthScreen from './AuthScreen';
 import {
   appendStoredMessage,
@@ -387,8 +395,13 @@ export default function App() {
     pauseAuthBootstrap(true);
     void (async () => {
       try {
+        notePasswordRecoveryFromLocation();
         const session = await peekAuthSession();
         if (cancelled) return;
+        if (isPasswordRecoveryPending()) {
+          setAuthGate('login');
+          return;
+        }
         if (!session?.user?.id) {
           setAuthGate('login');
           return;

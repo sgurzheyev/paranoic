@@ -58,6 +58,11 @@ export type TranslationDict = {
     enterEmailForReset: string;
     resetPasswordFailed: string;
     invalidEmail: string;
+    setNewPassword: string;
+    setNewPasswordHint: string;
+    confirmPassword: string;
+    saveNewPassword: string;
+    passwordMismatch: string;
   };
   chats: {
     title: string;
