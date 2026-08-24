@@ -246,6 +246,7 @@ export default function App() {
   const [callFailKind, setCallFailKind] = useState<CallFailKind | null>(null);
   /** ICE / сеть просела — компактный toast, не блокирует UI. */
   const [linkWarning, setLinkWarning] = useState('');
+  const [dismissedLinkWarning, setDismissedLinkWarning] = useState('');
   const [magicLink, setMagicLink] = useState(() =>
     buildMagicLink(getOrCreateIdentity())
   );
@@ -865,10 +866,10 @@ export default function App() {
       setAppMode('paranoic');
       setScreen('home');
       setMainTab('chats');
-      setLinkWarning('');
+      updateLinkWarning('');
 
       if (!hasSupabaseConfig()) {
-        setLinkWarning('Supabase не настроен — ссылка недоступна');
+        updateLinkWarning('Supabase не настроен — ссылка недоступна');
         return;
       }
 
@@ -876,7 +877,7 @@ export default function App() {
       if (cancelled) return;
 
       if (!profile?.id) {
-        setLinkWarning('Пользователь не найден');
+        updateLinkWarning('Пользователь не найден');
         setGuestPeerId(null);
         guestPeerIdRef.current = null;
         setHostingSelf(true);
@@ -934,6 +935,7 @@ export default function App() {
     setCallAlert('');
     setCallAlertToastOpen(false);
     setLinkWarning('');
+    setDismissedLinkWarning('');
     setCallFailKind(null);
   }, []);
 
@@ -945,6 +947,15 @@ export default function App() {
     setSignalingStatus('');
     mirrorSignalingStatus('');
   }, [mirrorSignalingStatus]);
+
+  const updateLinkWarning = useCallback((next: string) => {
+    setLinkWarning(next);
+    if (!next) {
+      setDismissedLinkWarning('');
+      return;
+    }
+    setDismissedLinkWarning((prev) => (prev === next ? prev : ''));
+  }, []);
 
   /** Экран логина: сброс до отрисовки + блок повторных P2P toast. */
   useLayoutEffect(() => {
@@ -1288,7 +1299,7 @@ export default function App() {
           {
             onDenied: () => {
               if (cancelled) return;
-              setLinkWarning(GEO_BLOCKED_MESSAGE);
+              updateLinkWarning(GEO_BLOCKED_MESSAGE);
               alert(GEO_BLOCKED_MESSAGE);
             },
           }
@@ -1337,7 +1348,7 @@ export default function App() {
           mirrorP2pStatus(status);
           if (status === 'connected') {
             setError('');
-            setLinkWarning('');
+            updateLinkWarning('');
             setCallAlert('');
             setCallAlertToastOpen(false);
             setCallFailKind(null);
@@ -1799,7 +1810,7 @@ export default function App() {
         },
         onLinkDegraded: (degraded, message) => {
           if (suppressGlobalErrorsRef.current) return;
-          setLinkWarning(
+          updateLinkWarning(
             degraded
               ? message || 'Слабое соединение. Файлы могут не отправляться.'
               : ''
@@ -1905,7 +1916,7 @@ export default function App() {
             setSignalingStatus('');
             setJoining(false);
             clearCallSessionResidue();
-            setLinkWarning('Пользователь не найден');
+            updateLinkWarning('Пользователь не найден');
             console.warn('[P2P_DEBUG] abort join — peer unresolved', { urlHandle });
             return;
           }
@@ -3387,9 +3398,17 @@ export default function App() {
               </button>
             </div>
           )}
-          {linkWarning && (
+          {linkWarning && linkWarning !== dismissedLinkWarning && (
             <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
               <span className="app-toast__text">{linkWarning}</span>
+              <button
+                type="button"
+                className="app-toast__close icon-btn"
+                onClick={() => setDismissedLinkWarning(linkWarning)}
+                aria-label="Закрыть"
+              >
+                <X size={16} />
+              </button>
             </div>
           )}
           {adminOpen && (
@@ -3489,9 +3508,17 @@ export default function App() {
         </div>
       )}
 
-      {linkWarning && (
+      {linkWarning && linkWarning !== dismissedLinkWarning && (
         <div className="app-toast app-toast--warning app-toast--top app-toast--visible" role="status">
           <span className="app-toast__text">{linkWarning}</span>
+          <button
+            type="button"
+            className="app-toast__close icon-btn"
+            onClick={() => setDismissedLinkWarning(linkWarning)}
+            aria-label="Закрыть"
+          >
+            <X size={16} />
+          </button>
         </div>
       )}
 
