@@ -136,6 +136,24 @@ const en: TranslationDict = {
     languagePickerTitle: 'Choose language',
     languagePickerAria: 'Choose interface language',
     adminPanel: 'Admin Panel',
+    storageMgmt: {
+      title: 'Storage management',
+      totalLabel: 'Total on this device',
+      trustBanner:
+        'Paranoic does not store your chats on its servers. All data stays exclusively on your device. You are fully in control.',
+      delete: 'Delete',
+      deleteConfirm:
+        'Delete “{name}” from this device? This cannot be undone. (Clearing will be fully wired in a later update.)',
+      irreversible: '⚠️ Deleting local data is irreversible.',
+      e2ee:
+        '🔒 Your calls and chats are protected with end-to-end encryption (E2EE) and travel P2P. Paranoic has no technical ability to intercept, listen to, or store them.',
+      cat: {
+        messages: 'Text messages',
+        images: 'Images',
+        videos: 'Video files',
+        mapbox: 'Mapbox map cache',
+      },
+    },
   },
   profile: {
     title: 'Profile',
@@ -428,6 +446,24 @@ const ru: TranslationDict = {
     languagePickerTitle: 'Выберите язык',
     languagePickerAria: 'Выбор языка интерфейса',
     adminPanel: 'Admin Panel',
+    storageMgmt: {
+      title: 'Управление данными',
+      totalLabel: 'Всего на устройстве',
+      trustBanner:
+        'Paranoic не хранит вашу переписку на своих серверах. Все данные находятся исключительно на вашем устройстве. Вы полностью их контролируете.',
+      delete: 'Удалить',
+      deleteConfirm:
+        'Удалить «{name}» с этого устройства? Действие необратимо. (Полная очистка будет подключена позже.)',
+      irreversible: '⚠️ Удаление локальных данных необратимо.',
+      e2ee:
+        '🔒 Ваши звонки и чаты защищены сквозным шифрованием (E2EE) и передаются P2P. У Paranoic нет технической возможности их перехватить, прослушать или хранить.',
+      cat: {
+        messages: 'Текстовые сообщения',
+        images: 'Изображения',
+        videos: 'Видеофайлы',
+        mapbox: 'Кэш карт Mapbox',
+      },
+    },
   },
   profile: {
     title: 'Профиль',
@@ -722,6 +758,24 @@ const pl: TranslationDict = {
     languagePickerTitle: 'Wybierz język',
     languagePickerAria: 'Wybierz język interfejsu',
     adminPanel: 'Admin Panel',
+    storageMgmt: {
+      title: 'Zarządzanie danymi',
+      totalLabel: 'Łącznie na urządzeniu',
+      trustBanner:
+        'Paranoic nie przechowuje Twojej korespondencji na swoich serwerach. Wszystkie dane są wyłącznie na Twoim urządzeniu. Masz nad nimi pełną kontrolę.',
+      delete: 'Usuń',
+      deleteConfirm:
+        'Usunąć „{name}” z tego urządzenia? Tej operacji nie można cofnąć. (Pełne czyszczenie zostanie podłączone później.)',
+      irreversible: '⚠️ Usunięcie danych lokalnych jest nieodwracalne.',
+      e2ee:
+        '🔒 Twoje rozmowy i czaty są chronione szyfrowaniem end-to-end (E2EE) i działają P2P. Paranoic nie ma technicznej możliwości ich przechwycenia, podsłuchania ani przechowywania.',
+      cat: {
+        messages: 'Wiadomości tekstowe',
+        images: 'Obrazy',
+        videos: 'Pliki wideo',
+        mapbox: 'Cache map Mapbox',
+      },
+    },
   },
   profile: {
     title: 'Profil',

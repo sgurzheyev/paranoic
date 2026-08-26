@@ -137,6 +137,21 @@ export type TranslationDict = {
     languagePickerTitle: string;
     languagePickerAria: string;
     adminPanel: string;
+    storageMgmt: {
+      title: string;
+      totalLabel: string;
+      trustBanner: string;
+      delete: string;
+      deleteConfirm: string;
+      irreversible: string;
+      e2ee: string;
+      cat: {
+        messages: string;
+        images: string;
+        videos: string;
+        mapbox: string;
+      };
+    };
   };
   profile: {
     title: string;

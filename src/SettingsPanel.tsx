@@ -24,6 +24,7 @@ import {
   type AppLanguage,
   type AppSettings,
 } from './settings';
+import StorageManagementModal, { formatBytes } from './StorageManagementModal';
 
 type SettingsPanelProps = {
   settings: AppSettings;
@@ -106,13 +107,6 @@ function NavRow({
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 function deviceLabel(fallback: string): string {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (/iPhone|iPad/i.test(ua)) return 'iOS · Safari';
@@ -132,6 +126,7 @@ export default function SettingsPanel({
 }: SettingsPanelProps) {
   const { t, language, setLanguage } = useLanguage();
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [storageMgmtOpen, setStorageMgmtOpen] = useState(false);
   const [storageLabel, setStorageLabel] = useState(t('settings.counting'));
   const [purging, setPurging] = useState(false);
   const [purgeHint, setPurgeHint] = useState('');
@@ -244,6 +239,7 @@ export default function SettingsPanel({
           icon={<Database size={16} />}
           label={t('settings.localStorage')}
           description={storageLabel}
+          onClick={() => setStorageMgmtOpen(true)}
         />
         <NavRow
           icon={<Timer size={16} />}
@@ -307,6 +303,11 @@ export default function SettingsPanel({
         closeLabel={t('common.close')}
         onClose={() => setLanguagePickerOpen(false)}
         onSelect={changeLanguage}
+      />
+
+      <StorageManagementModal
+        open={storageMgmtOpen}
+        onClose={() => setStorageMgmtOpen(false)}
       />
 
       <div className="settings-footer-actions">
