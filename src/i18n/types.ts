@@ -217,6 +217,30 @@ export type TranslationDict = {
     offline: string;
     typing: string;
   };
+  safety: {
+    sectionAria: string;
+    sectionTitle: string;
+    blockUser: string;
+    blocked: string;
+    blockConfirm: string;
+    blockSuccess: string;
+    blockFailed: string;
+    reportUser: string;
+    reportHint: string;
+    reasonLabel: string;
+    detailsLabel: string;
+    detailsPlaceholder: string;
+    reportSubmit: string;
+    reportSuccess: string;
+    reportFailed: string;
+    reason: {
+      spam: string;
+      harassment: string;
+      inappropriate: string;
+      impersonation: string;
+      other: string;
+    };
+  };
   search: {
     category: string;
   };

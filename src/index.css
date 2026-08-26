@@ -1294,6 +1294,123 @@ svg.lucide {
   font-size: 0.9rem;
 }
 
+.user-actions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.user-actions-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.92);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.user-actions-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.user-actions-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.user-actions-btn.block {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.user-actions-btn.report,
+.user-actions-btn.report-submit {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.28);
+  color: #fde68a;
+}
+
+.user-actions-btn.report.is-open {
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+.user-actions-btn.report-submit {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.user-actions-report {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.user-actions-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: rgba(203, 213, 225, 0.78);
+}
+
+.user-actions-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.user-actions-field select,
+.user-actions-field textarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 14, 20, 0.85);
+  color: rgba(241, 245, 249, 0.95);
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.user-actions-field select:focus,
+.user-actions-field textarea:focus {
+  outline: none;
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+.user-actions-status {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.user-actions-status.is-ok {
+  color: #99f6e4;
+}
+
+.user-actions-status.is-err {
+  color: #fecaca;
+}
+
 .trust-banner {
   display: flex;
   flex-direction: column;

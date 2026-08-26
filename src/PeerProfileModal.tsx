@@ -4,6 +4,7 @@ import Avatar from './Avatar';
 import { buildMagicLink } from './identity';
 import { useLanguage } from './i18n';
 import type { StoredMessage } from './storage';
+import UserActionsPanel from './UserActionsPanel';
 
 export type PeerProfileData = {
   id: string;
@@ -18,6 +19,8 @@ export type PeerProfileData = {
 type PeerProfileModalProps = {
   peer: PeerProfileData;
   messages: Array<StoredMessage & { mediaUrl?: string }>;
+  isBlocked?: boolean;
+  onBlocked?: () => void;
   onClose: () => void;
 };
 
@@ -30,7 +33,13 @@ function isImageUrl(url: string, name?: string): boolean {
  * Read-only профиль собеседника из шапки чата.
  * Закрытие не трогает P2P / conversation — возврат в тот же чат.
  */
-export default function PeerProfileModal({ peer, messages, onClose }: PeerProfileModalProps) {
+export default function PeerProfileModal({
+  peer,
+  messages,
+  isBlocked = false,
+  onBlocked,
+  onClose,
+}: PeerProfileModalProps) {
   const { t } = useLanguage();
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
@@ -128,6 +137,13 @@ export default function PeerProfileModal({ peer, messages, onClose }: PeerProfil
             </button>
           </div>
         </section>
+
+        <UserActionsPanel
+          peerId={peer.id}
+          peerName={peer.name}
+          isBlocked={isBlocked}
+          onBlocked={onBlocked}
+        />
 
         <section className="peer-profile-section">
           <p className="peer-profile-label">

@@ -42,13 +42,13 @@ import {
 } from './mediaPermissions';
 import { VideoCirclePlayer, VoiceNotePlayer } from './VideoCircle';
 import {
-  blockUser,
   bootstrapPeerRelations,
   isBlocked,
   isTrusted,
   loadBlockedIds,
   loadTrustedIds,
 } from './trust';
+import { blockUserSafety } from './userSafety';
 import {
   CallInbox,
   callerDisplayName,
@@ -3291,10 +3291,15 @@ export default function App() {
   const handleBlockPeer = async () => {
     const id = activePeerId;
     if (!id) return;
-    await blockUser(id);
+    const result = await blockUserSafety(id);
     setTrustedIds(loadTrustedIds());
     setBlockedIds(loadBlockedIds());
-    setError(`«${peerLabel}» заблокирован. Сообщения и звонки от этого ID игнорируются.`);
+    if (!result.ok) {
+      setError(result.message || t('safety.blockFailed'));
+      return;
+    }
+    setError(t('safety.blockSuccess', { name: peerLabel }));
+    setPeerProfileOpen(false);
     disconnect();
   };
 
@@ -3479,6 +3484,14 @@ export default function App() {
             typing: peerTyping,
           }}
           messages={messages}
+          isBlocked={blockedIds.has(activePeerId)}
+          onBlocked={() => {
+            setTrustedIds(loadTrustedIds());
+            setBlockedIds(loadBlockedIds());
+            setError(t('safety.blockSuccess', { name: peerLabel }));
+            setPeerProfileOpen(false);
+            disconnect();
+          }}
           onClose={() => setPeerProfileOpen(false)}
         />
       )}
