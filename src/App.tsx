@@ -131,6 +131,7 @@ import {
   type LastMessagePreview,
   type StoredMessage,
 } from './storage';
+import { STORAGE_CLEARED_EVENT } from './storageManagement';
 import { applySettingsSideEffects, loadSettings, saveSettings, type AppSettings } from './settings';
 import { useLanguage } from './i18n';
 import {
@@ -1348,6 +1349,19 @@ export default function App() {
     const timer = window.setInterval(() => void runPurge(), 5 * 60_000);
     return () => window.clearInterval(timer);
   }, [settings.ephemeral24h, hydrateConversation]);
+
+  /** Settings → Управление данными: reload open chat after local clears. */
+  useEffect(() => {
+    const onCleared = () => {
+      const conv = conversationIdRef.current;
+      if (conv) void hydrateConversation(conv);
+      void loadLastMessagePreviews(identityRef.current.id).then((next) => {
+        setLastPreviews(next);
+      });
+    };
+    window.addEventListener(STORAGE_CLEARED_EVENT, onCleared);
+    return () => window.removeEventListener(STORAGE_CLEARED_EVENT, onCleared);
+  }, [hydrateConversation]);
 
   const attachLocalVideo = useCallback((stream: MediaStream | null) => {
     if (localVideoRef.current) localVideoRef.current.srcObject = stream;

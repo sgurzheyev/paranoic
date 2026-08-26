@@ -10,27 +10,36 @@ import {
   Video,
 } from 'lucide-react';
 import { useLanguage } from './i18n';
+import {
+  clearStorageCategory,
+  estimateStorageBreakdown,
+  type StorageCategoryId,
+  type StorageBreakdownBytes,
+} from './storageManagement';
 
 type StorageManagementModalProps = {
   open: boolean;
   onClose: () => void;
 };
 
-type CategoryId = 'messages' | 'images' | 'videos' | 'mapbox';
-
 type Category = {
-  id: CategoryId;
-  /** Mock size for store screenshots — not measured from IndexedDB yet. */
-  mockSize: string;
+  id: StorageCategoryId;
   icon: typeof FileText;
 };
 
 const CATEGORIES: Category[] = [
-  { id: 'messages', mockSize: '12.4 MB', icon: FileText },
-  { id: 'images', mockSize: '340.1 MB', icon: Image },
-  { id: 'videos', mockSize: '1.2 GB', icon: Video },
-  { id: 'mapbox', mockSize: '45 MB', icon: Map },
+  { id: 'messages', icon: FileText },
+  { id: 'images', icon: Image },
+  { id: 'videos', icon: Video },
+  { id: 'mapbox', icon: Map },
 ];
+
+const EMPTY_BREAKDOWN: StorageBreakdownBytes = {
+  messages: 0,
+  images: 0,
+  videos: 0,
+  mapbox: 0,
+};
 
 /** Same formatting as SettingsPanel local-storage row. */
 export function formatBytes(bytes: number): string {
@@ -42,7 +51,7 @@ export function formatBytes(bytes: number): string {
 
 /**
  * Privacy-focused local storage management (Play Store screenshot surface).
- * Category sizes are placeholders; real IndexedDB clearing comes later.
+ * Sizes and deletes use real IndexedDB + Mapbox Cache API data.
  */
 export default function StorageManagementModal({
   open,
@@ -50,7 +59,9 @@ export default function StorageManagementModal({
 }: StorageManagementModalProps) {
   const { t } = useLanguage();
   const [usageLabel, setUsageLabel] = useState(t('settings.counting'));
-  const [cleared, setCleared] = useState<Partial<Record<CategoryId, boolean>>>({});
+  const [breakdown, setBreakdown] = useState<StorageBreakdownBytes>(EMPTY_BREAKDOWN);
+  const [sizesReady, setSizesReady] = useState(false);
+  const [deleting, setDeleting] = useState<StorageCategoryId | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -61,47 +72,77 @@ export default function StorageManagementModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose]);
 
+  const refreshTotals = async (cancelled?: () => boolean) => {
+    try {
+      if (navigator.storage?.estimate) {
+        const est = await navigator.storage.estimate();
+        if (cancelled?.()) return;
+        const used = est.usage ?? 0;
+        const quota = est.quota ?? 0;
+        setUsageLabel(
+          quota > 0
+            ? t('settings.ofQuota', {
+                used: formatBytes(used),
+                quota: formatBytes(quota),
+              })
+            : formatBytes(used)
+        );
+        return;
+      }
+    } catch {
+      /* */
+    }
+    if (!cancelled?.()) setUsageLabel(t('settings.localOnDevice'));
+  };
+
+  const refreshBreakdown = async (cancelled?: () => boolean) => {
+    try {
+      const next = await estimateStorageBreakdown();
+      if (cancelled?.()) return;
+      setBreakdown(next);
+      setSizesReady(true);
+    } catch {
+      if (!cancelled?.()) {
+        setBreakdown(EMPTY_BREAKDOWN);
+        setSizesReady(true);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const isCancelled = () => cancelled;
+    setSizesReady(false);
     setUsageLabel(t('settings.counting'));
-    void (async () => {
-      try {
-        if (navigator.storage?.estimate) {
-          const est = await navigator.storage.estimate();
-          if (cancelled) return;
-          const used = est.usage ?? 0;
-          const quota = est.quota ?? 0;
-          setUsageLabel(
-            quota > 0
-              ? t('settings.ofQuota', {
-                  used: formatBytes(used),
-                  quota: formatBytes(quota),
-                })
-              : formatBytes(used)
-          );
-          return;
-        }
-      } catch {
-        /* */
-      }
-      if (!cancelled) setUsageLabel(t('settings.localOnDevice'));
-    })();
+    void refreshTotals(isCancelled);
+    void refreshBreakdown(isCancelled);
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on open / locale
   }, [open, t]);
 
   if (!open || typeof document === 'undefined') return null;
 
-  const categoryLabel = (id: CategoryId) => t(`settings.storageMgmt.cat.${id}`);
+  const categoryLabel = (id: StorageCategoryId) => t(`settings.storageMgmt.cat.${id}`);
 
-  const handleDelete = (id: CategoryId) => {
-    if (cleared[id]) return;
-    const ok = window.confirm(t('settings.storageMgmt.deleteConfirm', { name: categoryLabel(id) }));
+  const handleDelete = async (id: StorageCategoryId) => {
+    if (deleting) return;
+    const ok = window.confirm(
+      'Вы уверены, что хотите удалить эти данные? Это действие необратимо.'
+    );
     if (!ok) return;
-    // Placeholder only — real IndexedDB / cache clearing wired later.
-    setCleared((prev) => ({ ...prev, [id]: true }));
+
+    setDeleting(id);
+    try {
+      await clearStorageCategory(id);
+      await Promise.all([refreshBreakdown(), refreshTotals()]);
+    } catch (e) {
+      console.warn('[paranoic storage] clear failed', id, e);
+    } finally {
+      setDeleting(null);
+    }
   };
 
   return createPortal(
@@ -161,7 +202,14 @@ export default function StorageManagementModal({
           <ul className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
             {CATEGORIES.map((cat, index) => {
               const Icon = cat.icon;
-              const isCleared = Boolean(cleared[cat.id]);
+              const bytes = breakdown[cat.id];
+              const isEmpty = sizesReady && bytes <= 0;
+              const isBusy = deleting === cat.id;
+              const sizeLabel = !sizesReady
+                ? t('settings.counting')
+                : bytes <= 0
+                  ? '0 KB'
+                  : formatBytes(bytes);
               return (
                 <li
                   key={cat.id}
@@ -178,20 +226,20 @@ export default function StorageManagementModal({
                     </p>
                     <p
                       className={`mt-0.5 text-[0.8rem] tabular-nums ${
-                        isCleared ? 'text-slate-500' : 'text-slate-400'
+                        isEmpty ? 'text-slate-500' : 'text-slate-400'
                       }`}
                     >
-                      {isCleared ? '0 KB' : cat.mockSize}
+                      {sizeLabel}
                     </p>
                   </div>
                   <button
                     type="button"
-                    disabled={isCleared}
-                    onClick={() => handleDelete(cat.id)}
+                    disabled={Boolean(deleting) || isEmpty || !sizesReady}
+                    onClick={() => void handleDelete(cat.id)}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1.5 text-[0.75rem] font-semibold text-rose-200 transition hover:bg-rose-500/20 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
                   >
                     <Trash2 size={13} aria-hidden />
-                    {t('settings.storageMgmt.delete')}
+                    {isBusy ? t('settings.clearing') : t('settings.storageMgmt.delete')}
                   </button>
                 </li>
               );
