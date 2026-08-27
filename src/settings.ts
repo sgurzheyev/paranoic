@@ -1,4 +1,4 @@
-import { applyThemeSpectrum, themeSpectrumFromSettings } from './themeSpectrum';
+import { applyThemeSpectrum, snapThemeSpectrum, themeSpectrumFromSettings } from './themeSpectrum';
 
 export type AppLanguage =
   | 'en'
@@ -107,7 +107,7 @@ export function loadSettings(): AppSettings {
       language: normalizeLanguage(parsed.language),
       themeSpectrum:
         typeof parsed.themeSpectrum === 'number' && Number.isFinite(parsed.themeSpectrum)
-          ? Math.max(0, Math.min(100, Math.round(parsed.themeSpectrum)))
+          ? snapThemeSpectrum(Math.max(0, Math.min(100, Math.round(parsed.themeSpectrum))))
           : DEFAULTS.themeSpectrum,
     };
   } catch {

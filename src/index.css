@@ -161,6 +161,7 @@ svg.lucide {
   margin: 0 auto;
   padding-bottom: 16px;
   position: relative;
+  transition: background 0.35s ease;
 }
 
 .app-shell.messenger-shell {
@@ -3480,8 +3481,9 @@ svg.lucide {
   touch-action: none;
   box-shadow:
     inset 0 1px 3px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(255, 255, 255, 0.12);
-  transition: opacity 0.18s ease;
+    0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 18px rgba(255, 255, 255, 0.04);
+  transition: opacity 0.18s ease, box-shadow 0.25s ease;
 }
 
 .zip-lift-track:focus-visible {
@@ -3508,10 +3510,11 @@ svg.lucide {
     0 0 0 2px rgba(0, 0, 0, 0.35),
     0 0 12px var(--lux-emerald-glow, rgba(0, 245, 212, 0.45));
   pointer-events: none;
-  transition: box-shadow 0.2s ease, transform 0.15s ease;
+  transition: left 0.18s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease, transform 0.15s ease;
 }
 
 .zip-lift-track:active .zip-lift-thumb {
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
   transform: translateY(-50%) scale(1.08);
 }
 

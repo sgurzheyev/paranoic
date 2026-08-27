@@ -1,6 +1,14 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLanguage } from './i18n';
-import { applyThemeSpectrum, nearestStopLabel, zipLiftTrackGradient } from './themeSpectrum';
+import {
+  applyThemeSpectrum,
+  nearestStopLabel,
+  snapThemeSpectrum,
+  THEME_STOP_COUNT,
+  themeSpectrumFromStopIndex,
+  themeStopIndex,
+  zipLiftTrackGradient,
+} from './themeSpectrum';
 
 type ZipLiftSliderProps = {
   value: number;
@@ -8,7 +16,7 @@ type ZipLiftSliderProps = {
   disabled?: boolean;
 };
 
-/** Horizontal color-spectrum track — morphs global theme in real time. */
+/** Horizontal country-flag spectrum — morphs global theme across 10 language stops. */
 export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSliderProps) {
   const { t } = useLanguage();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -23,9 +31,10 @@ export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSlid
   }, [value]);
 
   const applyLive = useCallback(
-    (next: number) => {
-      applyThemeSpectrum(next / 100);
-      onChange(next);
+    (next: number, opts?: { snap?: boolean }) => {
+      const resolved = opts?.snap === false ? next : snapThemeSpectrum(next);
+      applyThemeSpectrum(resolved / 100);
+      onChange(resolved);
     },
     [onChange]
   );
@@ -34,12 +43,13 @@ export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSlid
     if (disabled) return;
     dragging.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
-    applyLive(valueFromClientX(e.clientX));
+    // Continuous while dragging for smooth lerp between neighboring flags.
+    applyLive(valueFromClientX(e.clientX), { snap: false });
   };
 
   const onTrackPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragging.current || disabled) return;
-    applyLive(valueFromClientX(e.clientX));
+    applyLive(valueFromClientX(e.clientX), { snap: false });
   };
 
   const onTrackPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -50,9 +60,11 @@ export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSlid
     } catch {
       /* */
     }
+    applyLive(valueFromClientX(e.clientX), { snap: true });
   };
 
   const label = nearestStopLabel(value / 100);
+  const stopIdx = themeStopIndex(value / 100);
 
   return (
     <div className="zip-lift">
@@ -67,8 +79,8 @@ export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSlid
         role="slider"
         aria-label={t('profileModal.themeBackground')}
         aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={value}
+        aria-valuemax={THEME_STOP_COUNT - 1}
+        aria-valuenow={stopIdx}
         aria-valuetext={label}
         tabIndex={disabled ? -1 : 0}
         onPointerDown={onTrackPointerDown}
@@ -77,14 +89,16 @@ export default function ZipLiftSlider({ value, onChange, disabled }: ZipLiftSlid
         onPointerCancel={onTrackPointerUp}
         onKeyDown={(e) => {
           if (disabled) return;
-          let next = value;
-          if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(100, value + 2);
-          else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, value - 2);
-          else if (e.key === 'Home') next = 0;
-          else if (e.key === 'End') next = 100;
+          let nextIdx = stopIdx;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+            nextIdx = Math.min(THEME_STOP_COUNT - 1, stopIdx + 1);
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+            nextIdx = Math.max(0, stopIdx - 1);
+          } else if (e.key === 'Home') nextIdx = 0;
+          else if (e.key === 'End') nextIdx = THEME_STOP_COUNT - 1;
           else return;
           e.preventDefault();
-          applyLive(next);
+          applyLive(themeSpectrumFromStopIndex(nextIdx), { snap: true });
         }}
       >
         <span className="zip-lift-thumb" style={{ left: `${value}%` }} aria-hidden />
