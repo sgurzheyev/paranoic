@@ -14,6 +14,7 @@ import {
 import { assertUsernameAvailable, isUsernameAvailable, syncProfileToSupabase, uploadAvatar } from './profile';
 import { saveSettings, type AppSettings } from './settings';
 import { migrateThemeSpectrumFromFon, shellBackgroundAt } from './themeSpectrum';
+import { isSuperAdminUsername } from './adminModeration';
 
 type ProfileModalProps = {
   identity: UserIdentity;
@@ -22,6 +23,8 @@ type ProfileModalProps = {
   onSaved: (next: UserIdentity) => void;
   onSettingsChange: (next: AppSettings) => void;
   onSignOut?: () => void | Promise<void>;
+  /** Hidden entry for @sgurzheyev → AdminPanel. */
+  onOpenAdmin?: () => void;
 };
 
 export default function ProfileModal({
@@ -31,6 +34,7 @@ export default function ProfileModal({
   onSaved,
   onSettingsChange,
   onSignOut,
+  onOpenAdmin,
 }: ProfileModalProps) {
   const { t } = useLanguage();
   const [name, setName] = useState(identity.name);
@@ -343,6 +347,20 @@ export default function ProfileModal({
             {error}
           </p>
         )}
+
+        {isSuperAdminUsername(identity.username) && onOpenAdmin ? (
+          <button
+            type="button"
+            className="mega-btn media compact"
+            disabled={busy || signingOut}
+            onClick={() => {
+              onClose();
+              onOpenAdmin();
+            }}
+          >
+            👑 Управление (Admin)
+          </button>
+        ) : null}
 
         <div className="profile-modal-actions">
           <button

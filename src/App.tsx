@@ -28,6 +28,8 @@ import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
 import PeerProfileModal from './PeerProfileModal';
 import AdminDashboard from './AdminDashboard';
+import AdminPanel from './AdminPanel';
+import { isSuperAdminUsername } from './adminModeration';
 import CallOverlay, { ActiveCallBanner } from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
@@ -3443,7 +3445,14 @@ export default function App() {
               </button>
             </div>
           )}
-          {adminOpen && (
+          {adminOpen && isSuperAdminUsername(identity.username) && (
+            <AdminPanel
+              username={identity.username}
+              currentUserId={identity.id}
+              onClose={() => setAdminOpen(false)}
+            />
+          )}
+          {adminOpen && isAdmin && !isSuperAdminUsername(identity.username) && (
             <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
           )}
           {incomingRing && (
@@ -3484,6 +3493,7 @@ export default function App() {
           onSaved={(next) => applyIdentity(next)}
           onSettingsChange={setSettings}
           onSignOut={handleSignOut}
+          onOpenAdmin={() => setAdminOpen(true)}
         />
       )}
       {peerProfileOpen && activePeerId && (
@@ -3509,7 +3519,14 @@ export default function App() {
           onClose={() => setPeerProfileOpen(false)}
         />
       )}
-      {adminOpen && (
+      {adminOpen && isSuperAdminUsername(identity.username) && (
+        <AdminPanel
+          username={identity.username}
+          currentUserId={identity.id}
+          onClose={() => setAdminOpen(false)}
+        />
+      )}
+      {adminOpen && isAdmin && !isSuperAdminUsername(identity.username) && (
         <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
       <header className="app-header flex items-center">
@@ -3520,7 +3537,7 @@ export default function App() {
           </div>
         </div>
         <div className="app-header-right">
-          {isAdmin && (
+          {(isAdmin || isSuperAdminUsername(identity.username)) && (
             <button
               type="button"
               className="admin-panel-btn"
