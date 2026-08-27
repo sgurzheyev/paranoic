@@ -308,11 +308,8 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </>
         )}
 
-        <a
-          href="https://pub-6c68eb1792d54c69819903a67b19a7a1.r2.dev/app-release.apk"
-          download
-          className="auth-screen__download"
-        >          <span className="auth-screen__download-icon" aria-hidden>
+        <a href="https://pub-6c68eb1792d54c69819903a67b19a7a1.r2.dev/app-release.apk" download className="auth-screen__download">
+          <span className="auth-screen__download-icon" aria-hidden>
             <Smartphone size={15} strokeWidth={2} />
             <Download size={13} strokeWidth={2.5} />
           </span>
