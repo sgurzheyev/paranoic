@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Lock, Mic, Send, Video, X } from 'lucide-react';
+import { Lock, Mic, Video, X } from 'lucide-react';
 import type { NoteMode } from './mediaNotes';
 
 type MediaNoteOverlayProps = {
@@ -80,30 +80,30 @@ export default function MediaNoteOverlay({
           )}
         </p>
         {locked && (
-          <div className="mt-4 flex w-full flex-row items-center justify-center gap-6">
+          <div className="mt-6 flex w-full flex-row items-center justify-center gap-3 px-6">
             <button
               type="button"
-              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-gray-700 bg-gray-800/80 px-6 py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-gray-700"
               aria-label="Отмена"
-              onPointerDown={(e) => {
+              onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 onCancel();
               }}
+              className="flex-1 rounded-2xl border border-white/10 bg-[#2A2A2A] py-3.5 text-center text-[15px] font-semibold text-white transition-all hover:bg-[#333333] active:scale-95"
             >
-              <X size={18} /> Отмена
+              Отмена
             </button>
             <button
               type="button"
-              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/30 transition-colors hover:bg-blue-500"
               aria-label="Отправить"
-              onPointerDown={(e) => {
+              onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 onSend?.();
               }}
+              className="flex-1 rounded-2xl bg-blue-600 py-3.5 text-center text-[15px] font-semibold text-white shadow-lg shadow-blue-900/30 transition-all hover:bg-blue-500 active:scale-95"
             >
-              <Send size={16} /> Отправить
+              Отправить
             </button>
           </div>
         )}
