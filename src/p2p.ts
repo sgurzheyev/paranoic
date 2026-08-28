@@ -2949,7 +2949,18 @@ export class P2PConnection {
 
   private stopLocalMedia(): void {
     void this.stopScreenShareInternal(false);
-    this.localStream?.getTracks().forEach((t) => t.stop());
+    this.localStream?.getTracks().forEach((t) => {
+      try {
+        t.enabled = false;
+      } catch {
+        /* */
+      }
+      try {
+        t.stop();
+      } catch {
+        /* */
+      }
+    });
     this.localStream = null;
     this.cameraVideoTrack = null;
     this.cameraFacing = 'user';

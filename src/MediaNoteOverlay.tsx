@@ -31,7 +31,14 @@ export default function MediaNoteOverlay({
     el.muted = true;
     void el.play().catch(() => undefined);
     return () => {
+      el.pause();
       el.srcObject = null;
+      el.removeAttribute('src');
+      try {
+        el.load();
+      } catch {
+        /* */
+      }
     };
   }, [stream, mode]);
 

@@ -78,7 +78,17 @@ function stopTracks(stream: MediaStream | null | undefined): void {
   if (!stream) return;
   for (const track of stream.getTracks()) {
     try {
+      track.enabled = false;
+    } catch {
+      /* */
+    }
+    try {
       track.stop();
+    } catch {
+      /* */
+    }
+    try {
+      stream.removeTrack(track);
     } catch {
       /* */
     }

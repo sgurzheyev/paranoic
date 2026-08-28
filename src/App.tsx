@@ -1301,8 +1301,9 @@ export default function App() {
         return;
       }
 
-      if (ghost) {
-        // Ghost Mode: не трогаем watchPosition, остаёмся в Антарктиде.
+      if (ghost || appMode !== 'family') {
+        // Messenger / Ghost: no continuous GPS — avoids OS location indicator & battery drain.
+        // Family map mode owns the passive watchPosition below.
         setGeo({ ...ANTARCTICA });
         void presence.updateLocation(ANTARCTICA.lat, ANTARCTICA.lng);
       } else {

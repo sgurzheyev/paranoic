@@ -33,6 +33,12 @@ export const PRESENCE_HEARTBEAT_MS = 15_000;
 export const PRESENCE_STALE_MS = 45_000;
 /** Как часто опрашивать список онлайн-профилей для UI. */
 export const PRESENCE_POLL_MS = 15_000;
+/** Ignore tiny GPS jitter — only emit after ~this many meters. */
+const GEO_MIN_MOVE_M = 40;
+/** Floor between emitted GPS updates even if moving (battery). */
+const GEO_MIN_EMIT_MS = 60_000;
+/** Browser may reuse a recent fix — avoid forcing a fresh GPS every few seconds. */
+const GEO_MAX_AGE_MS = 120_000;
 
 export type GeoWatchHandle = { stop: () => void };
 
@@ -44,9 +50,30 @@ export type WatchGeoOptions = {
   onDenied?: () => void;
 };
 
+function haversineMeters(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 /**
- * Непрерывный GPS через Geolocation API.
- * При отказе / таймауте / отсутствии API — Антарктида.
+ * Passive GPS via Geolocation.watchPosition (no polling interval).
+ * - Low-power continuous watch (enableHighAccuracy: false)
+ * - Emits only on meaningful moves / time floor
+ * - Pauses the watch while the document is hidden
+ * - Falls back to Antarctica on deny / timeout / missing API
  */
 export function watchGeo(
   onUpdate: (point: GeoPoint) => void,
@@ -60,9 +87,21 @@ export function watchGeo(
   let settled = false;
   let watchId: number | null = null;
   let deniedNotified = false;
+  let stopped = false;
+  let lastEmit: { lat: number; lng: number; at: number } | null = null;
+  let visibilityHandler: (() => void) | null = null;
 
-  const emit = (point: GeoPoint) => {
+  const emit = (point: GeoPoint, force = false) => {
+    if (stopped) return;
     settled = true;
+    if (point.source === 'gps' && !force && lastEmit) {
+      const moved = haversineMeters(lastEmit.lat, lastEmit.lng, point.lat, point.lng);
+      const elapsed = Date.now() - lastEmit.at;
+      if (moved < GEO_MIN_MOVE_M && elapsed < GEO_MIN_EMIT_MS) return;
+    }
+    if (point.source === 'gps') {
+      lastEmit = { lat: point.lat, lng: point.lng, at: Date.now() };
+    }
     onUpdate(point);
   };
 
@@ -73,56 +112,88 @@ export function watchGeo(
   };
 
   const fallbackTimer = window.setTimeout(() => {
-    if (!settled) emit({ ...ANTARCTICA });
+    if (!settled) emit({ ...ANTARCTICA }, true);
   }, GEO_FALLBACK_MS);
 
   const onGeoError = (err: GeolocationPositionError) => {
     window.clearTimeout(fallbackTimer);
     if (err.code === err.PERMISSION_DENIED) {
       notifyDenied();
+      emit({ ...ANTARCTICA }, true);
+      return;
     }
-    emit({ ...ANTARCTICA });
+    // Timeout / unavailable: keep last fix if any; otherwise Antarctica once.
+    if (!settled) emit({ ...ANTARCTICA }, true);
+  };
+
+  const clearWatch = () => {
+    if (watchId == null) return;
+    try {
+      navigator.geolocation.clearWatch(watchId);
+    } catch {
+      /* */
+    }
+    watchId = null;
+  };
+
+  const startWatch = () => {
+    if (stopped || watchId != null) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          window.clearTimeout(fallbackTimer);
+          emit({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            source: 'gps',
+          });
+        },
+        onGeoError,
+        {
+          // Continuous high-accuracy polling lights the OS location indicator
+          // every ~maximumAge window. Prefer a passive, battery-friendly watch.
+          enableHighAccuracy: false,
+          timeout: 20_000,
+          maximumAge: GEO_MAX_AGE_MS,
+        }
+      );
+    } catch {
+      window.clearTimeout(fallbackTimer);
+      notifyDenied();
+      emit({ ...ANTARCTICA }, true);
+    }
+  };
+
+  const pauseWatch = () => {
+    clearWatch();
   };
 
   try {
-    navigator.geolocation.getCurrentPosition(
-      () => undefined,
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) notifyDenied();
-      },
-      { enableHighAccuracy: true, timeout: 8_000, maximumAge: 20_000 }
-    );
-    watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        window.clearTimeout(fallbackTimer);
-        emit({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          source: 'gps',
-        });
-      },
-      onGeoError,
-      {
-        enableHighAccuracy: true,
-        timeout: 12_000,
-        maximumAge: 20_000,
-      }
-    );
+    startWatch();
   } catch {
     window.clearTimeout(fallbackTimer);
     notifyDenied();
-    emit({ ...ANTARCTICA });
+    emit({ ...ANTARCTICA }, true);
+  }
+
+  if (typeof document !== 'undefined') {
+    visibilityHandler = () => {
+      if (stopped) return;
+      if (document.visibilityState === 'hidden') pauseWatch();
+      else startWatch();
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
   }
 
   return {
     stop: () => {
+      stopped = true;
       window.clearTimeout(fallbackTimer);
-      if (watchId != null) {
-        try {
-          navigator.geolocation.clearWatch(watchId);
-        } catch {
-          /* */
-        }
+      clearWatch();
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+        visibilityHandler = null;
       }
     },
   };

@@ -17,6 +17,8 @@ import {
 const HOLD_MS = 160;
 const LOCK_DY = 56;
 const CANCEL_DX = 56;
+/** Hard release hardware if MediaRecorder hang leaves tracks live. */
+const FORCE_RELEASE_MS = 1_200;
 
 type ChatRecordButtonProps = {
   disabled?: boolean;
@@ -27,6 +29,7 @@ type ChatRecordButtonProps = {
 /**
  * Одна кнопка как в Telegram: тап — смена режима, удержание — запись.
  * Слушатели на window, чтобы overlay не перехватывал pointerup (фриз).
+ * MediaStream tracks are always stopped on send / cancel / unmount.
  */
 export default function ChatRecordButton({
   disabled = false,
@@ -51,6 +54,7 @@ export default function ChatRecordButton({
   const recordBlocked = isRecordMediaBlocked(mediaPresence, false);
 
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const forceReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerIdRef = useRef<number | null>(null);
   const originRef = useRef({ x: 0, y: 0 });
   const startedRef = useRef(false);
@@ -66,6 +70,7 @@ export default function ChatRecordButton({
     stream: MediaStream;
   } | null>(null);
   const pendingStreamRef = useRef<MediaStream | null>(null);
+  const activeStreamRef = useRef<MediaStream | null>(null);
   const startingRef = useRef(false);
 
   const onWindowMoveRef = useRef((_e: PointerEvent) => undefined);
@@ -78,6 +83,39 @@ export default function ChatRecordButton({
       holdTimerRef.current = null;
     }
   };
+
+  const clearForceReleaseTimer = () => {
+    if (forceReleaseTimerRef.current != null) {
+      clearTimeout(forceReleaseTimerRef.current);
+      forceReleaseTimerRef.current = null;
+    }
+  };
+
+  const releaseHardware = useCallback((stream?: MediaStream | null) => {
+    const targets = new Set<MediaStream>();
+    if (stream) targets.add(stream);
+    if (activeStreamRef.current) targets.add(activeStreamRef.current);
+    if (pendingStreamRef.current) targets.add(pendingStreamRef.current);
+    if (sessionRef.current?.stream) targets.add(sessionRef.current.stream);
+    for (const s of targets) stopStream(s);
+    if (!stream || activeStreamRef.current === stream) activeStreamRef.current = null;
+    if (!stream || pendingStreamRef.current === stream) pendingStreamRef.current = null;
+  }, []);
+
+  const scheduleForceRelease = useCallback(
+    (stream: MediaStream | null | undefined) => {
+      clearForceReleaseTimer();
+      if (!stream) return;
+      forceReleaseTimerRef.current = setTimeout(() => {
+        forceReleaseTimerRef.current = null;
+        stopStream(stream);
+        if (activeStreamRef.current === stream) activeStreamRef.current = null;
+        if (sessionRef.current?.stream === stream) sessionRef.current = null;
+        setRecording((prev) => (prev?.stream === stream ? null : prev));
+      }, FORCE_RELEASE_MS);
+    },
+    []
+  );
 
   const unbindWindowListeners = useCallback(() => {
     if (!listenersBoundRef.current) return;
@@ -95,13 +133,29 @@ export default function ChatRecordButton({
     window.addEventListener('pointercancel', onWindowCancelRef.current, true);
   }, []);
 
+  const resetUiFlags = useCallback(() => {
+    setRecording(null);
+    setCancelArmed(false);
+    setLocked(false);
+    lockedRef.current = false;
+    cancelArmedRef.current = false;
+    startedRef.current = false;
+    startingRef.current = false;
+    releasePendingRef.current = false;
+    commitRef.current = false;
+    pointerIdRef.current = null;
+  }, []);
+
   const cleanupSession = useCallback(
     (discard: boolean) => {
+      clearHoldTimer();
+      clearForceReleaseTimer();
       unbindWindowListeners();
       const session = sessionRef.current;
       sessionRef.current = null;
-      const pending = pendingStreamRef.current;
+      const stream = session?.stream ?? pendingStreamRef.current ?? activeStreamRef.current;
       pendingStreamRef.current = null;
+      activeStreamRef.current = null;
       if (session) {
         try {
           if (discard) session.abort.abort();
@@ -114,21 +168,11 @@ export default function ChatRecordButton({
         } catch {
           /* */
         }
-        stopStream(session.stream);
       }
-      stopStream(pending);
-      setRecording(null);
-      setCancelArmed(false);
-      setLocked(false);
-      lockedRef.current = false;
-      cancelArmedRef.current = false;
-      startedRef.current = false;
-      startingRef.current = false;
-      releasePendingRef.current = false;
-      commitRef.current = false;
-      pointerIdRef.current = null;
+      stopStream(stream);
+      resetUiFlags();
     },
-    [unbindWindowListeners]
+    [resetUiFlags, unbindWindowListeners]
   );
 
   const beginRecord = useCallback(async () => {
@@ -142,6 +186,7 @@ export default function ChatRecordButton({
     try {
       stream = await openNoteStream(currentMode);
       pendingStreamRef.current = stream;
+      activeStreamRef.current = stream;
 
       const releasedEarly =
         releasePendingRef.current ||
@@ -149,6 +194,7 @@ export default function ChatRecordButton({
 
       if (releasedEarly && (!commitRef.current || cancelArmedRef.current) && !lockedRef.current) {
         pendingStreamRef.current = null;
+        activeStreamRef.current = null;
         stopStream(stream);
         startingRef.current = false;
         startedRef.current = false;
@@ -176,10 +222,12 @@ export default function ChatRecordButton({
       if (releasePendingRef.current && !lockedRef.current) {
         if (commitRef.current && !cancelArmedRef.current) {
           session.stop();
+          scheduleForceRelease(stream);
         } else {
           session.cancel();
           stopStream(stream);
           sessionRef.current = null;
+          activeStreamRef.current = null;
           setRecording(null);
           startingRef.current = false;
           startedRef.current = false;
@@ -190,7 +238,9 @@ export default function ChatRecordButton({
       void session.result
         .then((note) => {
           const shouldSend = commitRef.current && !cancelArmedRef.current;
+          clearForceReleaseTimer();
           stopStream(stream);
+          if (activeStreamRef.current === stream) activeStreamRef.current = null;
           if (sessionRef.current?.stream === stream) sessionRef.current = null;
           setRecording(null);
           setCancelArmed(false);
@@ -206,11 +256,13 @@ export default function ChatRecordButton({
           onSendRef.current(note.file, note.mediaKind);
         })
         .catch(() => {
+          clearForceReleaseTimer();
           stopStream(stream);
           cleanupSession(true);
         });
     } catch (e) {
       pendingStreamRef.current = null;
+      activeStreamRef.current = null;
       stopStream(stream);
       startingRef.current = false;
       startedRef.current = false;
@@ -219,7 +271,7 @@ export default function ChatRecordButton({
       pointerIdRef.current = null;
       onErrorRef.current?.(mediaErrorMessage(e, MEDIA_ACCESS_DENIED_MESSAGE));
     }
-  }, [cleanupSession, unbindWindowListeners]);
+  }, [cleanupSession, scheduleForceRelease, unbindWindowListeners]);
 
   const discard = useCallback(() => {
     clearHoldTimer();
@@ -239,13 +291,15 @@ export default function ChatRecordButton({
     const session = sessionRef.current;
     if (session) {
       session.stop();
+      scheduleForceRelease(session.stream);
       return;
     }
     if (!startingRef.current) {
       commitRef.current = false;
       releasePendingRef.current = false;
+      releaseHardware();
     }
-  }, [unbindWindowListeners]);
+  }, [releaseHardware, scheduleForceRelease, unbindWindowListeners]);
 
   useEffect(() => {
     onWindowMoveRef.current = (e: PointerEvent) => {
@@ -305,7 +359,25 @@ export default function ChatRecordButton({
     };
   }, [discard, sendStop, unbindWindowListeners]);
 
-  useEffect(() => () => cleanupSession(true), [cleanupSession]);
+  useEffect(
+    () => () => {
+      clearForceReleaseTimer();
+      cleanupSession(true);
+      releaseHardware();
+    },
+    [cleanupSession, releaseHardware]
+  );
+
+  // If chat goes to background mid-record, release mic/camera immediately.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden' && (sessionRef.current || startingRef.current)) {
+        discard();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [discard]);
 
   const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled || e.button !== 0) return;
