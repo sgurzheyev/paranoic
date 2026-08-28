@@ -80,10 +80,10 @@ export default function MediaNoteOverlay({
           )}
         </p>
         {locked && (
-          <div className="media-note-actions">
+          <div className="mt-4 flex w-full flex-row items-center justify-center gap-6">
             <button
               type="button"
-              className="media-note-cancel"
+              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-gray-700 bg-gray-800/80 px-6 py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-gray-700"
               aria-label="Отмена"
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -95,7 +95,7 @@ export default function MediaNoteOverlay({
             </button>
             <button
               type="button"
-              className="media-note-send"
+              className="inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/30 transition-colors hover:bg-blue-500"
               aria-label="Отправить"
               onPointerDown={(e) => {
                 e.preventDefault();
