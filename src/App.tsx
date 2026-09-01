@@ -312,6 +312,8 @@ export default function App() {
   const [callExpanded, setCallExpanded] = useState(false);
   /** Блокирует ghost-click на home сразу после «Назад» из чата. */
   const [uiNavLock, setUiNavLock] = useState(false);
+  /** Пользователь явно вышел из чата «Назад» — home имеет приоритет над guest/call UI. */
+  const [chatNavDismissed, setChatNavDismissed] = useState(false);
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [lastPreviews, setLastPreviews] = useState<Record<string, LastMessagePreview>>({});
   /** Мобильный сайдбар контактов в мессенджере. */
@@ -406,10 +408,49 @@ export default function App() {
     if (screen === 'chat') {
       chatClosedRef.current = false;
       leavingChatRef.current = false;
+      setChatNavDismissed(false);
     }
   }, [screen]);
 
-  /** Arm outbound call — ONLY from direct Call button onClick handlers. Returns one-shot token. */
+  /** Home после «Назад» — P2P callbacks не могут перехватить экран. */
+  const isP2pUiBlockedOnHome = useCallback((): boolean => {
+    const blocked =
+      screenRef.current === 'home' &&
+      (chatNavDismissed ||
+        leavingChatRef.current ||
+        chatClosedRef.current ||
+        suppressChatAutoOpenRef.current);
+    if (blocked) {
+      logCallInit('p2p-ui-blocked-home-priority', { screen: screenRef.current });
+    }
+    return blocked;
+  }, [chatNavDismissed]);
+
+  const isSelfPeerTarget = useCallback((targetId: string | null | undefined): boolean => {
+    if (!targetId) return false;
+    return targetId === identityRef.current.id;
+  }, []);
+
+  /** На home после «Назад» — не даём P2P status/call callbacks открыть call/guest UI. */
+  useEffect(() => {
+    if (screen !== 'home') return;
+    if (!chatNavDismissed && !leavingChatRef.current && !chatClosedRef.current) return;
+    if (incomingRing) return;
+    if (callExpanded) setCallExpanded(false);
+    if (callState === 'calling' || callState === 'ringing') {
+      void p2pRef.current?.cancelCall().catch(() => undefined);
+      setCallState('idle');
+      mirrorCallState('idle');
+    }
+  }, [
+    screen,
+    p2pStatus,
+    chatNavDismissed,
+    callExpanded,
+    callState,
+    incomingRing,
+    mirrorCallState,
+  ]);
   const armOutboundCallFromButton = useCallback(
     (source: string, opts?: { fromHome?: boolean }): number => {
       if (opts?.fromHome) {
@@ -1510,6 +1551,7 @@ export default function App() {
             // Гость по магической ссылке — сразу в диалог с этим peer.
             if (
               guestPeerIdRef.current &&
+              !isP2pUiBlockedOnHome() &&
               !suppressChatAutoOpenRef.current &&
               !leavingChatRef.current &&
               !chatClosedRef.current
@@ -1538,6 +1580,12 @@ export default function App() {
           mirrorSignalingStatus(status);
         },
         onCallState: (state) => {
+          if (isP2pUiBlockedOnHome() && state !== 'idle' && state !== 'ending') {
+            logCallInit('onCallState-blocked-home', { state });
+            void p2pRef.current?.cancelCall();
+            return;
+          }
+
           const chatDismissed =
             chatClosedRef.current ||
             leavingChatRef.current ||
@@ -1584,6 +1632,12 @@ export default function App() {
             void clearParticipantsInCall([meId, peer].filter(Boolean));
           }
           if (state === 'ringing') {
+            if (isSelfPeerTarget(peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id)) {
+              logCallInit('onCallState-self-call-ringing-abort');
+              void p2pRef.current?.declineCall();
+              setScreen('home');
+              return;
+            }
             setCallExpanded(true);
             const meta = peerMetaRef.current;
             setIncomingRing((prev) =>
@@ -1636,6 +1690,7 @@ export default function App() {
               outboundCallIdRef.current = null;
             }
             setScreen((s) => {
+              if (isP2pUiBlockedOnHome()) return s;
               if (suppressChatAutoOpenRef.current || leavingChatRef.current) return s;
               return s === 'call' || s === 'home' ? 'chat' : s;
             });
@@ -1659,8 +1714,11 @@ export default function App() {
           setError('');
           setCallFailKind(null);
           console.log('[P2P_DEBUG] onIncomingConnection — auto-accept P2P link', info);
-          // Магическая ссылка: сразу устанавливаем DataChannel.
-          // Медиазвонок по-прежнему требует Accept через CallInbox / call-invite.
+          if (isSelfPeerTarget(info.userId || info.peerId)) {
+            logCallInit('onIncomingConnection-self-peer-ignored');
+            return;
+          }
+          // Магическая ссылка: сразу устанавливаем DataChannel (silent — no call UI).
           void (async () => {
             try {
               await p2pRef.current?.acceptIncomingConnection();
@@ -1668,8 +1726,7 @@ export default function App() {
             } catch (e) {
               console.warn('[P2P_DEBUG] auto-accept join failed', e);
               setIncomingConnection(true);
-              setCallExpanded(true);
-              startRingtone();
+              // Silent link failure — do not open call overlay or ringtone.
             }
           })();
           notifyIfHidden('Входящее подключение', {
@@ -1708,6 +1765,17 @@ export default function App() {
           closeActiveNotification();
         },
         onIncomingCall: () => {
+          if (isP2pUiBlockedOnHome()) {
+            logCallInit('onIncomingCall-blocked-home');
+            void p2pRef.current?.declineCall();
+            return;
+          }
+          if (isSelfPeerTarget(peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id)) {
+            logCallInit('onIncomingCall-self-peer-abort');
+            void p2pRef.current?.declineCall();
+            setScreen('home');
+            return;
+          }
           const meta = peerMetaRef.current;
           setIncomingRing((prev) =>
             prev ?? {
@@ -1723,6 +1791,7 @@ export default function App() {
           );
           setCallExpanded(true);
           setScreen((s) => {
+            if (isP2pUiBlockedOnHome()) return s;
             if (suppressChatAutoOpenRef.current) return s;
             return s === 'home' ? 'chat' : s;
           });
@@ -1999,7 +2068,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall]);
+  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall, isP2pUiBlockedOnHome, isSelfPeerTarget]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -2414,6 +2483,7 @@ export default function App() {
       e.stopPropagation();
       logCallInit('handleChatBack');
       abortActiveCallUi('handleChatBack');
+      setChatNavDismissed(true);
       screenRef.current = 'home';
       suppressChatAutoOpenRef.current = true;
       setUiNavLock(true);
@@ -2558,6 +2628,12 @@ export default function App() {
       identityRef.current = me;
       const target = peerIdRef.current || guestPeerIdRef.current;
       if (target && target === me.id) {
+        logCallInit(`${source}-startCall-self-abort`);
+        disarmOutboundCall(`${source}-self-call`);
+        callDialLockRef.current = false;
+        setCallExpanded(false);
+        setScreen('home');
+        setMainTab('chats');
         setError(
           'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
         );
@@ -3404,14 +3480,24 @@ export default function App() {
 
   const connected = p2pStatus === 'connected';
   const callLive = callState === 'calling' || callState === 'in-call';
-  const showCallBanner = callLive && !callExpanded && !incomingRing && !callFailKind;
+  const activePeerId = peerId || guestPeerId;
+  const selfCallBlocked = isSelfPeerTarget(activePeerId);
+  const showCallBanner =
+    callLive && !callExpanded && !incomingRing && !callFailKind && !selfCallBlocked;
   const showErrorToast = Boolean(error) && !classifyCallFailure(error);
-  const guestCallScreen = Boolean(guestPeerId) && !connected;
+  const showGuestDirectCall =
+    Boolean(guestPeerId) &&
+    !connected &&
+    !chatNavDismissed &&
+    !selfCallBlocked &&
+    screen === 'home';
+  const guestCallScreen = showGuestDirectCall;
   const overlayFailure = guestCallScreen ? null : callFailKind;
   /** Плашка неудачного дозвона больше не «экран» — интерфейс под ней остаётся живым. */
   const callUiOpen =
-    (callExpanded && !overlayFailure) ||
-    (callState === 'ringing' && Boolean(incomingRing));
+    !selfCallBlocked &&
+    ((callExpanded && !overlayFailure) ||
+      (callState === 'ringing' && Boolean(incomingRing)));
   /** Bottom nav: на главных вкладках; скрыт в открытом чате, звонке и guest direct. */
   const showBottomNav =
     screen !== 'chat' &&
@@ -3419,7 +3505,6 @@ export default function App() {
     !guestPeerId &&
     !incomingRing;
 
-  const activePeerId = peerId || guestPeerId;
   const peerIsTrusted = Boolean(
     activePeerId &&
       (trustedIds.has(activePeerId) ||
@@ -3787,12 +3872,12 @@ export default function App() {
       <main className="app-main">
         {screen === 'home' && (
           <section className={`home${uiNavLock ? ' ui-nav-lock' : ''}`}>
-            {guestPeerId && !connected ? (
+            {showGuestDirectCall ? (
               <GuestDirectCall
                 hostName={peerLabel}
                 hostColor={peerColor}
                 hostAvatarUrl={peerAvatarUrl}
-                hostOnline={onlineIds.has(guestPeerId)}
+                hostOnline={onlineIds.has(guestPeerId!)}
                 connected={connected}
                 joining={joining}
                 signalingStatus={signalingStatus}
@@ -4434,7 +4519,7 @@ export default function App() {
       )}
     </div>
 
-      {!incomingRing && (
+      {!incomingRing && !selfCallBlocked && (
       <CallOverlay
         callState={callState === 'ringing' ? 'idle' : callState}
         peerLabel={peerLabel}

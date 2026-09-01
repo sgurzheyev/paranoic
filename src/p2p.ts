@@ -21,6 +21,16 @@ export type P2PStatus =
 
 export type CallState = 'idle' | 'ringing' | 'calling' | 'in-call' | 'ending';
 
+/** Explicit media-call intent in control payloads — silent P2P must not set this. */
+export const CALL_INTENT_TYPE = 'CALL_OFFER' as const;
+
+export function hasExplicitCallIntent(packet: {
+  isCallIntent?: boolean;
+  type?: string;
+}): boolean {
+  return packet.isCallIntent === true || packet.type === CALL_INTENT_TYPE;
+}
+
 /** Оценка канала по RTP-статистике (packet loss / RTT). */
 export type NetworkQuality = 'good' | 'fair' | 'poor' | 'critical';
 
@@ -36,7 +46,7 @@ export type MediaFileMeta = {
 export type SignalingDebugStatus =
   | 'Подключаемся к сокетам...'
   | 'Ожидаем собеседника...'
-  | 'Входящий вызов...'
+  | 'Входящее подключение…'
   | 'Собеседник найден, генерируем ключи...'
   | 'Обмен маршрутами (ICE)...'
   | 'Связь установлена!'
@@ -270,7 +280,7 @@ const VIDEO_LEVEL_CONSTRAINTS: Record<
 };
 
 type ControlPacket =
-  | { t: 'call-invite'; msgId?: string }
+  | { t: 'call-invite'; msgId?: string; isCallIntent?: boolean; type?: 'CALL_OFFER' | string }
   | { t: 'call-accept'; msgId?: string }
   | { t: 'call-offer'; sdp: RTCSessionDescriptionInit; msgId?: string }
   | { t: 'call-answer'; sdp: RTCSessionDescriptionInit; msgId?: string }
@@ -954,14 +964,24 @@ export class P2PConnection {
     }
 
     const msgId = crypto.randomUUID();
-    this.sendCallControl({ t: 'call-invite', msgId });
+    this.sendCallControl({
+      t: 'call-invite',
+      msgId,
+      isCallIntent: true,
+      type: CALL_INTENT_TYPE,
+    });
     this.clearCallInviteRetry();
     this.callInviteRetryTimer = setInterval(() => {
       if (this.callState !== 'calling') {
         this.clearCallInviteRetry();
         return;
       }
-      this.sendCallControl({ t: 'call-invite', msgId });
+      this.sendCallControl({
+        t: 'call-invite',
+        msgId,
+        isCallIntent: true,
+        type: CALL_INTENT_TYPE,
+      });
     }, CALL_INVITE_RETRY_MS);
     return null;
   }
@@ -1586,7 +1606,7 @@ export class P2PConnection {
     this.pendingJoinPeerId = payload.peerId;
     this.remotePeerId = payload.peerId;
     this.clearWaitForPeerTimeout();
-    this.setSignalingStatus('Входящий вызов...');
+    this.setSignalingStatus('Входящее подключение…');
     void this.broadcastReliable('join-ack', {
       type: 'join-ack',
       peerId: this.peerId,
@@ -1927,8 +1947,12 @@ export class P2PConnection {
     }
 
     if (packet.t === 'call-invite') {
+      if (!hasExplicitCallIntent(packet)) {
+        p2pAudit('ignored call-invite without explicit intent', packet);
+        return;
+      }
       if (this.callState === 'in-call' || this.callState === 'calling') return;
-      // Только invite — без авто-getUserMedia.
+      // Только explicit invite — без авто-getUserMedia.
       this.setCallState('ringing');
       this.handlers.onIncomingCall?.();
       return;
@@ -1942,6 +1966,15 @@ export class P2PConnection {
     }
 
     if (packet.t === 'call-offer') {
+      // Media SDP renegotiation — only valid after explicit call-invite (+ accept).
+      if (this.callState !== 'ringing' && !this.callAcceptedPendingOffer) {
+        p2pAudit('ignored call-offer without prior call intent', {
+          callState: this.callState,
+          acceptedPending: this.callAcceptedPendingOffer,
+        });
+        return;
+      }
+
       const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
       this.ignoreOffer = !this.polite && offerCollision;
       if (this.ignoreOffer) return;
@@ -1953,11 +1986,6 @@ export class P2PConnection {
         } catch (e) {
           console.warn('[paranoic] answer after accept failed', e);
         }
-        return;
-      }
-      if (this.callState !== 'ringing') {
-        this.setCallState('ringing');
-        this.handlers.onIncomingCall?.();
       }
       return;
     }
