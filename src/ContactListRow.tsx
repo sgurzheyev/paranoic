@@ -73,6 +73,7 @@ export default function ContactListRow({
         title={mediaBlocked ? MEDIA_ACCESS_DENIED_MESSAGE : undefined}
         aria-label={t('contacts.callAria', { name: contact.name })}
         onClick={(e) => {
+          e.preventDefault();
           e.stopPropagation();
           onCall();
         }}

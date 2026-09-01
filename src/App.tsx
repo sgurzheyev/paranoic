@@ -408,6 +408,7 @@ export default function App() {
     if (screen === 'chat') {
       chatClosedRef.current = false;
       leavingChatRef.current = false;
+      suppressChatAutoOpenRef.current = false;
       setChatNavDismissed(false);
     }
   }, [screen]);
@@ -457,8 +458,13 @@ export default function App() {
         leavingChatRef.current = false;
         chatClosedRef.current = false;
       } else if (leavingChatRef.current || chatClosedRef.current) {
-        logCallInit(`${source}-arm-refused-left-chat`);
-        return 0;
+        if (screenRef.current === 'chat') {
+          leavingChatRef.current = false;
+          chatClosedRef.current = false;
+        } else {
+          logCallInit(`${source}-arm-refused-left-chat`);
+          return 0;
+        }
       }
       const token = outboundCallButtonTokenRef.current + 1;
       outboundCallButtonTokenRef.current = token;
@@ -486,8 +492,7 @@ export default function App() {
         armedToken > 0 &&
         callUserIntentRef.current &&
         !chatClosedRef.current &&
-        !leavingChatRef.current &&
-        !suppressChatAutoOpenRef.current;
+        !leavingChatRef.current;
       if (!ok) {
         logCallInit(`${source}-not-armed`, {
           token,
@@ -2378,22 +2383,34 @@ export default function App() {
     void connectToLocalContact(c, { openChat: true });
   };
 
-  const quickCallContact = (c: Contact, source = 'quick-call-contact') => {
+  /** Call from contacts list — arm token, connect silently, never open chat on phone tap. */
+  const handleContactsRowCall = (c: Contact, source = 'contacts-row-phone') => {
     if (callMediaBlocked) {
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
     }
-    const token = armOutboundCallFromButton(source, { fromHome: true });
-    if (!token) return;
-    if (isLiveConnectedTo(c.id)) {
-      void startCall(source, token);
-      return;
-    }
     chatClosedRef.current = false;
     leavingChatRef.current = false;
-    void connectToLocalContact(c, { openChat: true });
-    setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
-    disarmOutboundCall(`${source}-waiting-p2p`);
+    setChatNavDismissed(false);
+    const token = armOutboundCallFromButton(source, { fromHome: true });
+    if (!token) return;
+
+    const tryPlaceCall = () => {
+      if (!isOutboundCallArmed(source, token)) return;
+      if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
+        void startCall(source, token);
+      } else {
+        setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
+        disarmOutboundCall(`${source}-waiting-p2p`);
+      }
+    };
+
+    if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
+      tryPlaceCall();
+      return;
+    }
+
+    void connectToLocalContact(c, { openChat: false }).then(() => tryPlaceCall());
   };
 
   const connectToUser = async (
@@ -2844,14 +2861,58 @@ export default function App() {
       return;
     }
 
-    // P2P ещё не готов — только поднимаем сессию; звонок только повторным нажатием Call.
-    setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
-    disarmOutboundCall(`${source}-waiting-p2p`);
+    // P2P ещё не готов — поднимаем сессию, остаёмся в чате.
     const known = contacts.find((c) => c.id === target);
     if (known) {
       await connectToLocalContact(known, { openChat: true });
     } else {
       await connectToUser(target, peerLabel, { openChat: true });
+    }
+    const nowReady =
+      (isLiveConnectedTo(target) || p2pRef.current?.currentStatus === 'connected') &&
+      Boolean(p2pRef.current?.isReady);
+    if (
+      nowReady &&
+      isOutboundCallArmed(source, buttonToken) &&
+      screenRef.current === 'chat' &&
+      !chatClosedRef.current &&
+      !leavingChatRef.current
+    ) {
+      await startCall(source, buttonToken);
+      return;
+    }
+    setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
+    disarmOutboundCall(`${source}-waiting-p2p`);
+  };
+
+  const handleChatHeaderCall = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (callMediaBlocked) {
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
+    if (callLive) {
+      setCallExpanded(true);
+      return;
+    }
+    chatClosedRef.current = false;
+    leavingChatRef.current = false;
+    suppressChatAutoOpenRef.current = false;
+    setChatNavDismissed(false);
+    const token = armOutboundCallFromButton('chat-header-phone');
+    if (!token) return;
+
+    const target = peerIdRef.current || guestPeerIdRef.current;
+    const ready =
+      Boolean(target) &&
+      (isLiveConnectedTo(target!) || p2pStatus === 'connected') &&
+      Boolean(p2pRef.current?.isReady);
+
+    if (ready) {
+      void startCall('chat-header-phone', token);
+    } else {
+      void dialFromChat('chat-header-phone', token);
     }
   };
 
@@ -3974,7 +4035,7 @@ export default function App() {
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
                               }
                               onOpen={() => quickChatContact(c)}
-                              onCall={() => quickCallContact(c, 'contacts-row-phone')}
+                              onCall={() => handleContactsRowCall(c, 'contacts-row-phone')}
                               mediaBlocked={callMediaBlocked}
                             />
                           );
@@ -4032,7 +4093,7 @@ export default function App() {
                                 presenceUsers.find((u) => u.userId === c.id)?.avatarUrl
                               }
                               onOpen={() => quickChatContact(c)}
-                              onCall={() => quickCallContact(c, 'contacts-row-phone')}
+                              onCall={() => handleContactsRowCall(c, 'contacts-row-phone')}
                               mediaBlocked={callMediaBlocked}
                             />
                           );
@@ -4194,18 +4255,7 @@ export default function App() {
               onOpenProfile={() => {
                 if (activePeerId) setPeerProfileOpen(true);
               }}
-              onCall={() => {
-                if (callMediaBlocked) {
-                  setError(MEDIA_ACCESS_DENIED_MESSAGE);
-                  return;
-                }
-                if (callLive) {
-                  setCallExpanded(true);
-                  return;
-                }
-                const token = armOutboundCallFromButton('chat-header-phone');
-                if (token) void dialFromChat('chat-header-phone', token);
-              }}
+              onCall={handleChatHeaderCall}
               onAttach={() => fileInputRef.current?.click()}
             />
 
