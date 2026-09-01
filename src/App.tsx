@@ -353,6 +353,8 @@ export default function App() {
   const callDialGenerationRef = useRef(0);
   /** true после «Назад» из чата — блокирует исходящие звонки до следующего открытия чата. */
   const chatClosedRef = useRef(false);
+  /** Долгоживущий флаг «пользователь ушёл из чата» — до явного open chat. */
+  const leavingChatRef = useRef(false);
   /** Пользователь явно закрыл чат «Назад» — не открываем чат/звонок автоматически. */
   const suppressChatAutoOpenRef = useRef(false);
   /** После Accept по Realtime — принять WebRTC, когда придёт call-invite. */
@@ -398,13 +400,24 @@ export default function App() {
     screenRef.current = screen;
     if (screen === 'chat') {
       chatClosedRef.current = false;
+      leavingChatRef.current = false;
     }
   }, [screen]);
 
-  const setOutboundCallIntent = useCallback((source: string) => {
-    console.log('[Call] Outbound intent set by:', source);
-    callUserIntentRef.current = true;
-  }, []);
+  const setOutboundCallIntent = useCallback(
+    (source: string, opts?: { fromHome?: boolean }) => {
+      if (opts?.fromHome) {
+        leavingChatRef.current = false;
+        chatClosedRef.current = false;
+      } else if (leavingChatRef.current || chatClosedRef.current) {
+        console.log('[Call] Refused intent — user left chat', source);
+        return;
+      }
+      console.log('[Call] Outbound intent set by:', source);
+      callUserIntentRef.current = true;
+    },
+    []
+  );
 
   const clearOutboundCallIntent = useCallback((source: string) => {
     console.log('[Call] Outbound intent cleared by:', source);
@@ -412,15 +425,38 @@ export default function App() {
     pendingStartCallRef.current = false;
   }, []);
 
+  const abortActiveCallUi = useCallback(
+    (source: string) => {
+      console.log('[Call] abortActiveCallUi by:', source);
+      clearOutboundCallIntent(source);
+      callDialGenerationRef.current += 1;
+      chatClosedRef.current = true;
+      leavingChatRef.current = true;
+      outboundCallIdRef.current = null;
+      setIncomingRing(null);
+      setCallFailKind(null);
+      stopRingtone();
+      closeActiveNotification();
+      setCallState('idle');
+      mirrorCallState('idle');
+      setCallExpanded(false);
+      presenceRef.current?.setInCall(false);
+      void p2pRef.current?.cancelCall().catch(() => undefined);
+    },
+    [clearOutboundCallIntent, mirrorCallState]
+  );
+
   const canPlaceOutboundCall = useCallback((source: string): boolean => {
     const ok =
       callUserIntentRef.current &&
       !chatClosedRef.current &&
+      !leavingChatRef.current &&
       !suppressChatAutoOpenRef.current;
     if (!ok) {
       console.log('[Call] Blocked at', source, {
         intent: callUserIntentRef.current,
         chatClosed: chatClosedRef.current,
+        leavingChat: leavingChatRef.current,
         suppressNav: suppressChatAutoOpenRef.current,
         screen: screenRef.current,
       });
@@ -1436,7 +1472,12 @@ export default function App() {
             stopRingtone();
             closeActiveNotification();
             // Гость по магической ссылке — сразу в диалог с этим peer.
-            if (guestPeerIdRef.current && !suppressChatAutoOpenRef.current) {
+            if (
+              guestPeerIdRef.current &&
+              !suppressChatAutoOpenRef.current &&
+              !leavingChatRef.current &&
+              !chatClosedRef.current
+            ) {
               setScreen('chat');
             }
             void flushOutboxRef.current();
@@ -1445,6 +1486,7 @@ export default function App() {
               pendingStartCallRef.current &&
               callUserIntentRef.current &&
               !chatClosedRef.current &&
+              !leavingChatRef.current &&
               screenRef.current === 'chat'
             ) {
               pendingStartCallRef.current = false;
@@ -1459,6 +1501,7 @@ export default function App() {
                     dialGen !== callDialGenerationRef.current ||
                     screenRef.current !== 'chat' ||
                     chatClosedRef.current ||
+                    leavingChatRef.current ||
                     !callUserIntentRef.current
                   ) {
                     clearOutboundCallIntent('p2p-onStatus-connected-aborted');
@@ -1523,13 +1566,32 @@ export default function App() {
           mirrorSignalingStatus(status);
         },
         onCallState: (state) => {
-          setCallState(state);
-          mirrorCallState(state);
-          if (state === 'calling' && !callUserIntentRef.current) {
-            console.log('[Call] Rogue calling state — canceling (no outbound intent)');
+          const chatDismissed =
+            chatClosedRef.current ||
+            leavingChatRef.current ||
+            suppressChatAutoOpenRef.current;
+
+          if (state === 'calling' && (!callUserIntentRef.current || chatDismissed)) {
+            console.log('[Call] Rogue calling — abort before UI update', {
+              chatDismissed,
+              intent: callUserIntentRef.current,
+              screen: screenRef.current,
+            });
             void p2pRef.current?.cancelCall();
             return;
           }
+
+          if ((state === 'calling' || state === 'in-call') && chatDismissed) {
+            console.log('[Call] Call state while chat dismissed — abort', state);
+            void p2pRef.current?.cancelCall();
+            setCallState('idle');
+            mirrorCallState('idle');
+            setCallExpanded(false);
+            return;
+          }
+
+          setCallState(state);
+          mirrorCallState(state);
           callAttemptRef.current =
             state === 'calling' || state === 'in-call' || state === 'ringing';
           if (callAttemptRef.current) {
@@ -1590,6 +1652,10 @@ export default function App() {
               })();
             }
           } else if (state === 'in-call' || state === 'calling') {
+            if (chatClosedRef.current || leavingChatRef.current || suppressChatAutoOpenRef.current) {
+              setCallExpanded(false);
+              return;
+            }
             setCallExpanded(true);
             stopRingtone();
             closeActiveNotification();
@@ -1598,7 +1664,7 @@ export default function App() {
               outboundCallIdRef.current = null;
             }
             setScreen((s) => {
-              if (suppressChatAutoOpenRef.current) return s;
+              if (suppressChatAutoOpenRef.current || leavingChatRef.current) return s;
               return s === 'call' || s === 'home' ? 'chat' : s;
             });
           }
@@ -2169,6 +2235,7 @@ export default function App() {
   }, [appMode, authGate, sessionEpoch, guestPeerId, setActivePeer]);
 
   useEffect(() => {
+    if (leavingChatRef.current || chatClosedRef.current) return;
     if (callState !== 'idle' && p2pRef.current) {
       attachLocalVideo(p2pRef.current.getLocalStream());
       if (remoteVideoRef.current) {
@@ -2200,6 +2267,7 @@ export default function App() {
     setMainTab(opts?.openChat !== false ? 'chats' : mainTab);
     if (opts?.openChat !== false) {
       chatClosedRef.current = false;
+      leavingChatRef.current = false;
     }
     setScreen(opts?.openChat !== false ? 'chat' : 'home');
     setMessengerSidebarOpen(false);
@@ -2266,6 +2334,7 @@ export default function App() {
     if (liveConnected && opts?.openChat !== false && !opts?.startCall) {
       setAppMode('paranoic');
       chatClosedRef.current = false;
+      leavingChatRef.current = false;
       setMainTab('chats');
       setScreen('chat');
       setMessengerSidebarOpen(false);
@@ -2281,6 +2350,7 @@ export default function App() {
 
   const quickChatContact = (c: Contact) => {
     chatClosedRef.current = false;
+    leavingChatRef.current = false;
     void connectToLocalContact(c, { openChat: true });
   };
 
@@ -2384,28 +2454,24 @@ export default function App() {
     setCallExpanded(false);
   }, []);
 
-  /** Закрыть чат: только навигация — сброс intent ДО смены экрана. */
+  /** Закрыть чат: жёсткий сброс звонка ДО смены экрана. */
   const handleChatBack = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
       e.stopPropagation();
-      console.log('[Call] handleChatBack — hard block before navigation');
-      clearOutboundCallIntent('handleChatBack');
-      callDialGenerationRef.current += 1;
-      chatClosedRef.current = true;
+      abortActiveCallUi('handleChatBack');
       screenRef.current = 'home';
       suppressChatAutoOpenRef.current = true;
       setUiNavLock(true);
       setScreen('home');
       setMainTab('chats');
       setMessengerSidebarOpen(false);
-      setCallExpanded(false);
       window.setTimeout(() => {
         suppressChatAutoOpenRef.current = false;
         setUiNavLock(false);
-      }, 450);
+      }, 800);
     },
-    [clearOutboundCallIntent]
+    [abortActiveCallUi]
   );
 
   /**
@@ -2674,7 +2740,7 @@ export default function App() {
   /** Звонок из шапки чата — только после setOutboundCallIntent в onClick телефона. */
   const dialFromChat = async (source: string) => {
     console.log('[Call] dialFromChat() entered by:', source);
-    if (screenRef.current !== 'chat' || chatClosedRef.current) return;
+    if (screenRef.current !== 'chat' || chatClosedRef.current || leavingChatRef.current) return;
     if (!callUserIntentRef.current) {
       console.log('[Call] dialFromChat blocked — no outbound intent');
       return;
@@ -2718,6 +2784,7 @@ export default function App() {
         dialGen !== callDialGenerationRef.current ||
         screenRef.current !== 'chat' ||
         chatClosedRef.current ||
+        leavingChatRef.current ||
         !callUserIntentRef.current
       ) {
         clearOutboundCallIntent(`${source}-dial-aborted`);
@@ -2740,6 +2807,7 @@ export default function App() {
       dialGen !== callDialGenerationRef.current ||
       screenRef.current !== 'chat' ||
       chatClosedRef.current ||
+      leavingChatRef.current ||
       !callUserIntentRef.current
     ) {
       clearOutboundCallIntent(`${source}-dial-stale`);
@@ -3550,7 +3618,7 @@ export default function App() {
                 setError(MEDIA_ACCESS_DENIED_MESSAGE);
                 return;
               }
-              setOutboundCallIntent('globe-map-call');
+              setOutboundCallIntent('globe-map-call', { fromHome: true });
               pendingStartCallRef.current = true;
               void connectToUser(
                 user.userId,
@@ -3761,7 +3829,7 @@ export default function App() {
                 failure={callFailKind}
                 mediaBlocked={callMediaBlocked}
                 onCall={() => {
-                  setOutboundCallIntent('guest-direct-call');
+                  setOutboundCallIntent('guest-direct-call', { fromHome: true });
                   pendingStartCallRef.current = true;
                   void guestCallHost();
                 }}
@@ -3802,7 +3870,7 @@ export default function App() {
                                 setError(MEDIA_ACCESS_DENIED_MESSAGE);
                                 return;
                               }
-                              setOutboundCallIntent('active-session-call');
+                              setOutboundCallIntent('active-session-call', { fromHome: true });
                               pendingStartCallRef.current = true;
                               void startCall('active-session-call');
                             }}
@@ -3851,7 +3919,7 @@ export default function App() {
                               }
                               onOpen={() => quickChatContact(c)}
                               onCall={() => {
-                                setOutboundCallIntent('contacts-row-phone');
+                                setOutboundCallIntent('contacts-row-phone', { fromHome: true });
                                 pendingStartCallRef.current = true;
                                 quickCallContact(c);
                               }}
@@ -3913,7 +3981,7 @@ export default function App() {
                               }
                               onOpen={() => quickChatContact(c)}
                               onCall={() => {
-                                setOutboundCallIntent('contacts-row-phone');
+                                setOutboundCallIntent('contacts-row-phone', { fromHome: true });
                                 pendingStartCallRef.current = true;
                                 quickCallContact(c);
                               }}
