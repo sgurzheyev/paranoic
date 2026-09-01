@@ -1701,6 +1701,14 @@ svg.lucide {
   }
 }
 
+.home.ui-nav-lock {
+  pointer-events: none;
+}
+
+.home.ui-nav-lock * {
+  pointer-events: none;
+}
+
 .empty {
   margin: auto;
   color: var(--muted);

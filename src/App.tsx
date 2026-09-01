@@ -12,13 +12,13 @@ import {
   FileDown,
   Paperclip,
   RefreshCw,
-  PanelLeft,
   ShieldCheck,
   Shield,
   Ban,
   UserCheck,
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
+import ChatHeader from './ChatHeader';
 import ChatSearchPanel from './ChatSearchPanel';
 import ContactsSearchPanel from './ContactsSearchPanel';
 import SettingsPanel from './SettingsPanel';
@@ -305,6 +305,8 @@ export default function App() {
   } | null>(null);
   /** PiP свёрнут / развёрнут на весь экран. */
   const [callExpanded, setCallExpanded] = useState(false);
+  /** Блокирует ghost-click на home сразу после «Назад» из чата. */
+  const [uiNavLock, setUiNavLock] = useState(false);
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [lastPreviews, setLastPreviews] = useState<Record<string, LastMessagePreview>>({});
   /** Мобильный сайдбар контактов в мессенджере. */
@@ -345,6 +347,10 @@ export default function App() {
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
   const pendingStartCallRef = useRef(false);
+  /** Явное намерение пользователя позвонить (кнопка телефона). «Назад» сбрасывает. */
+  const callUserIntentRef = useRef(false);
+  /** Поколение async-звонка — инвалидируется при «Назад». */
+  const callDialGenerationRef = useRef(0);
   /** Пользователь явно закрыл чат «Назад» — не открываем чат/звонок автоматически. */
   const suppressChatAutoOpenRef = useRef(false);
   /** После Accept по Realtime — принять WebRTC, когда придёт call-invite. */
@@ -1389,18 +1395,28 @@ export default function App() {
             stopRingtone();
             closeActiveNotification();
             // Гость по магической ссылке — сразу в диалог с этим peer.
-            if (guestPeerIdRef.current) {
+            if (guestPeerIdRef.current && !suppressChatAutoOpenRef.current) {
               setScreen('chat');
             }
             void flushOutboxRef.current();
             void syncPendingRef.current();
-            if (pendingStartCallRef.current) {
+            if (
+              pendingStartCallRef.current &&
+              callUserIntentRef.current &&
+              screenRef.current === 'chat'
+            ) {
               pendingStartCallRef.current = false;
               if (isBannedRef.current) {
+                callUserIntentRef.current = false;
                 setError('Ваш аккаунт заблокирован. Звонки недоступны.');
               } else {
               void (async () => {
+                const dialGen = callDialGenerationRef.current;
                 try {
+                  if (dialGen !== callDialGenerationRef.current || screenRef.current !== 'chat') {
+                    callUserIntentRef.current = false;
+                    return;
+                  }
                   const me = identityRef.current;
                   const target =
                     guestPeerIdRef.current || peerIdRef.current || peerMetaRef.current.id;
@@ -1408,7 +1424,7 @@ export default function App() {
                     setError(
                       'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
                     );
-                    pendingStartCallRef.current = false;
+                    callUserIntentRef.current = false;
                     clearCallSessionResidue();
                     return;
                   }
@@ -1431,13 +1447,16 @@ export default function App() {
                   setScreen('chat');
                   await p2pRef.current?.startCall();
                 } catch (e) {
-                  pendingStartCallRef.current = false;
+                  callUserIntentRef.current = false;
                   clearCallSessionResidue();
                   setCallExpanded(false);
                   setError(mediaErrorMessage(e, 'Не удалось начать звонок'));
                 }
               })();
               }
+            } else if (pendingStartCallRef.current) {
+              pendingStartCallRef.current = false;
+              callUserIntentRef.current = false;
             } else if (pendingRingAcceptRef.current) {
               pendingRingAcceptRef.current = false;
               // Ждём call-invite — auto-accept в onCallState/onIncomingCall.
@@ -1614,7 +1633,10 @@ export default function App() {
             }
           );
           setCallExpanded(true);
-          setScreen((s) => (s === 'home' ? 'chat' : s));
+          setScreen((s) => {
+            if (suppressChatAutoOpenRef.current) return s;
+            return s === 'home' ? 'chat' : s;
+          });
           startRingtone();
           notifyIfHidden('Входящий звонок', {
             body: `Вам звонит ${meta.label || 'близкий'}`,
@@ -2175,6 +2197,7 @@ export default function App() {
         setError(MEDIA_ACCESS_DENIED_MESSAGE);
         return;
       }
+      callUserIntentRef.current = true;
       pendingStartCallRef.current = true;
       if (liveConnected) {
         setAppMode('paranoic');
@@ -2207,6 +2230,7 @@ export default function App() {
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
     }
+    callUserIntentRef.current = true;
     void connectToLocalContact(c, { startCall: true, openChat: false });
   };
 
@@ -2282,6 +2306,7 @@ export default function App() {
         setError(MEDIA_ACCESS_DENIED_MESSAGE);
         return;
       }
+      callUserIntentRef.current = true;
       pendingStartCallRef.current = true;
     }
 
@@ -2298,19 +2323,21 @@ export default function App() {
     setCallExpanded(false);
   }, []);
 
-  /** Закрыть чат без побочных кликов (не стартуем звонок при смене экрана). */
+  /** Закрыть чат: только навигация, без звонков и без async side-effects. */
   const handleChatBack = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
       e.stopPropagation();
+      callUserIntentRef.current = false;
       pendingStartCallRef.current = false;
+      callDialGenerationRef.current += 1;
       suppressChatAutoOpenRef.current = true;
+      setUiNavLock(true);
+      navigateHome();
       window.setTimeout(() => {
-        navigateHome();
-        window.setTimeout(() => {
-          suppressChatAutoOpenRef.current = false;
-        }, 400);
-      }, 0);
+        suppressChatAutoOpenRef.current = false;
+        setUiNavLock(false);
+      }, 450);
     },
     [navigateHome]
   );
@@ -2380,6 +2407,7 @@ export default function App() {
       return;
     }
     pendingStartCallRef.current = true;
+    callUserIntentRef.current = true;
     if (connected) {
       await startCall();
     }
@@ -2387,6 +2415,20 @@ export default function App() {
 
   const startCall = async () => {
     if (callDialLockRef.current) return;
+
+    const liveCall = p2pRef.current?.currentCallState ?? callState;
+    if (liveCall === 'calling' || liveCall === 'in-call') {
+      setCallExpanded(true);
+      return;
+    }
+    if (liveCall === 'ringing') return;
+
+    if (!callUserIntentRef.current) {
+      callUserIntentRef.current = false;
+      pendingStartCallRef.current = false;
+      return;
+    }
+
     callDialLockRef.current = true;
     resetCallFailureUi();
     setError('');
@@ -2400,18 +2442,19 @@ export default function App() {
     }
     if (callMediaBlocked) {
       pendingStartCallRef.current = false;
+      callUserIntentRef.current = false;
       callDialLockRef.current = false;
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
     }
 
-    const liveCall = p2pRef.current?.currentCallState ?? callState;
-    if (liveCall === 'calling' || liveCall === 'in-call') {
+    const liveCallAfterGate = p2pRef.current?.currentCallState ?? callState;
+    if (liveCallAfterGate === 'calling' || liveCallAfterGate === 'in-call') {
       setCallExpanded(true);
       callDialLockRef.current = false;
       return;
     }
-    if (liveCall === 'ringing') {
+    if (liveCallAfterGate === 'ringing') {
       callDialLockRef.current = false;
       return;
     }
@@ -2563,8 +2606,9 @@ export default function App() {
     }
   };
 
-  /** Звонок из шапки чата: без ложных disabled, с реконнектом при необходимости. */
+  /** Звонок из шапки чата: только по явному нажатию на иконку телефона. */
   const dialFromChat = async () => {
+    if (screenRef.current !== 'chat') return;
     if (callDialLockRef.current) return;
     if (callMediaBlocked) {
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
@@ -2588,6 +2632,11 @@ export default function App() {
       return;
     }
 
+    const dialGen = callDialGenerationRef.current + 1;
+    callDialGenerationRef.current = dialGen;
+    callUserIntentRef.current = true;
+    pendingStartCallRef.current = true;
+
     resetCallFailureUi();
     setError('');
 
@@ -2596,18 +2645,27 @@ export default function App() {
       Boolean(p2pRef.current?.isReady);
 
     if (ready) {
+      if (dialGen !== callDialGenerationRef.current || screenRef.current !== 'chat') {
+        callUserIntentRef.current = false;
+        pendingStartCallRef.current = false;
+        return;
+      }
       await startCall();
       return;
     }
 
     // Нет живого P2P — поднимаем сессию и стартуем звонок после connected.
-    pendingStartCallRef.current = true;
     setCallExpanded(true);
     const known = contacts.find((c) => c.id === target);
     if (known) {
       await connectToLocalContact(known, { startCall: true, openChat: true });
     } else {
       await connectToUser(target, peerLabel, { startCall: true, openChat: true });
+    }
+
+    if (dialGen !== callDialGenerationRef.current || screenRef.current !== 'chat') {
+      callUserIntentRef.current = false;
+      pendingStartCallRef.current = false;
     }
   };
 
@@ -2731,6 +2789,8 @@ export default function App() {
     stopRingtone();
     closeActiveNotification();
     pendingStartCallRef.current = false;
+    callUserIntentRef.current = false;
+    callDialGenerationRef.current += 1;
     pendingRingAcceptRef.current = false;
 
     const me = identityRef.current;
@@ -3168,6 +3228,8 @@ export default function App() {
     stopRingtone();
     closeActiveNotification();
     pendingStartCallRef.current = false;
+    callUserIntentRef.current = false;
+    callDialGenerationRef.current += 1;
     pendingRingAcceptRef.current = false;
     try {
       await p2pRef.current?.hangUp();
@@ -3413,11 +3475,12 @@ export default function App() {
                 setError(MEDIA_ACCESS_DENIED_MESSAGE);
                 return;
               }
+              callUserIntentRef.current = true;
               pendingStartCallRef.current = true;
               void connectToUser(
                 user.userId,
                 user.isContact ? user.name : 'Незнакомец',
-                { openChat: true }
+                { openChat: true, startCall: true }
               );
             }}
           />
@@ -3608,7 +3671,7 @@ export default function App() {
 
       <main className="app-main">
         {screen === 'home' && (
-          <section className="home">
+          <section className={`home${uiNavLock ? ' ui-nav-lock' : ''}`}>
             {guestPeerId && !connected ? (
               <GuestDirectCall
                 hostName={peerLabel}
@@ -3660,6 +3723,7 @@ export default function App() {
                                 setError(MEDIA_ACCESS_DENIED_MESSAGE);
                                 return;
                               }
+                              callUserIntentRef.current = true;
                               void startCall();
                             }}
                           >
@@ -3903,83 +3967,38 @@ export default function App() {
             )}
 
             <div className="messenger-pane chat">
-            <div className="chat-top">
-              <button
-                type="button"
-                className="icon-btn messenger-sidebar-toggle"
-                aria-label="Контакты"
-                onClick={() => setMessengerSidebarOpen((v) => !v)}
-              >
-                <PanelLeft size={16} />
-              </button>
-              <button
-                type="button"
-                className="text-link chat-back-home"
-                onClick={handleChatBack}
-              >
-                <ArrowLeft size={16} /> {t('chat.back')}
-              </button>
-              <button
-                type="button"
-                className="chat-peer chat-peer--btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (activePeerId) setPeerProfileOpen(true);
-                }}
-                disabled={!activePeerId}
-                aria-label={`Профиль: ${peerLabel}`}
-              >
-                <Avatar
-                  name={peerLabel}
-                  color={peerColor}
-                  avatarUrl={peerAvatarUrl}
-                  size="sm"
-                />
-                <div className="chat-peer-meta">
-                  <span className="chat-peer-name">{peerLabel}</span>
-                  <span className="chat-peer-sub">
-                    {peerTyping
-                      ? t('chat.typing')
-                      : connected
-                        ? t('chat.onLink')
-                        : t('chat.offline')}
-                  </span>
-                </div>
-              </button>
-              <button
-                type="button"
-                className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (callMediaBlocked) {
-                    setError(MEDIA_ACCESS_DENIED_MESSAGE);
-                    return;
-                  }
-                  void dialFromChat();
-                }}
-                aria-label={callLive ? t('chat.returnToCall') : t('chat.call')}
-                title={
-                  callMediaBlocked
-                    ? MEDIA_ACCESS_DENIED_MESSAGE
-                    : callLive
-                      ? t('chat.returnToCall')
-                      : t('chat.call')
+            <ChatHeader
+              backLabel={t('chat.back')}
+              peerLabel={peerLabel}
+              peerColor={peerColor}
+              peerAvatarUrl={peerAvatarUrl}
+              peerTyping={peerTyping}
+              connected={connected}
+              onLinkLabel={t('chat.onLink')}
+              offlineLabel={t('chat.offline')}
+              typingLabel={t('chat.typing')}
+              callLabel={t('chat.call')}
+              returnToCallLabel={t('chat.returnToCall')}
+              attachLabel={t('chat.attach')}
+              contactsToggleLabel="Контакты"
+              callLive={callLive}
+              callMediaBlocked={callMediaBlocked}
+              callMediaBlockedMessage={MEDIA_ACCESS_DENIED_MESSAGE}
+              activePeerId={activePeerId}
+              onBack={handleChatBack}
+              onToggleSidebar={() => setMessengerSidebarOpen((v) => !v)}
+              onOpenProfile={() => {
+                if (activePeerId) setPeerProfileOpen(true);
+              }}
+              onCall={() => {
+                if (callMediaBlocked) {
+                  setError(MEDIA_ACCESS_DENIED_MESSAGE);
+                  return;
                 }
-                disabled={!activePeerId}
-                aria-disabled={!activePeerId || callMediaBlocked}
-              >
-                <Phone size={17} />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label={t('chat.attach')}
-                disabled={!peerId}
-              >
-                <Paperclip size={17} />
-              </button>
-            </div>
+                void dialFromChat();
+              }}
+              onAttach={() => fileInputRef.current?.click()}
+            />
 
             {showTrustBanner && (
               <div className="trust-banner" role="status">
