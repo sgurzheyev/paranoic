@@ -345,6 +345,8 @@ export default function App() {
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
   /** После Family Mode «Позвонить» — стартуем медиазвонок, когда P2P готов. */
   const pendingStartCallRef = useRef(false);
+  /** Пользователь явно закрыл чат «Назад» — не открываем чат/звонок автоматически. */
+  const suppressChatAutoOpenRef = useRef(false);
   /** После Accept по Realtime — принять WebRTC, когда придёт call-invite. */
   const pendingRingAcceptRef = useRef(false);
   const pendingAcceptCallerRef = useRef<CallerInfo | null>(null);
@@ -1525,7 +1527,10 @@ export default function App() {
               setIncomingRing(null);
               outboundCallIdRef.current = null;
             }
-            setScreen((s) => (s === 'call' || s === 'home' ? 'chat' : s));
+            setScreen((s) => {
+              if (suppressChatAutoOpenRef.current) return s;
+              return s === 'call' || s === 'home' ? 'chat' : s;
+            });
           }
           if (state === 'idle') {
             attachLocalVideo(null);
@@ -2292,6 +2297,23 @@ export default function App() {
     setMessengerSidebarOpen(false);
     setCallExpanded(false);
   }, []);
+
+  /** Закрыть чат без побочных кликов (не стартуем звонок при смене экрана). */
+  const handleChatBack = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      pendingStartCallRef.current = false;
+      suppressChatAutoOpenRef.current = true;
+      window.setTimeout(() => {
+        navigateHome();
+        window.setTimeout(() => {
+          suppressChatAutoOpenRef.current = false;
+        }, 400);
+      }, 0);
+    },
+    [navigateHome]
+  );
 
   /**
    * Явный Hang Up / «Разорвать связь»: закрываем PC и возвращаемся в свой инбокс.
@@ -3798,10 +3820,7 @@ export default function App() {
                 <button
                   type="button"
                   className="text-link"
-                  onClick={() => {
-                    setMessengerSidebarOpen(false);
-                    navigateHome();
-                  }}
+                  onClick={handleChatBack}
                 >
                   <ArrowLeft size={16} /> {t('chats.title')}
                 </button>
@@ -3896,16 +3915,15 @@ export default function App() {
               <button
                 type="button"
                 className="text-link chat-back-home"
-                onClick={() => {
-                  navigateHome();
-                }}
+                onClick={handleChatBack}
               >
                 <ArrowLeft size={16} /> {t('chat.back')}
               </button>
               <button
                 type="button"
                 className="chat-peer chat-peer--btn"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (activePeerId) setPeerProfileOpen(true);
                 }}
                 disabled={!activePeerId}
@@ -3930,8 +3948,9 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className={`icon-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
-                onClick={() => {
+                className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (callMediaBlocked) {
                     setError(MEDIA_ACCESS_DENIED_MESSAGE);
                     return;

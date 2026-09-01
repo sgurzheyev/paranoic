@@ -1113,9 +1113,38 @@ svg.lucide {
 }
 
 .icon-btn.is-call-live {
-  color: var(--lux-emerald, #00f5d4);
-  border-color: rgba(0, 245, 212, 0.35);
-  box-shadow: 0 0 12px rgba(0, 245, 212, 0.2);
+  color: var(--call, var(--accent));
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 12px var(--accent-dim);
+}
+
+.chat-top .chat-back-home {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+}
+
+.chat-top .icon-btn.chat-call-btn {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  color: var(--call, var(--accent));
+  border-color: var(--accent-dim);
+  background: linear-gradient(165deg, var(--accent-dim), rgba(255, 255, 255, 0.04));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 14px var(--accent-dim);
+}
+
+.chat-top .icon-btn.chat-call-btn:hover:not(:disabled) {
+  border-color: var(--call, var(--accent));
+  background: linear-gradient(165deg, var(--accent-dim), rgba(255, 255, 255, 0.08));
+}
+
+.chat-top .icon-btn.chat-call-btn.is-call-live {
+  color: var(--call, var(--accent));
+  border-color: var(--call, var(--accent));
+  box-shadow: 0 0 16px var(--accent-dim);
 }
 
 /* Read-only профиль собеседника из шапки чата */
