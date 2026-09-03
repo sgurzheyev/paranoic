@@ -123,6 +123,7 @@ import {
 import AuthScreen from './AuthScreen';
 import {
   appendStoredMessage,
+  clearConversation,
   conversationId,
   formatFileSize,
   groupConversationId,
@@ -189,6 +190,18 @@ import {
   validateContactForCall,
   type Contact,
 } from './contacts';
+import {
+  loadAllLocalContacts,
+  loadLocalContact,
+  localContactDisplayName,
+  type LocalContact,
+} from './localContacts';
+import {
+  loadMutedIds,
+  muteConversation,
+  unmuteConversation,
+} from './localSettings';
+import EditContactModal from './EditContactModal';
 import { syncProfileToSupabase, fetchRemoteProfile, PROFILE_STALE_MESSAGE, type RemoteProfile } from './profile';
 import { startNativePush } from './pushNotifications';
 import {
@@ -368,6 +381,17 @@ export default function App() {
   const [blockedIds, setBlockedIds] = useState<Set<string>>(() => loadBlockedIds());
   const [micMuted, setMicMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+
+  // ── Private address book (local-only, IndexedDB) ──────────────────────────
+  /** Custom local contact entry for the currently active peer. */
+  const [activePeerLocalContact, setActivePeerLocalContact] = useState<LocalContact | null>(null);
+  /** Whether the "Edit Contact" modal is open. */
+  const [editContactOpen, setEditContactOpen] = useState(false);
+  /** Map of peerId → LocalContact for display-name overrides across the whole UI. */
+  const [localContactsMap, setLocalContactsMap] = useState<Map<string, LocalContact>>(() => new Map());
+
+  // ── Per-conversation mute (local-only, IndexedDB) ─────────────────────────
+  const [mutedIds, setMutedIds] = useState<Set<string>>(() => new Set());
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -742,11 +766,30 @@ export default function App() {
     setScreen('home');
     setSessionEpoch((n) => n + 1);
     void loadContacts().then(setContacts);
+    void loadMutedIds().then(setMutedIds);
+    void loadAllLocalContacts().then((lcs) =>
+      setLocalContactsMap(new Map(lcs.map((lc) => [lc.id, lc])))
+    );
     void bootstrapPeerRelations().then(({ trusted, blocked }) => {
       setTrustedIds(trusted);
       setBlockedIds(blocked);
     });
   };
+
+  // ── Load local contact + override peerLabel when active peer changes ────────
+  useEffect(() => {
+    if (!peerId) {
+      setActivePeerLocalContact(null);
+      return;
+    }
+    void loadLocalContact(peerId).then((lc) => {
+      setActivePeerLocalContact(lc);
+      if (lc) {
+        const displayName = localContactDisplayName(lc);
+        if (displayName) setPeerLabel(displayName);
+      }
+    });
+  }, [peerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onlineIds = useMemo(
     () => new Set(presenceUsers.filter((u) => u.online).map((u) => u.userId)),
@@ -2887,6 +2930,38 @@ export default function App() {
    * Called when the user leaves or deletes a group from within the chat.
    * Closes the management modal, resets group state, and returns home.
    */
+  // ── Chat header menu handlers ─────────────────────────────────────────────
+
+  const handleToggleMute = useCallback(async () => {
+    const activePeerId = peerIdRef.current || guestPeerId;
+    const conv = activePeerId
+      ? conversationId(identityRef.current.id, activePeerId)
+      : activeGroupIdRef.current
+        ? groupConversationId(activeGroupIdRef.current)
+        : null;
+    if (!conv) return;
+    if (mutedIds.has(conv)) {
+      const next = await unmuteConversation(conv);
+      setMutedIds(next);
+    } else {
+      const next = await muteConversation(conv);
+      setMutedIds(next);
+    }
+  }, [guestPeerId, mutedIds]);
+
+  const handleClearHistory = useCallback(async () => {
+    const activePeerId = peerIdRef.current || guestPeerId;
+    const conv = activePeerId
+      ? conversationId(identityRef.current.id, activePeerId)
+      : activeGroupIdRef.current
+        ? groupConversationId(activeGroupIdRef.current)
+        : null;
+    if (!conv) return;
+    await clearConversation(conv);
+    setMessages([]);
+    void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+  }, [guestPeerId]);
+
   const handleGroupLeft = useCallback(() => {
     setGroupMgmtOpen(false);
     activeGroupIdRef.current = null;
@@ -4069,6 +4144,15 @@ export default function App() {
 
   const canComposeChat = Boolean(secretKey && (activeGroupId || peerId));
 
+  /** Conversation ID for the currently active 1:1 or group chat. */
+  const activeChatConvId = activePeerId
+    ? conversationId(identity.id, activePeerId)
+    : activeGroupId
+      ? groupConversationId(activeGroupId)
+      : null;
+
+  const activeConvIsMuted = Boolean(activeChatConvId && mutedIds.has(activeChatConvId));
+
   const peerContacts = useMemo(
     () => contacts.filter((c) => c.id !== identity.id),
     [contacts, identity.id]
@@ -4599,10 +4683,13 @@ export default function App() {
                         {chatsOrdered.map((c) => {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
+                          const lc = localContactsMap.get(c.id);
+                          const lcName = lc ? localContactDisplayName(lc) : '';
+                          const displayContact = lcName ? { ...c, name: lcName } : c;
                           return (
                             <ContactListRow
                               key={c.id}
-                              contact={c}
+                              contact={displayContact}
                               online={online}
                               trusted={trusted}
                               preview={lastPreviews[c.id]}
@@ -4660,10 +4747,13 @@ export default function App() {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
                           const rowDisabled = connected && peerId === c.id;
+                          const lc = localContactsMap.get(c.id);
+                          const lcName = lc ? localContactDisplayName(lc) : '';
+                          const displayContact = lcName ? { ...c, name: lcName } : c;
                           return (
                             <ContactListRow
                               key={c.id}
-                              contact={c}
+                              contact={displayContact}
                               online={online}
                               trusted={trusted}
                               disabled={rowDisabled}
@@ -4886,18 +4976,24 @@ export default function App() {
               activePeerId={activePeerId}
               isGroup={Boolean(activeGroup)}
               groupFaces={
-                (activeGroup?.members ?? []).map((m) => ({
-                  userId: m?.userId ?? '',
-                  name: m?.name || m?.userId?.slice(0, 6) || '?',
-                  color: m?.color,
-                  avatarUrl: m?.avatarUrl,
-                }))
+                (activeGroup?.members ?? []).map((m) => {
+                  const lc = m?.userId ? localContactsMap.get(m.userId) : null;
+                  const lcName = lc ? localContactDisplayName(lc) : '';
+                  return {
+                    userId: m?.userId ?? '',
+                    name: lcName || m?.name || m?.userId?.slice(0, 6) || '?',
+                    color: m?.color,
+                    avatarUrl: m?.avatarUrl,
+                  };
+                })
               }
               groupSubtitle={
                 activeGroup
                   ? t('groups.memberCount', { count: String(activeGroup.memberCount) })
                   : undefined
               }
+              isMuted={activeConvIsMuted}
+              isBlocked={Boolean(activePeerId && blockedIds.has(activePeerId))}
               onBack={handleChatBack}
               onToggleSidebar={() => setMessengerSidebarOpen((v) => !v)}
               onOpenProfile={() => {
@@ -4909,6 +5005,10 @@ export default function App() {
               }}
               onCall={handleChatHeaderCall}
               onAttach={() => fileInputRef.current?.click()}
+              onEditContact={!activeGroup && activePeerId ? () => setEditContactOpen(true) : undefined}
+              onToggleMute={() => void handleToggleMute()}
+              onBlockUser={!activeGroup && activePeerId ? () => void handleBlockPeer() : undefined}
+              onClearHistory={() => void handleClearHistory()}
             />
 
             {showTrustBanner && (
@@ -5247,6 +5347,35 @@ export default function App() {
             void loadLastMessagePreviews(identity.id).then(setLastPreviews);
           }}
           onLeft={handleGroupLeft}
+        />
+      )}
+
+      {editContactOpen && activePeerId && (
+        <EditContactModal
+          open={editContactOpen}
+          peerId={activePeerId}
+          peerPublicName={contacts.find((c) => c.id === activePeerId)?.name || peerLabel}
+          peerColor={peerColor}
+          peerAvatarUrl={peerAvatarUrl}
+          existing={activePeerLocalContact}
+          onClose={() => setEditContactOpen(false)}
+          onSaved={(updated) => {
+            setActivePeerLocalContact(updated);
+            setLocalContactsMap((prev) => {
+              const next = new Map(prev);
+              if (updated) next.set(activePeerId, updated);
+              else next.delete(activePeerId);
+              return next;
+            });
+            if (updated) {
+              const displayName = localContactDisplayName(updated);
+              if (displayName) setPeerLabel(displayName);
+            } else {
+              // Restore public name from contacts book
+              const pub = contacts.find((c) => c.id === activePeerId)?.name;
+              if (pub) setPeerLabel(pub);
+            }
+          }}
         />
       )}
 

@@ -1,0 +1,119 @@
+/* —— Chat Header More-Options Dropdown —— */
+.chat-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-menu-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-strong, #eef1f6);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.chat-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-menu-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.chat-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  min-width: 210px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(22, 24, 30, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  animation: slide-up 0.18s ease;
+  overflow: hidden;
+}
+
+.chat-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-strong, #eef1f6);
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.chat-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.chat-dropdown-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chat-dropdown-item.is-danger {
+  color: #f87171;
+}
+
+.chat-dropdown-item.is-muted {
+  color: #fbbf24;
+}
+
+.chat-dropdown-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 4px 6px;
+}
+
+/* Confirm overlay inside dropdown */
+.chat-dropdown-confirm {
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  color: var(--muted, #7a8494);
+  line-height: 1.5;
+}
+
+.chat-dropdown-confirm-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-dropdown-confirm-btns button {
+  flex: 1;
+  padding: 7px 0;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.chat-dropdown-confirm-btns .btn-cancel {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-strong, #eef1f6);
+}
+
+.chat-dropdown-confirm-btns .btn-confirm {
+  background: #dc2626;
+  color: #fff;
+}
+
+.chat-dropdown-confirm-btns button:hover { opacity: 0.85; }

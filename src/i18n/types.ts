@@ -312,6 +312,29 @@ export type TranslationDict = {
       actionFailed: string;
     };
   };
+  localContact: {
+    editTitle: string;
+    addTitle: string;
+    firstName: string;
+    lastName: string;
+    note: string;
+    notePlaceholder: string;
+    save: string;
+    delete: string;
+    deleteConfirm: string;
+    saveFailed: string;
+  };
+  chatMenu: {
+    audioCall: string;
+    videoCall: string;
+    editContact: string;
+    mute: string;
+    unmute: string;
+    blockUser: string;
+    clearHistory: string;
+    clearHistoryConfirm: string;
+    cleared: string;
+  };
   profileModal: {
     title: string;
     uploadPhoto: string;

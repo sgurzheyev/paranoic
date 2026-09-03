@@ -82,6 +82,15 @@ export async function loadChatHistory(convId: string): Promise<StoredMessage[]> 
   return rows ?? [];
 }
 
+/**
+ * Wipe all stored messages for a single conversation.
+ * Does NOT touch media blobs — call clearConversationMedia separately if needed.
+ */
+export async function clearConversation(convId: string): Promise<void> {
+  if (!convId) return;
+  await messagesDb.removeItem(historyKey(convId));
+}
+
 export async function saveChatHistory(
   convId: string,
   messages: StoredMessage[]

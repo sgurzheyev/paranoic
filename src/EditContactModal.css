@@ -1,0 +1,134 @@
+/* —— Edit / Add Contact Modal —— */
+.ec-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(8, 9, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fade-in 0.2s ease;
+}
+
+.ec-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(100%, 400px);
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(22, 24, 30, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  animation: slide-up 0.28s ease;
+  color: var(--text-strong, #eef1f6);
+}
+
+.ec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ec-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.ec-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.ec-preview-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.ec-public-name {
+  font-size: 0.78rem;
+  color: var(--muted, #7a8494);
+}
+
+.ec-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ec-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--muted, #7a8494);
+  font-weight: 500;
+}
+
+.ec-input {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-strong, #eef1f6);
+  padding: 9px 12px;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.ec-input:focus {
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.ec-textarea {
+  resize: vertical;
+  min-height: 68px;
+  font-family: inherit;
+}
+
+.ec-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+  font-size: 0.8rem;
+}
+
+.ec-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ec-foot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.ec-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: #f87171;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 4px 0;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+.ec-delete-btn:hover { opacity: 1; }
+.ec-delete-btn.is-confirm { font-weight: 700; opacity: 1; }
