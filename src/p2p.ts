@@ -105,6 +105,11 @@ type SignalReject = { type: 'reject'; peerId: string; targetPeerId: string };
 /**
  * Public STUN + optional TURN (Open Relay defaults + VITE_TURN_* env override).
  * iceTransportPolicy: 'all' (host / srflx / relay) for mobile NAT traversal.
+ *
+ * Env (any alias works):
+ *   VITE_TURN_URL / VITE_TURN_URLS — comma-separated turn:/turns: URLs
+ *   VITE_TURN_USER / VITE_TURN_USERNAME
+ *   VITE_TURN_CRED / VITE_TURN_CREDENTIAL
  */
 const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -138,16 +143,33 @@ const DEFAULT_TURN_SERVERS: RTCIceServer[] = [
 /** @deprecated use buildIceServers() */
 const PUBLIC_ICE_SERVERS: RTCIceServer[] = [...DEFAULT_STUN_SERVERS, ...DEFAULT_TURN_SERVERS];
 
+function envString(...keys: string[]): string {
+  for (const key of keys) {
+    const raw = import.meta.env[key] as string | undefined;
+    if (raw?.trim()) return raw.trim();
+  }
+  return '';
+}
+
 function readEnvTurnServers(): RTCIceServer[] {
-  const urlsRaw = import.meta.env.VITE_TURN_URLS as string | undefined;
-  const username = import.meta.env.VITE_TURN_USERNAME as string | undefined;
-  const credential = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
-  if (!urlsRaw?.trim() || !username?.trim() || !credential?.trim()) return [];
-  return urlsRaw
+  const urlsRaw = envString('VITE_TURN_URL', 'VITE_TURN_URLS');
+  const username = envString('VITE_TURN_USER', 'VITE_TURN_USERNAME');
+  const credential = envString('VITE_TURN_CRED', 'VITE_TURN_CREDENTIAL');
+  if (!urlsRaw || !username || !credential) {
+    if (urlsRaw || username || credential) {
+      console.warn(
+        '[paranoic ICE] TURN env incomplete — need URL + USER + CRED (or URLS/USERNAME/CREDENTIAL aliases)'
+      );
+    }
+    return [];
+  }
+  const urls = urlsRaw
     .split(',')
     .map((part) => part.trim())
-    .filter(Boolean)
-    .map((url) => ({ urls: url, username: username.trim(), credential: credential.trim() }));
+    .filter(Boolean);
+  if (urls.length === 0) return [];
+  console.log('[paranoic ICE] using env TURN servers', { count: urls.length, urls });
+  return urls.map((url) => ({ urls: url, username, credential }));
 }
 
 /** ICE servers for RTCPeerConnection — STUN + TURN with optional env credentials. */
@@ -254,6 +276,9 @@ const NETWORK_WATCH_MS = 2_000;
 const BROADCAST_RETRIES = 6;
 const JOIN_RETRY_MS = 1_200;
 const CALL_INVITE_RETRY_MS = 1_200;
+/** DataChannel keepalive — detect stale mobile NAT mappings. */
+const DC_KEEPALIVE_INTERVAL_MS = 10_000;
+const DC_KEEPALIVE_TIMEOUT_MS = 8_000;
 
 const VIDEO_LEVEL_CONSTRAINTS: Record<
   Exclude<VideoAdaptLevel, 'audio-only'>,
@@ -309,7 +334,9 @@ type ControlPacket =
   | { t: 'msg-delivered'; ids: string[]; msgId?: string }
   | { t: 'msg-read'; ids: string[]; msgId?: string }
   | { t: 'typing'; active: boolean; msgId?: string }
-  | { t: 'msg-reaction'; id: string; emoji: string; msgId?: string };
+  | { t: 'msg-reaction'; id: string; emoji: string; msgId?: string }
+  | { t: 'dc-ping'; ts: number; msgId?: string }
+  | { t: 'dc-pong'; ts: number; msgId?: string };
 
 /** Звонок через Realtime как запасной канал к DataChannel. */
 type SignalCtrl = { peerId: string; packet: ControlPacket; msgId: string };
@@ -535,6 +562,10 @@ export class P2PConnection {
   /** Retry media SDP offer until call-answer lands (invite can race ahead of offer). */
   private callOfferRetryTimer: ReturnType<typeof setInterval> | null = null;
   private lastCallOfferSdp: RTCSessionDescriptionInit | null = null;
+  private dcKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private dcKeepaliveWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private lastDcPongAt = 0;
+  private dcKeepaliveInFlight = false;
   private signalingStatus: SignalingDebugStatus = '';
   private localIdentity: PeerIdentity | null = null;
   /** Входящий join ждёт Accept на стороне хоста. */
@@ -919,6 +950,112 @@ export class P2PConnection {
     if (this.callOfferRetryTimer) {
       clearInterval(this.callOfferRetryTimer);
       this.callOfferRetryTimer = null;
+    }
+  }
+
+  private clearDcKeepalive(): void {
+    if (this.dcKeepaliveTimer) {
+      clearInterval(this.dcKeepaliveTimer);
+      this.dcKeepaliveTimer = null;
+    }
+    if (this.dcKeepaliveWatchdog) {
+      clearTimeout(this.dcKeepaliveWatchdog);
+      this.dcKeepaliveWatchdog = null;
+    }
+    this.dcKeepaliveInFlight = false;
+  }
+
+  private startDcKeepalive(): void {
+    this.clearDcKeepalive();
+    this.lastDcPongAt = Date.now();
+    this.dcKeepaliveTimer = setInterval(() => {
+      void this.sendDcKeepalivePing();
+    }, DC_KEEPALIVE_INTERVAL_MS);
+  }
+
+  private async sendDcKeepalivePing(): Promise<void> {
+    if (!this.isReady || this.dcKeepaliveInFlight) return;
+    // Skip aggressive teardown during an active media call — ICE restart handles that.
+    if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+      return;
+    }
+    this.dcKeepaliveInFlight = true;
+    const ts = Date.now();
+    try {
+      this.sendControl({ t: 'dc-ping', ts, msgId: this.newMsgId() });
+    } catch (e) {
+      this.dcKeepaliveInFlight = false;
+      p2pAudit('dc-ping send failed — silent reconnect', e);
+      this.softResetPeer();
+      return;
+    }
+    if (this.dcKeepaliveWatchdog) clearTimeout(this.dcKeepaliveWatchdog);
+    this.dcKeepaliveWatchdog = setTimeout(() => {
+      this.dcKeepaliveWatchdog = null;
+      this.dcKeepaliveInFlight = false;
+      if (!this.isReady) return;
+      if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
+        return;
+      }
+      p2pAudit('dc-ping timeout — silent softResetPeer', {
+        lastPongAgeMs: Date.now() - this.lastDcPongAt,
+      });
+      this.softResetPeer();
+    }, DC_KEEPALIVE_TIMEOUT_MS);
+  }
+
+  private onDcPong(ts: number): void {
+    this.lastDcPongAt = Date.now();
+    this.dcKeepaliveInFlight = false;
+    if (this.dcKeepaliveWatchdog) {
+      clearTimeout(this.dcKeepaliveWatchdog);
+      this.dcKeepaliveWatchdog = null;
+    }
+    p2pDebug('dc-pong', { rttMs: this.lastDcPongAt - ts });
+  }
+
+  /**
+   * After background resume: re-join Realtime room channel if it dropped,
+   * and nudge a silent P2P reconnect when the DataChannel is dead.
+   */
+  async ensureSignalingAlive(reason = 'foreground'): Promise<void> {
+    if (!this.roomId || !hasSupabaseConfig()) return;
+    const signalState = this.signal?.state;
+    p2pAudit('ensureSignalingAlive', {
+      reason,
+      signalState,
+      status: this.status,
+      dcReady: this.isReady,
+      isHost: this.isHost,
+    });
+
+    const signalOk = signalState === 'joined' || signalState === 'joining';
+
+    // Live DataChannel — do not tear down PC just to refresh signaling.
+    if (this.isReady) {
+      if (!signalOk) {
+        p2pAudit('ensureSignalingAlive: DC open but signal stale — defer rejoin');
+      }
+      return;
+    }
+
+    if (!signalOk) {
+      const roomId = this.roomId;
+      const isHost = this.isHost;
+      try {
+        await this.joinRoom(roomId, { isHost });
+      } catch (e) {
+        console.warn('[paranoic] ensureSignalingAlive rejoin failed', e);
+      }
+      return;
+    }
+
+    if (this.isHost) {
+      this.setStatus('waiting-answer');
+      this.setSignalingStatus('Ожидаем собеседника...');
+    } else {
+      void this.sendJoin();
+      this.startJoinRetry();
     }
   }
 
@@ -2283,6 +2420,24 @@ export class P2PConnection {
       return;
     }
 
+    if (packet.t === 'dc-ping') {
+      try {
+        this.sendControl({
+          t: 'dc-pong',
+          ts: typeof packet.ts === 'number' ? packet.ts : Date.now(),
+          msgId: this.newMsgId(),
+        });
+      } catch {
+        /* */
+      }
+      return;
+    }
+
+    if (packet.t === 'dc-pong') {
+      this.onDcPong(typeof packet.ts === 'number' ? packet.ts : Date.now());
+      return;
+    }
+
     if (packet.t === 'msg-reaction') {
       if (!packet.id) return;
       this.handlers.onMessageReaction?.(packet.id, packet.emoji || '❤️');
@@ -2607,6 +2762,8 @@ export class P2PConnection {
   private softResetPeer(): void {
     this.clearJoinRetry();
     this.clearCallInviteRetry();
+    this.clearCallOfferRetry();
+    this.clearDcKeepalive();
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
     this.clearWaitForPeerTimeout();
@@ -2629,6 +2786,7 @@ export class P2PConnection {
     this.pendingJoinPeerId = null;
     this.pendingCallOffer = null;
     this.callAcceptedPendingOffer = false;
+    this.lastCallOfferSdp = null;
     this.remotePeerId = null;
     this.handledCtrlIds.clear();
     this.resetAdaptState();
@@ -3057,9 +3215,11 @@ export class P2PConnection {
       this.setStatus('connected');
       this.setSignalingStatus('Связь установлена!');
       this.sendHello();
+      this.startDcKeepalive();
     };
 
     channel.onclose = () => {
+      this.clearDcKeepalive();
       // Во время звонка краткий close часто ложный — пробуем ICE, не сбрасываем UI сразу.
       if (this.callState === 'in-call' || this.callState === 'calling' || this.callState === 'ringing') {
         if (this.outgoingTransfers.size > 0 || this.incomingFiles.size > 0) {
@@ -3171,6 +3331,8 @@ export class P2PConnection {
     this.detachSignal();
     this.clearJoinRetry();
     this.clearCallInviteRetry();
+    this.clearCallOfferRetry();
+    this.clearDcKeepalive();
     this.clearIceCheckTimeout();
     this.clearIceSoftRestartTimer();
     this.clearWaitForPeerTimeout();
@@ -3190,6 +3352,7 @@ export class P2PConnection {
     this.pendingJoinPeerId = null;
     this.pendingCallOffer = null;
     this.callAcceptedPendingOffer = false;
+    this.lastCallOfferSdp = null;
     this.handledCtrlIds.clear();
     this.remotePeerId = null;
     this.cachedIceServers = null;

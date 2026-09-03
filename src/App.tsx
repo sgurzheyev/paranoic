@@ -967,6 +967,68 @@ export default function App() {
     return () => window.removeEventListener('online', onOnline);
   }, []);
 
+  /**
+   * Foreground sync recovery: after background / app resume, pull missed
+   * store-and-forward messages (REST) and re-check Realtime + P2P signaling.
+   */
+  useEffect(() => {
+    if (authGate !== 'ok') return;
+
+    let running = false;
+    const recoverForeground = async (source: string) => {
+      if (running) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      running = true;
+      console.log('[paranoic] foreground recover', source);
+      try {
+        if (hasSupabaseConfig()) {
+          try {
+            await peekAuthSession();
+          } catch (e) {
+            console.warn('[paranoic] foreground auth refresh', e);
+          }
+        }
+        await syncPendingRef.current();
+        await flushOutboxRef.current();
+        await callInboxRef.current?.ensureAlive?.();
+        await p2pRef.current?.ensureSignalingAlive?.(source);
+        const conv = conversationIdRef.current;
+        if (conv) await hydrateConversation(conv);
+      } catch (e) {
+        console.warn('[paranoic] foreground recover failed', e);
+      } finally {
+        running = false;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void recoverForeground('visibilitychange');
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    let removeAppListener: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { App } = await import('@capacitor/app');
+        const handle = await App.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) void recoverForeground('appStateChange');
+        });
+        removeAppListener = () => {
+          void handle.remove();
+        };
+      } catch {
+        /* web / plugin unavailable */
+      }
+    })();
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      removeAppListener?.();
+    };
+  }, [authGate, hydrateConversation]);
+
   /** При входе в Paranoic — сразу забираем отложенную почту. */
   useEffect(() => {
     if (appMode !== 'paranoic') return;

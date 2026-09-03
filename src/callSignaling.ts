@@ -182,11 +182,20 @@ export class CallInbox {
     this.visibilityHandler = () => {
       if (document.visibilityState !== 'visible') return;
       if (!this.userId) return;
-      if (this.channel && this.subscribed) return;
-      audit('call inbox tab visible — resubscribe', { userId: this.userId });
-      void this.recoverIfNeeded();
+      audit('call inbox tab visible — ensureAlive', {
+        userId: this.userId,
+        subscribed: this.subscribed,
+      });
+      void this.ensureAlive();
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
+  }
+
+  /** Re-subscribe if Realtime channel dropped (foreground / app resume). */
+  async ensureAlive(): Promise<void> {
+    if (!this.userId) return;
+    if (this.channel && this.subscribed) return;
+    await this.recoverIfNeeded();
   }
 
   private async recoverIfNeeded(): Promise<void> {
