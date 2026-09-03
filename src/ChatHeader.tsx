@@ -1,3 +1,4 @@
+import './groups.css';
 import { ArrowLeft, PanelLeft, Paperclip, Phone, Users } from 'lucide-react';
 import Avatar from './Avatar';
 

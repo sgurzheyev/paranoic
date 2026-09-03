@@ -1,3 +1,4 @@
+import './groups.css';
 import { Users } from 'lucide-react';
 import type { GroupSummary } from './groups';
 import { groupConversationId } from './groups';

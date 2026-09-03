@@ -1,0 +1,247 @@
+/* —— Group Management Modal —— */
+.group-mgmt-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(8, 9, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fade-in 0.2s ease;
+}
+
+.group-mgmt-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(92vh, 680px);
+  width: min(100%, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(22, 24, 30, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  animation: slide-up 0.28s ease;
+  color: var(--text-strong, #eef1f6);
+}
+
+.group-mgmt-head {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+}
+
+.group-mgmt-title {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.group-mgmt-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+  font-size: 0.8rem;
+}
+
+/* Identity block */
+.group-mgmt-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.group-mgmt-big-avatar {
+  width: 64px;
+  height: 64px;
+}
+
+.group-mgmt-big-avatar .group-avatar-stack__face {
+  width: 38px;
+  height: 38px;
+  font-size: 1rem;
+  border-width: 2px;
+}
+
+.group-mgmt-big-avatar .group-avatar-stack__face:nth-child(1) { left: 0; top: 14px; }
+.group-mgmt-big-avatar .group-avatar-stack__face:nth-child(2) { left: 20px; top: 0; }
+.group-mgmt-big-avatar .group-avatar-stack__face:nth-child(3) { left: 26px; top: 24px; }
+
+.group-mgmt-name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-strong);
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: default;
+}
+
+.group-mgmt-name-btn.is-editable {
+  cursor: pointer;
+  color: var(--accent, #60a5fa);
+}
+
+.group-mgmt-edit-caret {
+  opacity: 0.6;
+}
+
+.group-mgmt-count {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Rename row */
+.group-mgmt-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-mgmt-rename-input {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-strong);
+  padding: 6px 10px;
+  font-size: 1rem;
+  font-weight: 700;
+  flex: 1;
+}
+
+.group-mgmt-rename-confirm {
+  color: #34d399;
+}
+
+/* Member list */
+.group-mgmt-member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-mgmt-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border-radius: 10px;
+}
+
+.group-mgmt-member-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.group-mgmt-member-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.group-mgmt-member-name {
+  font-size: 0.88rem;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-mgmt-you {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.group-mgmt-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.7rem;
+  color: #fbbf24;
+  margin-top: 1px;
+}
+
+.group-mgmt-remove-btn {
+  color: #f87171;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.group-mgmt-remove-btn:hover {
+  opacity: 1;
+}
+
+/* Action buttons strip */
+.group-mgmt-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 8px;
+}
+
+.group-mgmt-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.group-mgmt-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.group-mgmt-action-btn.is-leave {
+  color: #fb923c;
+}
+
+.group-mgmt-action-btn.is-delete {
+  color: #f87171;
+}
+
+.group-mgmt-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Confirm screens */
+.group-mgmt-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.group-mgmt-confirm p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-strong);
+  line-height: 1.5;
+}

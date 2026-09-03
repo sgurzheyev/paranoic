@@ -1,3 +1,5 @@
+import './groups.css';
+import './CreateGroupModal.css';
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Users, X } from 'lucide-react';
 import Avatar from './Avatar';

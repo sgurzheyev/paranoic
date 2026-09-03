@@ -10,6 +10,8 @@
  *   - Deleting the group (admin only)
  *   - Renaming the group (admin only)
  */
+import './groups.css';
+import './GroupManagementModal.css';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
@@ -78,11 +80,12 @@ export default function GroupManagementModal({
   }, [open, group.id, group.name]);
 
   const isAdmin = group.myRole === 'admin';
-  const memberIds = useMemo(() => new Set(group.members.map((m) => m.userId)), [group.members]);
+  const safeMembers = group.members ?? [];
+  const memberIds = useMemo(() => new Set(safeMembers.map((m) => m.userId)), [safeMembers]);
   const isSoleAdmin = useMemo(() => {
-    const admins = group.members.filter((m) => m.role === 'admin');
+    const admins = safeMembers.filter((m) => m.role === 'admin');
     return admins.length === 1 && admins[0]?.userId === selfId;
-  }, [group.members, selfId]);
+  }, [safeMembers, selfId]);
 
   // Contacts not already in the group.
   const addableCandidates = useMemo(
@@ -112,7 +115,7 @@ export default function GroupManagementModal({
       if (next.has(id)) {
         next.delete(id);
       } else {
-        if (group.memberCount + next.size + 1 >= MAX_GROUP_MEMBERS) {
+        if ((group.memberCount || safeMembers.length) + next.size + 1 > MAX_GROUP_MEMBERS) {
           setErr(t('groups.maxMembers', { count: String(MAX_GROUP_MEMBERS) }));
           return prev;
         }
@@ -167,16 +170,16 @@ export default function GroupManagementModal({
   // ── Sorted member list: admins first ────────────────────────────────────────
   const sortedMembers = useMemo(
     () =>
-      [...group.members].sort((a, b) => {
+      [...safeMembers].sort((a, b) => {
         if (a.role === b.role) return (a.name || '').localeCompare(b.name || '', 'ru');
         return a.role === 'admin' ? -1 : 1;
       }),
-    [group.members]
+    [safeMembers]
   );
 
   return (
     <div
-      className="qr-modal-backdrop group-mgmt-backdrop"
+      className="group-mgmt-backdrop"
       role="presentation"
       onClick={() => {
         if (step !== 'main') { setStep('main'); return; }
@@ -184,14 +187,14 @@ export default function GroupManagementModal({
       }}
     >
       <div
-        className="qr-modal group-mgmt-modal"
+        className="group-mgmt-modal"
         role="dialog"
         aria-modal="true"
         aria-label={t('groups.mgmt.title')}
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="qr-modal-head group-mgmt-head">
+        <div className="group-mgmt-head">
           {step !== 'main' ? (
             <button
               type="button"

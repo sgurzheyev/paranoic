@@ -5220,6 +5220,8 @@ export default function App() {
         onCreate={handleCreateGroup}
       />
 
+    </div>
+
       {activeGroup && (
         <GroupManagementModal
           open={groupMgmtOpen}
@@ -5234,7 +5236,6 @@ export default function App() {
           onLeft={handleGroupLeft}
         />
       )}
-    </div>
 
       {!incomingRing && !selfCallBlocked && (
       <CallOverlay
