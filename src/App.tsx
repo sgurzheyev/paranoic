@@ -203,9 +203,22 @@ function nowTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-/** Trace every outbound call attempt — source + stack for debugging rogue triggers. */
+/** Trace outbound call attempts (no Error.stack — expensive on iOS main thread). */
 function logCallInit(source: string, detail?: Record<string, unknown>) {
-  console.log('[Call] INIT', source, detail ?? {}, new Error().stack);
+  if (import.meta.env.PROD) return;
+  console.log('[Call] INIT', source, detail ?? {});
+}
+
+/** Assign MediaStream to <video> only when the object identity actually changes. */
+function assignVideoSrcObject(
+  el: HTMLVideoElement | null | undefined,
+  stream: MediaStream | null
+): boolean {
+  if (!el) return false;
+  if (el.srcObject === stream) return false;
+  el.srcObject = stream;
+  if (stream) void el.play().catch(() => undefined);
+  return true;
 }
 
 export default function App() {
@@ -416,16 +429,13 @@ export default function App() {
 
   /** Home после «Назад» — P2P callbacks не могут перехватить экран. */
   const isP2pUiBlockedOnHome = useCallback((): boolean => {
-    const blocked =
+    return (
       screenRef.current === 'home' &&
       (chatNavDismissed ||
         leavingChatRef.current ||
         chatClosedRef.current ||
-        suppressChatAutoOpenRef.current);
-    if (blocked) {
-      logCallInit('p2p-ui-blocked-home-priority', { screen: screenRef.current });
-    }
-    return blocked;
+        suppressChatAutoOpenRef.current)
+    );
   }, [chatNavDismissed]);
 
   const isSelfPeerTarget = useCallback((targetId: string | null | undefined): boolean => {
@@ -438,21 +448,16 @@ export default function App() {
     if (screen !== 'home') return;
     if (!chatNavDismissed && !leavingChatRef.current && !chatClosedRef.current) return;
     if (incomingRing) return;
+    // Live / intentional calls must not be torn down by dismiss flags or status churn.
+    if (callUserIntentRef.current) return;
+    if (callState === 'in-call') return;
     if (callExpanded) setCallExpanded(false);
     if (callState === 'calling' || callState === 'ringing') {
       void p2pRef.current?.cancelCall().catch(() => undefined);
       setCallState('idle');
       mirrorCallState('idle');
     }
-  }, [
-    screen,
-    p2pStatus,
-    chatNavDismissed,
-    callExpanded,
-    callState,
-    incomingRing,
-    mirrorCallState,
-  ]);
+  }, [screen, chatNavDismissed, callExpanded, callState, incomingRing, mirrorCallState]);
   const armOutboundCallFromButton = useCallback(
     (source: string, opts?: { fromHome?: boolean }): number => {
       if (opts?.fromHome) {
@@ -1597,14 +1602,18 @@ export default function App() {
   }, [hydrateConversation]);
 
   const attachLocalVideo = useCallback((stream: MediaStream | null) => {
-    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+    assignVideoSrcObject(localVideoRef.current, stream);
+  }, []);
+
+  const attachRemoteVideo = useCallback((stream: MediaStream | null) => {
+    assignVideoSrcObject(remoteVideoRef.current, stream);
   }, []);
 
   const ensureP2P = useCallback(() => {
     // Синглтон из p2pSession — не пересоздаём PC при навигации; обновляем handlers.
     p2pRef.current = ensureP2PSession({
         onStatus: (status) => {
-          setP2pStatus(status);
+          setP2pStatus((prev) => (prev === status ? prev : status));
           mirrorP2pStatus(status);
           if (status === 'connected') {
             setError('');
@@ -1644,7 +1653,7 @@ export default function App() {
           }
         },
         onSignalingStatus: (status) => {
-          setSignalingStatus(status);
+          setSignalingStatus((prev) => (prev === status ? prev : status));
           mirrorSignalingStatus(status);
         },
         onCallState: (state) => {
@@ -1678,7 +1687,7 @@ export default function App() {
             return;
           }
 
-          setCallState(state);
+          setCallState((prev) => (prev === state ? prev : state));
           mirrorCallState(state);
           callAttemptRef.current =
             state === 'calling' || state === 'in-call' || state === 'ringing';
@@ -1900,7 +1909,7 @@ export default function App() {
           setScreen((s) => (s === 'call' ? 'chat' : s));
         },
         onRemoteStream: (stream) => {
-          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
+          attachRemoteVideo(stream);
         },
         onLocalStream: (stream) => {
           attachLocalVideo(stream);
@@ -2136,7 +2145,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, applyHeart, attachLocalVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall, isP2pUiBlockedOnHome, isSelfPeerTarget]);
+  }, [addMessage, applyHeart, attachLocalVideo, attachRemoteVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall, isP2pUiBlockedOnHome, isSelfPeerTarget]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -2345,13 +2354,11 @@ export default function App() {
 
   useEffect(() => {
     if (leavingChatRef.current || chatClosedRef.current) return;
-    if (callState !== 'idle' && p2pRef.current) {
-      attachLocalVideo(p2pRef.current.getLocalStream());
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = p2pRef.current.getRemoteStream();
-      }
-    }
-  }, [callState, callExpanded, attachLocalVideo]);
+    if (callState === 'idle' || !p2pRef.current) return;
+    // Identity-guarded: no-op when <video> already holds the same MediaStream.
+    attachLocalVideo(p2pRef.current.getLocalStream());
+    attachRemoteVideo(p2pRef.current.getRemoteStream());
+  }, [callState, callExpanded, attachLocalVideo, attachRemoteVideo]);
 
   const copyMagicLink = async () => {
     await navigator.clipboard.writeText(magicLink);
@@ -3129,7 +3136,7 @@ export default function App() {
     hangUpSession();
     p2pRef.current = null;
     attachLocalVideo(null);
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    attachRemoteVideo(null);
     setScreenSharing(false);
     setMicMuted(false);
     setCameraOff(false);

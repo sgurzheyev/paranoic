@@ -118,8 +118,11 @@ export default function CallOverlay({
   const isRinging = callState === 'ringing';
 
   useEffect(() => {
-    setMainIsRemote(true);
-    setControlsVisible(true);
+    // Reset chrome only when a new dial/ring starts — not on every callState tick.
+    if (callState === 'calling' || callState === 'ringing') {
+      setMainIsRemote(true);
+      setControlsVisible(true);
+    }
   }, [callState]);
 
   useEffect(() => {
@@ -129,10 +132,13 @@ export default function CallOverlay({
   }, [controlsVisible, callState, isRinging, expanded]);
 
   useEffect(() => {
+    if (!expanded || callState === 'idle' || isRinging) return;
     for (const el of [localVideoRef.current, remoteVideoRef.current]) {
       if (el?.srcObject) void el.play().catch(() => undefined);
     }
-  }, [callState, expanded, localVideoRef, remoteVideoRef]);
+    // play() only when overlay expands — not on every callState / ICE-driven re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: expanded edge
+  }, [expanded]);
 
   const toggleControls = useCallback(() => {
     setControlsVisible((v) => !v);

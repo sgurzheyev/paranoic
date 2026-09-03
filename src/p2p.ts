@@ -532,6 +532,8 @@ export class P2PConnection {
   private callState: CallState = 'idle';
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
+  /** Track ids that already have mute/unmute/ended listeners (avoid stacking on iOS). */
+  private remoteTrackWiredIds = new Set<string>();
   private incomingFiles = new Map<string, IncomingFile>();
   /** Чанки, пришедшие до file-meta (гонка каналов). */
   private orphanFileChunks = new Map<string, { index: number; payload: Uint8Array }[]>();
@@ -749,6 +751,7 @@ export class P2PConnection {
   }
 
   private setSignalingStatus(status: SignalingDebugStatus): void {
+    if (this.signalingStatus === status) return;
     this.signalingStatus = status;
     this.handlers.onSignalingStatus?.(status);
   }
@@ -1060,6 +1063,8 @@ export class P2PConnection {
   }
 
   private logPcHandshake(stage: string, extra?: Record<string, unknown>): void {
+    // Handshake dumps are useful in dev; on device they can flood the JS thread during ICE.
+    if (import.meta.env.PROD) return;
     const pc = this.pc;
     p2pAudit(`[Call Handshake] ${stage}`, {
       callState: this.callState,
@@ -2478,15 +2483,8 @@ export class P2PConnection {
         });
         return;
       }
+      // Avoid flooding the main thread (esp. iOS WKWebView) with per-candidate logs.
       const candidate = event.candidate.toJSON();
-      p2pAudit('ICE candidate local', {
-        type: event.candidate.type,
-        protocol: event.candidate.protocol,
-        address: event.candidate.address,
-        signalingState: pc.signalingState,
-        iceConnectionState: pc.iceConnectionState,
-        iceGatheringState: pc.iceGatheringState,
-      });
       void this.broadcastReliable('ice-candidate', {
         peerId: this.peerId,
         candidate,
@@ -2503,26 +2501,34 @@ export class P2PConnection {
       }
 
       const existing = this.remoteStream.getTracks().find((t) => t.id === event.track.id);
+      let added = false;
       if (!existing) {
         this.remoteStream.addTrack(event.track);
+        added = true;
       }
 
-      event.track.addEventListener('mute', () => {
-        if (this.callState === 'in-call') this.stalledChecks += 1;
-      });
+      if (!this.remoteTrackWiredIds.has(event.track.id)) {
+        this.remoteTrackWiredIds.add(event.track.id);
+        event.track.addEventListener('mute', () => {
+          if (this.callState === 'in-call') this.stalledChecks += 1;
+        });
+        // Do NOT call onRemoteStream on unmute — iOS frequently toggles mute during
+        // negotiation; re-pushing the stream forces <video> decoder restarts / freezes.
+        event.track.addEventListener('unmute', () => {
+          this.stalledChecks = 0;
+        });
+        event.track.addEventListener('ended', () => {
+          this.remoteTrackWiredIds.delete(event.track.id);
+          if (this.callState === 'in-call') {
+            void this.requestPeerMediaRefresh();
+          }
+        });
+      }
 
-      event.track.addEventListener('unmute', () => {
-        this.stalledChecks = 0;
+      // Only notify UI when the stream composition actually changed.
+      if (added) {
         this.handlers.onRemoteStream?.(this.remoteStream);
-      });
-
-      event.track.addEventListener('ended', () => {
-        if (this.callState === 'in-call') {
-          void this.requestPeerMediaRefresh();
-        }
-      });
-
-      this.handlers.onRemoteStream?.(this.remoteStream);
+      }
     };
 
     pc.onconnectionstatechange = () => {
@@ -2742,6 +2748,8 @@ export class P2PConnection {
 
     if (this.pc) {
       this.pc.onicecandidate = null;
+      this.pc.onicecandidateerror = null;
+      this.pc.onsignalingstatechange = null;
       this.pc.onconnectionstatechange = null;
       this.pc.oniceconnectionstatechange = null;
       this.pc.ondatachannel = null;
@@ -2797,6 +2805,8 @@ export class P2PConnection {
 
     if (this.pc) {
       this.pc.onicecandidate = null;
+      this.pc.onicecandidateerror = null;
+      this.pc.onsignalingstatechange = null;
       this.pc.onconnectionstatechange = null;
       this.pc.oniceconnectionstatechange = null;
       this.pc.ondatachannel = null;
@@ -3144,8 +3154,10 @@ export class P2PConnection {
         this.stalledChecks = 0;
         await this.refreshLocalTracks();
         await this.requestPeerMediaRefresh();
+        // Keep the same MediaStream identity — wrapping in `new MediaStream(...)`
+        // forces React/video to treat it as a new object and reattach on every stall.
         if (this.remoteStream) {
-          this.handlers.onRemoteStream?.(new MediaStream(this.remoteStream.getTracks()));
+          this.handlers.onRemoteStream?.(this.remoteStream);
         }
       }
     } catch {
@@ -3277,11 +3289,13 @@ export class P2PConnection {
   }
 
   private setStatus(status: P2PStatus): void {
+    if (this.status === status) return;
     this.status = status;
     this.handlers.onStatus?.(status);
   }
 
   private setCallState(state: CallState): void {
+    if (this.callState === state) return;
     this.callState = state;
     this.handlers.onCallState?.(state);
   }
@@ -3324,6 +3338,7 @@ export class P2PConnection {
       }
     });
     this.remoteStream = null;
+    this.remoteTrackWiredIds.clear();
     this.handlers.onRemoteStream?.(null);
   }
 
@@ -3365,6 +3380,8 @@ export class P2PConnection {
 
     if (this.pc) {
       this.pc.onicecandidate = null;
+      this.pc.onicecandidateerror = null;
+      this.pc.onsignalingstatechange = null;
       this.pc.onconnectionstatechange = null;
       this.pc.oniceconnectionstatechange = null;
       this.pc.ondatachannel = null;
