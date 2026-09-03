@@ -324,6 +324,8 @@ export default function App() {
   } | null>(null);
   /** PiP свёрнут / развёрнут на весь экран. */
   const [callExpanded, setCallExpanded] = useState(false);
+  /** Armed outbound call — keeps Call UI up while DC connects / media invite is in flight. */
+  const [callLaunching, setCallLaunching] = useState(false);
   /** Блокирует ghost-click на home сразу после «Назад» из чата. */
   const [uiNavLock, setUiNavLock] = useState(false);
   /** Пользователь явно вышел из чата «Назад» — home имеет приоритет над guest/call UI. */
@@ -370,6 +372,20 @@ export default function App() {
   const outboundCallButtonTokenRef = useRef(0);
   /** Явное намерение пользователя позвонить — ONLY set via armOutboundCallFromButton in phone onClick handlers. */
   const callUserIntentRef = useRef(false);
+  /** Mirror of chatNavDismissed for P2P handlers (must not go stale in ensureP2P closures). */
+  const chatNavDismissedRef = useRef(false);
+  /** If false, silent DC connect / startCall must not force the text-chat screen. */
+  const outboundOpenChatRef = useRef(true);
+  /** Armed call waiting for DataChannel — flushed on `connected`, never disarmed by it. */
+  const pendingOutboundCallRef = useRef<{
+    source: string;
+    token: number;
+    targetId: string;
+  } | null>(null);
+  const startCallRef = useRef<(source: string, token?: number) => Promise<void>>(
+    async () => undefined
+  );
+  const tryFlushPendingOutboundCallRef = useRef<() => void>(() => undefined);
   /** Поколение async-звонка — инвалидируется при «Назад». */
   const callDialGenerationRef = useRef(0);
   /** true после «Назад» из чата — блокирует исходящие звонки до следующего открытия чата. */
@@ -423,20 +439,37 @@ export default function App() {
       chatClosedRef.current = false;
       leavingChatRef.current = false;
       suppressChatAutoOpenRef.current = false;
+      chatNavDismissedRef.current = false;
       setChatNavDismissed(false);
     }
   }, [screen]);
 
+  useEffect(() => {
+    chatNavDismissedRef.current = chatNavDismissed;
+  }, [chatNavDismissed]);
+
+  const isCallUiLocked = useCallback((): boolean => {
+    const live = p2pRef.current?.currentCallState;
+    return (
+      callUserIntentRef.current ||
+      Boolean(pendingOutboundCallRef.current) ||
+      live === 'calling' ||
+      live === 'in-call' ||
+      live === 'ringing'
+    );
+  }, []);
+
   /** Home после «Назад» — P2P callbacks не могут перехватить экран. */
   const isP2pUiBlockedOnHome = useCallback((): boolean => {
+    if (isCallUiLocked()) return false;
     return (
       screenRef.current === 'home' &&
-      (chatNavDismissed ||
+      (chatNavDismissedRef.current ||
         leavingChatRef.current ||
         chatClosedRef.current ||
         suppressChatAutoOpenRef.current)
     );
-  }, [chatNavDismissed]);
+  }, [isCallUiLocked]);
 
   const isSelfPeerTarget = useCallback((targetId: string | null | undefined): boolean => {
     if (!targetId) return false;
@@ -449,20 +482,31 @@ export default function App() {
     if (!chatNavDismissed && !leavingChatRef.current && !chatClosedRef.current) return;
     if (incomingRing) return;
     // Live / intentional calls must not be torn down by dismiss flags or status churn.
-    if (callUserIntentRef.current) return;
-    if (callState === 'in-call') return;
+    if (isCallUiLocked()) return;
+    if (callState === 'in-call' || callLaunching) return;
     if (callExpanded) setCallExpanded(false);
     if (callState === 'calling' || callState === 'ringing') {
       void p2pRef.current?.cancelCall().catch(() => undefined);
       setCallState('idle');
       mirrorCallState('idle');
     }
-  }, [screen, chatNavDismissed, callExpanded, callState, incomingRing, mirrorCallState]);
+  }, [
+    screen,
+    chatNavDismissed,
+    callExpanded,
+    callState,
+    callLaunching,
+    incomingRing,
+    mirrorCallState,
+    isCallUiLocked,
+  ]);
   const armOutboundCallFromButton = useCallback(
-    (source: string, opts?: { fromHome?: boolean }): number => {
+    (source: string, opts?: { fromHome?: boolean; openChat?: boolean }): number => {
+      outboundOpenChatRef.current = opts?.openChat !== false;
       if (opts?.fromHome) {
         leavingChatRef.current = false;
         chatClosedRef.current = false;
+        chatNavDismissedRef.current = false;
       } else if (leavingChatRef.current || chatClosedRef.current) {
         if (screenRef.current === 'chat') {
           leavingChatRef.current = false;
@@ -475,7 +519,9 @@ export default function App() {
       const token = outboundCallButtonTokenRef.current + 1;
       outboundCallButtonTokenRef.current = token;
       callUserIntentRef.current = true;
-      logCallInit(`${source}-armed`, { token });
+      setCallLaunching(true);
+      setCallExpanded(true);
+      logCallInit(`${source}-armed`, { token, openChat: outboundOpenChatRef.current });
       return token;
     },
     []
@@ -485,6 +531,8 @@ export default function App() {
     logCallInit(`${source}-disarmed`);
     outboundCallButtonTokenRef.current += 1;
     callUserIntentRef.current = false;
+    pendingOutboundCallRef.current = null;
+    setCallLaunching(false);
   }, []);
 
   const clearOutboundCallIntent = disarmOutboundCall;
@@ -547,12 +595,28 @@ export default function App() {
     async (source: string, token?: number): Promise<MediaStream | null> => {
       logCallInit(`${source}-invokeP2PStartCall`, { token });
       if (!canPlaceOutboundCall(source, token)) return null;
-      const stream = (await p2pRef.current?.startCall()) ?? null;
-      disarmOutboundCall(`${source}-p2p-started`);
-      return stream;
+      // Keep the arm token until the media call is accepted, rejected, or times out.
+      // Silent DataChannel `connected` must not invalidate it.
+      return (await p2pRef.current?.startCall()) ?? null;
     },
-    [canPlaceOutboundCall, disarmOutboundCall]
+    [canPlaceOutboundCall]
   );
+
+  const tryFlushPendingOutboundCall = useCallback(() => {
+    const pending = pendingOutboundCallRef.current;
+    if (!pending) return;
+    if (!isOutboundCallArmed(pending.source, pending.token)) return;
+    const p2p = p2pRef.current;
+    if (!p2p?.isReady) return;
+    const live = p2p.currentCallState;
+    if (live === 'calling' || live === 'in-call' || live === 'ringing') {
+      pendingOutboundCallRef.current = null;
+      return;
+    }
+    pendingOutboundCallRef.current = null;
+    void startCallRef.current(pending.source, pending.token);
+  }, [isOutboundCallArmed]);
+  tryFlushPendingOutboundCallRef.current = tryFlushPendingOutboundCall;
 
   /** Постоянный Auth (никнейм + пароль). Без JWT — AuthScreen, без anonymous. */
   useEffect(() => {
@@ -1618,25 +1682,31 @@ export default function App() {
           if (status === 'connected') {
             setError('');
             updateLinkWarning('');
-            setCallAlert('');
-            setCallAlertToastOpen(false);
-            setCallFailKind(null);
-            setIncomingConnection(false);
-            setIncomingRing(null);
-            stopRingtone();
-            closeActiveNotification();
-            // Гость по магической ссылке — сразу в диалог с этим peer.
-            if (
-              guestPeerIdRef.current &&
-              !isP2pUiBlockedOnHome() &&
-              !suppressChatAutoOpenRef.current &&
-              !leavingChatRef.current &&
-              !chatClosedRef.current
-            ) {
-              setScreen('chat');
+            const callLocked = isCallUiLocked();
+            if (!callLocked) {
+              setCallAlert('');
+              setCallAlertToastOpen(false);
+              setCallFailKind(null);
+              setIncomingConnection(false);
+              setIncomingRing(null);
+              stopRingtone();
+              closeActiveNotification();
+              // Гость по магической ссылке — сразу в диалог с этим peer.
+              // Never steal an armed/active media call into the text-chat screen.
+              if (
+                outboundOpenChatRef.current &&
+                guestPeerIdRef.current &&
+                !isP2pUiBlockedOnHome() &&
+                !suppressChatAutoOpenRef.current &&
+                !leavingChatRef.current &&
+                !chatClosedRef.current
+              ) {
+                setScreen('chat');
+              }
             }
             void flushOutboxRef.current();
             void syncPendingRef.current();
+            tryFlushPendingOutboundCallRef.current();
             if (pendingRingAcceptRef.current) {
               pendingRingAcceptRef.current = false;
               // Ждём call-invite — auto-accept в onCallState/onIncomingCall.
@@ -1649,7 +1719,7 @@ export default function App() {
             setIncomingConnection(false);
           }
           if (status === 'failed' || status === 'disconnected') {
-            clearCallSessionResidue();
+            if (!isCallUiLocked()) clearCallSessionResidue();
           }
         },
         onSignalingStatus: (status) => {
@@ -1657,18 +1727,22 @@ export default function App() {
           mirrorSignalingStatus(status);
         },
         onCallState: (state) => {
-          if (isP2pUiBlockedOnHome() && state !== 'idle' && state !== 'ending') {
+          const userCallLocked =
+            callUserIntentRef.current || Boolean(pendingOutboundCallRef.current);
+
+          if (!userCallLocked && isP2pUiBlockedOnHome() && state !== 'idle' && state !== 'ending') {
             logCallInit('onCallState-blocked-home', { state });
             void p2pRef.current?.cancelCall();
             return;
           }
 
           const chatDismissed =
-            chatClosedRef.current ||
-            leavingChatRef.current ||
-            suppressChatAutoOpenRef.current;
+            !userCallLocked &&
+            (chatClosedRef.current ||
+              leavingChatRef.current ||
+              suppressChatAutoOpenRef.current);
 
-          if (state === 'calling' && (!callUserIntentRef.current || chatDismissed)) {
+          if (state === 'calling' && !userCallLocked) {
             logCallInit('onCallState-rogue-calling-abort', {
               chatDismissed,
               intent: callUserIntentRef.current,
@@ -1755,24 +1829,29 @@ export default function App() {
               })();
             }
           } else if (state === 'in-call' || state === 'calling') {
-            if (chatClosedRef.current || leavingChatRef.current || suppressChatAutoOpenRef.current) {
-              setCallExpanded(false);
-              return;
-            }
+            pendingOutboundCallRef.current = null;
             setCallExpanded(true);
             stopRingtone();
             closeActiveNotification();
             if (state === 'in-call') {
               setIncomingRing(null);
               outboundCallIdRef.current = null;
+              setCallLaunching(false);
             }
             setScreen((s) => {
+              if (!outboundOpenChatRef.current) return s;
               if (isP2pUiBlockedOnHome()) return s;
               if (suppressChatAutoOpenRef.current || leavingChatRef.current) return s;
               return s === 'call' || s === 'home' ? 'chat' : s;
             });
           }
           if (state === 'idle') {
+            if (pendingOutboundCallRef.current && callUserIntentRef.current) {
+              // Still waiting for DataChannel — keep Call UI, don't treat idle as hangup.
+              setCallExpanded(true);
+              return;
+            }
+            disarmOutboundCall('onCallState-idle');
             attachLocalVideo(null);
             setScreenSharing(false);
             setNetworkQuality('good');
@@ -2145,7 +2224,7 @@ export default function App() {
       avatarUrl: identityRef.current.avatarUrl,
     });
     return p2pRef.current;
-  }, [addMessage, applyHeart, attachLocalVideo, attachRemoteVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall, isP2pUiBlockedOnHome, isSelfPeerTarget]);
+  }, [addMessage, applyHeart, attachLocalVideo, attachRemoteVideo, patchDeliveryStatus, peerLabel, setActivePeer, mirrorP2pStatus, mirrorCallState, mirrorSignalingStatus, invokeP2PStartCall, disarmOutboundCall, isP2pUiBlockedOnHome, isCallUiLocked, isSelfPeerTarget]);
 
   ensureP2PRef.current = ensureP2P;
 
@@ -2461,26 +2540,22 @@ export default function App() {
     }
     chatClosedRef.current = false;
     leavingChatRef.current = false;
+    chatNavDismissedRef.current = false;
     setChatNavDismissed(false);
-    const token = armOutboundCallFromButton(source, { fromHome: true });
+    const token = armOutboundCallFromButton(source, { fromHome: true, openChat: false });
     if (!token) return;
 
-    const tryPlaceCall = () => {
-      if (!isOutboundCallArmed(source, token)) return;
-      if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
-        void startCall(source, token);
-      } else {
-        setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
-        disarmOutboundCall(`${source}-waiting-p2p`);
-      }
-    };
+    pendingOutboundCallRef.current = { source, token, targetId: c.id };
 
     if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
-      tryPlaceCall();
+      pendingOutboundCallRef.current = null;
+      void startCall(source, token);
       return;
     }
 
-    void connectToLocalContact(c, { openChat: false }).then(() => tryPlaceCall());
+    void connectToLocalContact(c, { openChat: false }).then(() => {
+      tryFlushPendingOutboundCall();
+    });
   };
 
   const connectToUser = async (
@@ -2649,13 +2724,15 @@ export default function App() {
       );
       return;
     }
-    const token = armOutboundCallFromButton('guest-direct-call', { fromHome: true });
+    const token = armOutboundCallFromButton('guest-direct-call', { fromHome: true, openChat: false });
     if (!token) return;
+    const targetId = peerIdRef.current || guestPeerIdRef.current || '';
+    pendingOutboundCallRef.current = { source: 'guest-direct-call', token, targetId };
     if (connected) {
+      pendingOutboundCallRef.current = null;
       await startCall('guest-direct-call', token);
     } else {
-      disarmOutboundCall('guest-direct-call-waiting-p2p');
-      setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
+      tryFlushPendingOutboundCall();
     }
   };
 
@@ -2796,7 +2873,10 @@ export default function App() {
               return;
             }
             setCallExpanded(true);
-            setScreen('chat');
+            if (outboundOpenChatRef.current) {
+              screenRef.current = 'chat';
+              setScreen('chat');
+            }
             await invokeP2PStartCall(`${source}-missing-profile-connected`, buttonToken);
             attachLocalVideo(null);
             return;
@@ -2854,7 +2934,10 @@ export default function App() {
         return;
       }
       setCallExpanded(true);
-      setScreen('chat');
+      if (outboundOpenChatRef.current) {
+        screenRef.current = 'chat';
+        setScreen('chat');
+      }
       await invokeP2PStartCall(source, buttonToken);
       attachLocalVideo(null);
     } catch (e) {
@@ -2869,6 +2952,13 @@ export default function App() {
       }, 700);
     }
   };
+
+  startCallRef.current = startCall;
+
+  useEffect(() => {
+    if (p2pStatus !== 'connected') return;
+    tryFlushPendingOutboundCall();
+  }, [p2pStatus, tryFlushPendingOutboundCall]);
 
   /** Звонок из шапки чата — only after armOutboundCallFromButton in phone onClick. */
   const dialFromChat = async (source: string, buttonToken: number) => {
@@ -2906,6 +2996,8 @@ export default function App() {
       return;
     }
 
+    pendingOutboundCallRef.current = { source, token: buttonToken, targetId: target };
+
     const dialGen = callDialGenerationRef.current + 1;
     callDialGenerationRef.current = dialGen;
 
@@ -2927,32 +3019,19 @@ export default function App() {
         disarmOutboundCall(`${source}-dial-aborted`);
         return;
       }
+      pendingOutboundCallRef.current = null;
       await startCall(source, buttonToken);
       return;
     }
 
-    // P2P ещё не готов — поднимаем сессию, остаёмся в чате.
+    // P2P ещё не готов — поднимаем сессию, остаёмся в чате, keep the arm token.
     const known = contacts.find((c) => c.id === target);
     if (known) {
       await connectToLocalContact(known, { openChat: true });
     } else {
       await connectToUser(target, peerLabel, { openChat: true });
     }
-    const nowReady =
-      (isLiveConnectedTo(target) || p2pRef.current?.currentStatus === 'connected') &&
-      Boolean(p2pRef.current?.isReady);
-    if (
-      nowReady &&
-      isOutboundCallArmed(source, buttonToken) &&
-      screenRef.current === 'chat' &&
-      !chatClosedRef.current &&
-      !leavingChatRef.current
-    ) {
-      await startCall(source, buttonToken);
-      return;
-    }
-    setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
-    disarmOutboundCall(`${source}-waiting-p2p`);
+    tryFlushPendingOutboundCall();
   };
 
   const handleChatHeaderCall = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -2969,6 +3048,7 @@ export default function App() {
     chatClosedRef.current = false;
     leavingChatRef.current = false;
     suppressChatAutoOpenRef.current = false;
+    chatNavDismissedRef.current = false;
     setChatNavDismissed(false);
     const token = armOutboundCallFromButton('chat-header-phone');
     if (!token) return;
@@ -3610,7 +3690,7 @@ export default function App() {
   }, [authGate]);
 
   const connected = p2pStatus === 'connected';
-  const callLive = callState === 'calling' || callState === 'in-call';
+  const callLive = callState === 'calling' || callState === 'in-call' || callLaunching;
   const activePeerId = peerId || guestPeerId;
   const selfCallBlocked = isSelfPeerTarget(activePeerId);
   const showCallBanner =
@@ -3826,20 +3906,27 @@ export default function App() {
                 setError(MEDIA_ACCESS_DENIED_MESSAGE);
                 return;
               }
-              const token = armOutboundCallFromButton('globe-map-call', { fromHome: true });
+              const token = armOutboundCallFromButton('globe-map-call', {
+                fromHome: true,
+                openChat: false,
+              });
               if (!token) return;
               setAppMode('paranoic');
-              if (isLiveConnectedTo(user.userId)) {
+              pendingOutboundCallRef.current = {
+                source: 'globe-map-call',
+                token,
+                targetId: user.userId,
+              };
+              if (isLiveConnectedTo(user.userId) && p2pRef.current?.isReady) {
+                pendingOutboundCallRef.current = null;
                 void startCall('globe-map-call', token);
                 return;
               }
               void connectToUser(
                 user.userId,
                 user.isContact ? user.name : 'Незнакомец',
-                { openChat: true }
-              );
-              disarmOutboundCall('globe-map-call-waiting-p2p');
-              setError('Подключение… Нажмите «Звонок» снова, когда статус «в сети».');
+                { openChat: false }
+              ).then(() => tryFlushPendingOutboundCall());
             }}
           />
         </div>
@@ -4086,6 +4173,7 @@ export default function App() {
                               }
                               const token = armOutboundCallFromButton('active-session-call', {
                                 fromHome: true,
+                                openChat: false,
                               });
                               if (token) void startCall('active-session-call', token);
                             }}
@@ -4669,7 +4757,13 @@ export default function App() {
 
       {!incomingRing && !selfCallBlocked && (
       <CallOverlay
-        callState={callState === 'ringing' ? 'idle' : callState}
+        callState={
+          callState === 'ringing'
+            ? 'idle'
+            : callState === 'idle' && callLaunching
+              ? 'calling'
+              : callState
+        }
         peerLabel={peerLabel}
         screenSharing={screenSharing}
         networkQuality={networkQuality}
