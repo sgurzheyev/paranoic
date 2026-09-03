@@ -4,7 +4,7 @@
  */
 
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
+import { ensureAuthSession, getSupabase, hasSupabaseConfig, waitForRealtimeAuth } from './lib/supabase';
 import { groupConversationId as storageGroupConversationId } from './storage';
 
 export const MAX_GROUP_MEMBERS = 20;
@@ -244,11 +244,20 @@ export async function createGroup(opts: {
 const liveGroupChannels = new Map<string, RealtimeChannel>();
 
 /** Subscribe to live group message broadcasts (one channel per group). */
-export function subscribeGroupChannel(
+export async function subscribeGroupChannel(
   groupId: string,
   onMessage: (payload: GroupRealtimePayload) => void
-): RealtimeChannel | null {
+): Promise<RealtimeChannel | null> {
   if (!hasSupabaseConfig() || !groupId) return null;
+  let session;
+  try {
+    session = await waitForRealtimeAuth(`group:${groupId}`);
+  } catch (e) {
+    console.warn('[groups] subscribe skipped — auth not ready', e);
+    return null;
+  }
+  if (!session?.user?.id) return null;
+
   const existing = liveGroupChannels.get(groupId);
   if (existing) {
     void getSupabase().removeChannel(existing);

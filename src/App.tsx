@@ -2775,7 +2775,8 @@ export default function App() {
       // Wait until Supabase Realtime has an authenticated session before
       // subscribing — avoids "auth.uid() not ready" errors.
       try {
-        await waitForRealtimeAuth('group-channels');
+        const session = await waitForRealtimeAuth('group-channels');
+        if (!session?.user?.id || cancelled) return;
       } catch (e) {
         console.warn('[groups] Realtime auth wait failed', e);
         return;
@@ -2785,7 +2786,7 @@ export default function App() {
       if (cancelled) return;
       for (const g of snapshot) {
         if (!g?.id) continue;
-        subscribeGroupChannel(g.id, (payload) => {
+        await subscribeGroupChannel(g.id, (payload) => {
           ingestGroupRealtimeRef.current(payload);
         });
       }

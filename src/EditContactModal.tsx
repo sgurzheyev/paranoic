@@ -61,7 +61,13 @@ export default function EditContactModal({
   if (!open) return null;
 
   const previewName =
-    [firstName.trim(), lastName.trim()].filter(Boolean).join(' ') || peerPublicName;
+    localContactDisplayName({
+      id: peerId,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      note: note.trim(),
+      updatedAt: '',
+    }) || peerPublicName;
 
   const handleSave = async () => {
     if (busy) return;

@@ -88,10 +88,26 @@ export default function GroupManagementModal({
     return admins.length === 1 && admins[0]?.userId === selfId;
   }, [safeMembers, selfId]);
 
-  // Contacts not already in the group.
+  // Contacts not already in the group and never the logged-in user.
   const addableCandidates = useMemo(
-    () => contacts.filter((c) => c.id !== selfId && !memberIds.has(c.id)),
-    [contacts, selfId, memberIds]
+    () =>
+      contacts.filter(
+        (c) =>
+          c.id !== selfId &&
+          !memberIds.has(c.id) &&
+          !safeMembers.some((m) => m.userId === c.id)
+      ),
+    [contacts, selfId, memberIds, safeMembers]
+  );
+
+  // ── Sorted member list: admins first ────────────────────────────────────────
+  const sortedMembers = useMemo(
+    () =>
+      [...safeMembers].sort((a, b) => {
+        if (a.role === b.role) return (a.name || '').localeCompare(b.name || '', 'ru');
+        return a.role === 'admin' ? -1 : 1;
+      }),
+    [safeMembers]
   );
 
   if (!open || !group?.id) return null;
@@ -168,16 +184,6 @@ export default function GroupManagementModal({
       setRenaming(false);
     });
 
-  // ── Sorted member list: admins first ────────────────────────────────────────
-  const sortedMembers = useMemo(
-    () =>
-      [...safeMembers].sort((a, b) => {
-        if (a.role === b.role) return (a.name || '').localeCompare(b.name || '', 'ru');
-        return a.role === 'admin' ? -1 : 1;
-      }),
-    [safeMembers]
-  );
-
   return (
     <div
       className="group-mgmt-backdrop"
@@ -237,7 +243,7 @@ export default function GroupManagementModal({
               <span className="group-avatar-stack group-mgmt-big-avatar" aria-hidden>
                 {sortedMembers.slice(0, 3).map((m, i) => (
                   <span
-                    key={m.userId}
+                    key={m.userId || `face-${i}`}
                     className="group-avatar-stack__face"
                     style={{ zIndex: 3 - i, background: m.color || '#60a5fa' }}
                   >
@@ -290,11 +296,11 @@ export default function GroupManagementModal({
 
             {/* Member list */}
             <ul className="group-mgmt-member-list">
-              {sortedMembers.map((m) => {
+              {sortedMembers.map((m, i) => {
                 const isSelf = m.userId === selfId;
                 const canRemove = isAdmin && !isSelf;
                 return (
-                  <li key={m.userId} className="group-mgmt-member-row">
+                  <li key={m.userId || `member-${i}`} className="group-mgmt-member-row">
                     <Avatar
                       name={m.name || m.userId.slice(0, 6)}
                       color={m.color}

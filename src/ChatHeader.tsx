@@ -292,7 +292,7 @@ export default function ChatHeader({
               ) : (
                 <>
                   {/* Audio call */}
-                  {!isGroup && onCall && (
+                  {!isGroup && (
                     <button
                       type="button"
                       role="menuitem"
@@ -309,7 +309,7 @@ export default function ChatHeader({
                   )}
 
                   {/* Video call — placeholder (wire video in App.tsx) */}
-                  {!isGroup && onCall && (
+                  {!isGroup && (
                     <button
                       type="button"
                       role="menuitem"
@@ -338,7 +338,7 @@ export default function ChatHeader({
                     </button>
                   )}
 
-                  {((!isGroup && onCall) || onEditContact) && (onToggleMute || onBlockUser || onClearHistory) && (
+                  {(!isGroup || onEditContact) && (onToggleMute || onBlockUser || onClearHistory) && (
                     <div className="chat-dropdown-sep" role="separator" />
                   )}
 
