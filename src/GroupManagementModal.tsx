@@ -67,20 +67,21 @@ export default function GroupManagementModal({
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [renaming, setRenaming] = useState(false);
-  const [nameInput, setNameInput] = useState(group.name);
+  // Safe fallback so hooks never see undefined even if group is momentarily stale.
+  const [nameInput, setNameInput] = useState(group?.name ?? '');
 
   // Reset step / errors when modal opens or group changes.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !group?.id) return;
     setStep('main');
     setErr('');
     setSelected(new Set());
-    setNameInput(group.name);
+    setNameInput(group.name ?? '');
     setRenaming(false);
-  }, [open, group.id, group.name]);
+  }, [open, group?.id, group?.name]);
 
-  const isAdmin = group.myRole === 'admin';
-  const safeMembers = group.members ?? [];
+  const isAdmin = group?.myRole === 'admin';
+  const safeMembers = group?.members ?? [];
   const memberIds = useMemo(() => new Set(safeMembers.map((m) => m.userId)), [safeMembers]);
   const isSoleAdmin = useMemo(() => {
     const admins = safeMembers.filter((m) => m.role === 'admin');
@@ -93,7 +94,7 @@ export default function GroupManagementModal({
     [contacts, selfId, memberIds]
   );
 
-  if (!open) return null;
+  if (!open || !group?.id) return null;
 
   const run = async (fn: () => Promise<void>) => {
     if (busy) return;
@@ -115,7 +116,7 @@ export default function GroupManagementModal({
       if (next.has(id)) {
         next.delete(id);
       } else {
-        if ((group.memberCount || safeMembers.length) + next.size + 1 > MAX_GROUP_MEMBERS) {
+        if ((group?.memberCount ?? safeMembers.length) + next.size + 1 > MAX_GROUP_MEMBERS) {
           setErr(t('groups.maxMembers', { count: String(MAX_GROUP_MEMBERS) }));
           return prev;
         }
@@ -131,7 +132,7 @@ export default function GroupManagementModal({
       await addGroupMembers({
         groupId: group.id,
         memberIds: [...selected],
-        existingCount: group.memberCount,
+        existingCount: group?.memberCount ?? safeMembers.length,
       });
       await onRefresh();
       setSelected(new Set());
@@ -257,7 +258,7 @@ export default function GroupManagementModal({
                     onChange={(e) => setNameInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void confirmRename();
-                      if (e.key === 'Escape') { setRenaming(false); setNameInput(group.name); }
+                      if (e.key === 'Escape') { setRenaming(false); setNameInput(group?.name ?? ''); }
                     }}
                   />
                   <button
@@ -278,12 +279,12 @@ export default function GroupManagementModal({
                   title={isAdmin ? t('groups.mgmt.tapToRename') : undefined}
                   onClick={() => { if (isAdmin) setRenaming(true); }}
                 >
-                  {group.name}
+                  {group.name ?? ''}
                   {isAdmin && <ChevronRight size={14} className="group-mgmt-edit-caret" />}
                 </button>
               )}
               <p className="group-mgmt-count">
-                {t('groups.memberCount', { count: String(group.memberCount) })}
+                {t('groups.memberCount', { count: String(group?.memberCount ?? safeMembers.length) })}
               </p>
             </div>
 
@@ -331,7 +332,7 @@ export default function GroupManagementModal({
 
             {/* Action buttons */}
             <div className="group-mgmt-actions">
-              {isAdmin && group.memberCount < MAX_GROUP_MEMBERS && (
+              {isAdmin && (group?.memberCount ?? safeMembers.length) < MAX_GROUP_MEMBERS && (
                 <button
                   type="button"
                   className="group-mgmt-action-btn is-add"
@@ -372,7 +373,7 @@ export default function GroupManagementModal({
             <p className="group-mgmt-hint">
               {t('groups.pickMembers', {
                 selected: String(selected.size),
-                max: String(MAX_GROUP_MEMBERS - group.memberCount),
+                max: String(MAX_GROUP_MEMBERS - (group?.memberCount ?? safeMembers.length)),
               })}
             </p>
             {addableCandidates.length === 0 ? (
@@ -420,7 +421,7 @@ export default function GroupManagementModal({
           <div className="group-mgmt-confirm">
             <p>{isSoleAdmin
               ? t('groups.mgmt.leaveConfirmAdmin')
-              : t('groups.mgmt.leaveConfirm', { name: group.name })}</p>
+              : t('groups.mgmt.leaveConfirm', { name: group?.name ?? '' })}</p>
             <div className="create-group-modal__foot">
               <button type="button" className="text-link" onClick={() => setStep('main')} disabled={busy}>
                 {t('common.cancel')}
@@ -440,7 +441,7 @@ export default function GroupManagementModal({
         {/* ══════════════ CONFIRM DELETE ═════════════════════════════════════ */}
         {step === 'confirm-delete' && (
           <div className="group-mgmt-confirm">
-            <p>{t('groups.mgmt.deleteConfirm', { name: group.name })}</p>
+            <p>{t('groups.mgmt.deleteConfirm', { name: group?.name ?? '' })}</p>
             <div className="create-group-modal__foot">
               <button type="button" className="text-link" onClick={() => setStep('main')} disabled={busy}>
                 {t('common.cancel')}

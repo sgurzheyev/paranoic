@@ -761,7 +761,10 @@ export default function App() {
   const mapContactIds = useMemo(() => {
     const ids = new Set<string>();
     for (const c of contacts) ids.add(c.id);
-    for (const peerId of Object.keys(lastPreviews)) ids.add(peerId);
+    for (const key of Object.keys(lastPreviews)) {
+      // Skip group conversation IDs (e.g. "group:<uuid>") — not valid profile UUIDs.
+      if (!key.startsWith('group:')) ids.add(key);
+    }
     ids.delete(identity.id);
     for (const id of blockedIds) ids.delete(id);
     return [...ids];
@@ -2726,9 +2729,19 @@ export default function App() {
     let cancelled = false;
     const snapshot = groups;
     void (async () => {
+      // Wait until Supabase Realtime has an authenticated session before
+      // subscribing — avoids "auth.uid() not ready" errors.
+      try {
+        await waitForRealtimeAuth('group-channels');
+      } catch (e) {
+        console.warn('[groups] Realtime auth wait failed', e);
+        return;
+      }
+      if (cancelled) return;
       await unsubscribeAllGroupChannels();
       if (cancelled) return;
       for (const g of snapshot) {
+        if (!g?.id) continue;
         subscribeGroupChannel(g.id, (payload) => {
           ingestGroupRealtimeRef.current(payload);
         });
@@ -4071,11 +4084,11 @@ export default function App() {
   }, [peerContacts, lastPreviews]);
 
   const groupsOrdered = useMemo(() => {
-    return [...groups].sort((a, b) => {
-      const ta = lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0;
-      const tb = lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0;
+    return [...(groups ?? [])].sort((a, b) => {
+      const ta = a?.id ? (lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0) : 0;
+      const tb = b?.id ? (lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0) : 0;
       if (tb !== ta) return tb - ta;
-      return a.name.localeCompare(b.name, 'ru');
+      return (a?.name ?? '').localeCompare(b?.name ?? '', 'ru');
     });
   }, [groups, lastPreviews]);
 
@@ -4873,12 +4886,12 @@ export default function App() {
               activePeerId={activePeerId}
               isGroup={Boolean(activeGroup)}
               groupFaces={
-                activeGroup?.members.map((m) => ({
-                  userId: m.userId,
-                  name: m.name || m.userId.slice(0, 6),
-                  color: m.color,
-                  avatarUrl: m.avatarUrl,
-                })) ?? []
+                (activeGroup?.members ?? []).map((m) => ({
+                  userId: m?.userId ?? '',
+                  name: m?.name || m?.userId?.slice(0, 6) || '?',
+                  color: m?.color,
+                  avatarUrl: m?.avatarUrl,
+                }))
               }
               groupSubtitle={
                 activeGroup
