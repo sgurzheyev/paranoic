@@ -281,9 +281,21 @@ const VIDEO_LEVEL_CONSTRAINTS: Record<
 
 type ControlPacket =
   | { t: 'call-invite'; msgId?: string; isCallIntent?: boolean; type?: 'CALL_OFFER' | string }
-  | { t: 'call-accept'; msgId?: string }
-  | { t: 'call-offer'; sdp: RTCSessionDescriptionInit; msgId?: string }
-  | { t: 'call-answer'; sdp: RTCSessionDescriptionInit; msgId?: string }
+  | { t: 'call-accept'; msgId?: string; isCallIntent?: boolean; type?: 'CALL_OFFER' | string }
+  | {
+      t: 'call-offer';
+      sdp: RTCSessionDescriptionInit;
+      msgId?: string;
+      isCallIntent?: boolean;
+      type?: 'CALL_OFFER' | string;
+    }
+  | {
+      t: 'call-answer';
+      sdp: RTCSessionDescriptionInit;
+      msgId?: string;
+      isCallIntent?: boolean;
+      type?: 'CALL_OFFER' | string;
+    }
   | { t: 'call-decline'; msgId?: string }
   | { t: 'call-hangup'; msgId?: string }
   | { t: 'renegotiate-offer'; sdp: RTCSessionDescriptionInit; msgId?: string }
@@ -520,6 +532,9 @@ export class P2PConnection {
   private cachedIceServers: RTCIceServer[] | null = null;
   private joinRetryTimer: ReturnType<typeof setInterval> | null = null;
   private callInviteRetryTimer: ReturnType<typeof setInterval> | null = null;
+  /** Retry media SDP offer until call-answer lands (invite can race ahead of offer). */
+  private callOfferRetryTimer: ReturnType<typeof setInterval> | null = null;
+  private lastCallOfferSdp: RTCSessionDescriptionInit | null = null;
   private signalingStatus: SignalingDebugStatus = '';
   private localIdentity: PeerIdentity | null = null;
   /** Входящий join ждёт Accept на стороне хоста. */
@@ -900,6 +915,31 @@ export class P2PConnection {
     }
   }
 
+  private clearCallOfferRetry(): void {
+    if (this.callOfferRetryTimer) {
+      clearInterval(this.callOfferRetryTimer);
+      this.callOfferRetryTimer = null;
+    }
+  }
+
+  private logPcHandshake(stage: string, extra?: Record<string, unknown>): void {
+    const pc = this.pc;
+    p2pAudit(`[Call Handshake] ${stage}`, {
+      callState: this.callState,
+      p2pStatus: this.status,
+      signalingState: pc?.signalingState ?? 'no-pc',
+      iceConnectionState: pc?.iceConnectionState ?? 'no-pc',
+      iceGatheringState: pc?.iceGatheringState ?? 'no-pc',
+      connectionState: pc?.connectionState ?? 'no-pc',
+      hasRemoteDesc: Boolean(pc?.remoteDescription),
+      hasLocalDesc: Boolean(pc?.localDescription),
+      pendingIce: this.pendingCandidates.length,
+      pendingCallOffer: Boolean(this.pendingCallOffer),
+      acceptedPending: this.callAcceptedPendingOffer,
+      ...extra,
+    });
+  }
+
   send(payload: string): void {
     if (!this.channel || this.channel.readyState !== 'open') {
       throw new Error('Соединение ещё не готово');
@@ -1026,7 +1066,13 @@ export class P2PConnection {
 
     try {
       this.callAcceptedPendingOffer = true;
-      this.sendCallControl({ t: 'call-accept', msgId: crypto.randomUUID() });
+      this.sendCallControl({
+        t: 'call-accept',
+        msgId: crypto.randomUUID(),
+        isCallIntent: true,
+        type: CALL_INTENT_TYPE,
+      });
+      this.logPcHandshake('acceptCall:accept-sent');
       const stream = await this.acquireLocalMedia();
       await this.attachLocalTracks(stream);
       this.handlers.onLocalStream?.(stream);
@@ -1034,6 +1080,8 @@ export class P2PConnection {
       // Если offer уже успел прийти до Accept — отвечаем сразу.
       if (this.pendingCallOffer) {
         await this.answerPendingCallOffer();
+      } else {
+        this.logPcHandshake('acceptCall:waiting-for-offer');
       }
       return stream;
     } catch (e) {
@@ -1063,6 +1111,8 @@ export class P2PConnection {
   async cancelCall(): Promise<void> {
     p2pAudit('cancelCall', { callState: this.callState, status: this.status });
     this.clearCallInviteRetry();
+    this.clearCallOfferRetry();
+    this.lastCallOfferSdp = null;
     this.clearJoinRetry();
 
     if (this.callState === 'calling') {
@@ -1104,6 +1154,8 @@ export class P2PConnection {
 
   async hangUp(): Promise<void> {
     this.clearCallInviteRetry();
+    this.clearCallOfferRetry();
+    this.lastCallOfferSdp = null;
     this.callAcceptedPendingOffer = false;
     this.pendingCallOffer = null;
     this.setCallState('ending');
@@ -1740,22 +1792,44 @@ export class P2PConnection {
     if (this.status === 'connecting' || this.status === 'creating-offer') {
       this.setSignalingStatus('Обмен маршрутами (ICE)...');
     }
-    if (!this.pc || !this.pc.remoteDescription) {
+    // Queue while remote description is missing OR we are waiting for call-answer
+    // (have-local-offer during media renegotiation) — applying against the old remote SDP stalls media.
+    const waitingForAnswer = this.pc?.signalingState === 'have-local-offer';
+    if (!this.pc || !this.pc.remoteDescription || waitingForAnswer) {
       this.pendingCandidates.push(payload.candidate);
-      p2pAudit('ICE candidate queued', { pending: this.pendingCandidates.length });
+      p2pAudit('ICE candidate queued', {
+        pending: this.pendingCandidates.length,
+        reason: !this.pc
+          ? 'no-pc'
+          : !this.pc.remoteDescription
+            ? 'no-remote-desc'
+            : 'have-local-offer',
+        signalingState: this.pc?.signalingState,
+        iceConnectionState: this.pc?.iceConnectionState,
+      });
       return;
     }
     try {
       await this.pc.addIceCandidate(payload.candidate);
-      p2pAudit('ICE candidate applied');
+      p2pAudit('ICE candidate applied', {
+        signalingState: this.pc.signalingState,
+        iceConnectionState: this.pc.iceConnectionState,
+      });
     } catch (e) {
-      console.warn('[P2P Audit] addIceCandidate failed', e);
+      console.warn('[P2P Audit] addIceCandidate failed — requeue', e);
+      this.pendingCandidates.push(payload.candidate);
     }
   }
 
   private async flushPendingCandidates(): Promise<void> {
     if (!this.pc) return;
     const queued = this.pendingCandidates.splice(0);
+    if (queued.length === 0) return;
+    p2pAudit('ICE flush pending', {
+      count: queued.length,
+      signalingState: this.pc.signalingState,
+      iceConnectionState: this.pc.iceConnectionState,
+    });
     for (const candidate of queued) {
       try {
         await this.pc.addIceCandidate(candidate);
@@ -1852,14 +1926,35 @@ export class P2PConnection {
   private async renegotiateAsOfferer(): Promise<void> {
     if (!this.pc) return;
     this.makingOffer = true;
+    this.logPcHandshake('renegotiateAsOfferer:start');
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
+      const sdp = this.pc.localDescription!;
+      this.lastCallOfferSdp = sdp;
       this.sendCallControl({
         t: 'call-offer',
-        sdp: this.pc.localDescription!,
+        sdp,
         msgId: this.newMsgId(),
+        isCallIntent: true,
+        type: CALL_INTENT_TYPE,
       });
+      this.logPcHandshake('renegotiateAsOfferer:offer-sent');
+      this.clearCallOfferRetry();
+      this.callOfferRetryTimer = setInterval(() => {
+        if (this.callState !== 'calling' || !this.lastCallOfferSdp) {
+          this.clearCallOfferRetry();
+          return;
+        }
+        p2pAudit('call-offer retry while waiting for answer');
+        this.sendCallControl({
+          t: 'call-offer',
+          sdp: this.lastCallOfferSdp,
+          msgId: this.newMsgId(),
+          isCallIntent: true,
+          type: CALL_INTENT_TYPE,
+        });
+      }, CALL_INVITE_RETRY_MS);
     } finally {
       this.makingOffer = false;
     }
@@ -1870,21 +1965,31 @@ export class P2PConnection {
     const offer = this.pendingCallOffer;
     this.pendingCallOffer = null;
     this.callAcceptedPendingOffer = false;
+    this.logPcHandshake('answerPendingCallOffer:start');
 
     const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
     this.ignoreOffer = !this.polite && offerCollision;
     if (this.ignoreOffer) {
+      // Keep offer for a later stable window — caller retries CALL_OFFER.
+      this.pendingCallOffer = offer;
+      this.callAcceptedPendingOffer = true;
+      this.logPcHandshake('answerPendingCallOffer:collision-requeue');
       throw new Error('Конфликт сигналинга звонка, попробуйте ещё раз');
     }
 
     await this.pc.setRemoteDescription(offer);
+    await this.flushPendingCandidates();
+    this.logPcHandshake('answerPendingCallOffer:remote-offer-applied');
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
     this.sendCallControl({
       t: 'call-answer',
       sdp: this.pc.localDescription!,
       msgId: this.newMsgId(),
+      isCallIntent: true,
+      type: CALL_INTENT_TYPE,
     });
+    this.logPcHandshake('answerPendingCallOffer:answer-sent');
     this.setCallState('in-call');
     this.startMediaWatchdog();
     this.startNetworkWatch();
@@ -1961,14 +2066,33 @@ export class P2PConnection {
     if (packet.t === 'call-accept') {
       // Калеe принял — теперь caller открывает медиа и шлёт offer.
       if (this.callState !== 'calling') return;
+      this.logPcHandshake('call-accept received');
       await this.beginCallAsOffererAfterAccept();
       return;
     }
 
     if (packet.t === 'call-offer') {
-      // Media SDP renegotiation — only valid after explicit call-invite (+ accept).
+      // Media SDP for an explicit call. Silent P2P / renegotiate-offer must not use this path.
+      if (!hasExplicitCallIntent(packet)) {
+        p2pAudit('ignored call-offer without explicit intent', {
+          callState: this.callState,
+        });
+        return;
+      }
+
+      this.logPcHandshake('call-offer received');
+
+      // Offer may arrive before call-invite (Realtime reorder). Queue + ring if idle.
+      if (this.callState === 'idle') {
+        this.pendingCallOffer = packet.sdp;
+        this.setCallState('ringing');
+        this.handlers.onIncomingCall?.();
+        this.logPcHandshake('call-offer:queued-as-early-invite');
+        return;
+      }
+
       if (this.callState !== 'ringing' && !this.callAcceptedPendingOffer) {
-        p2pAudit('ignored call-offer without prior call intent', {
+        p2pAudit('ignored call-offer — not in call flow', {
           callState: this.callState,
           acceptedPending: this.callAcceptedPendingOffer,
         });
@@ -1977,7 +2101,12 @@ export class P2PConnection {
 
       const offerCollision = this.makingOffer || this.pc.signalingState !== 'stable';
       this.ignoreOffer = !this.polite && offerCollision;
-      if (this.ignoreOffer) return;
+      if (this.ignoreOffer) {
+        // Still keep the latest SDP — answer when stable / after accept.
+        this.pendingCallOffer = packet.sdp;
+        this.logPcHandshake('call-offer:collision-stored');
+        return;
+      }
 
       this.pendingCallOffer = packet.sdp;
       if (this.callAcceptedPendingOffer && this.localStream) {
@@ -1986,21 +2115,41 @@ export class P2PConnection {
         } catch (e) {
           console.warn('[paranoic] answer after accept failed', e);
         }
+      } else {
+        this.logPcHandshake('call-offer:stored-awaiting-accept');
       }
       return;
     }
 
     if (packet.t === 'call-answer') {
-      if (this.callState !== 'calling' && this.callState !== 'in-call') return;
-      await this.pc.setRemoteDescription(packet.sdp);
-      this.setCallState('in-call');
-      this.startMediaWatchdog();
-      this.startNetworkWatch();
+      if (this.callState !== 'calling' && this.callState !== 'in-call') {
+        this.logPcHandshake('call-answer ignored — wrong callState');
+        return;
+      }
+      this.logPcHandshake('call-answer received');
+      try {
+        await this.pc.setRemoteDescription(packet.sdp);
+        await this.flushPendingCandidates();
+        this.clearCallOfferRetry();
+        this.lastCallOfferSdp = null;
+        this.clearCallInviteRetry();
+        this.logPcHandshake('call-answer:remote-applied');
+        this.setCallState('in-call');
+        this.startMediaWatchdog();
+        this.startNetworkWatch();
+      } catch (e) {
+        console.warn('[paranoic] call-answer setRemoteDescription failed', e);
+        this.logPcHandshake('call-answer:failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
       return;
     }
 
     if (packet.t === 'call-decline') {
       this.clearCallInviteRetry();
+      this.clearCallOfferRetry();
+      this.lastCallOfferSdp = null;
       this.pendingCallOffer = null;
       this.callAcceptedPendingOffer = false;
       this.stopMediaWatchdog();
@@ -2160,13 +2309,18 @@ export class P2PConnection {
     logIceServers('RTCPeerConnection', iceServers);
 
     pc.onsignalingstatechange = () => {
-      console.log('[SIGNALING STATE]:', pc.signalingState);
+      this.logPcHandshake('pc.signalingState');
     };
 
     // Trickle ICE — кандидаты с ретраями (Realtime часто теряет одиночные broadcast).
     pc.onicecandidate = (event) => {
       if (!event.candidate) {
-        p2pAudit('ICE gathering complete', { peerId: this.peerId });
+        p2pAudit('ICE gathering complete', {
+          peerId: this.peerId,
+          iceGatheringState: pc.iceGatheringState,
+          iceConnectionState: pc.iceConnectionState,
+          signalingState: pc.signalingState,
+        });
         return;
       }
       const candidate = event.candidate.toJSON();
@@ -2174,6 +2328,9 @@ export class P2PConnection {
         type: event.candidate.type,
         protocol: event.candidate.protocol,
         address: event.candidate.address,
+        signalingState: pc.signalingState,
+        iceConnectionState: pc.iceConnectionState,
+        iceGatheringState: pc.iceGatheringState,
       });
       void this.broadcastReliable('ice-candidate', {
         peerId: this.peerId,
@@ -2214,12 +2371,7 @@ export class P2PConnection {
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('[PEER CONNECTION]:', pc.connectionState);
-      p2pAudit('connectionState', {
-        state: pc.connectionState,
-        ice: pc.iceConnectionState,
-        callState: this.callState,
-      });
+      this.logPcHandshake('pc.connectionState', { connectionState: pc.connectionState });
       switch (pc.connectionState) {
         case 'connected':
           this.iceRestarting = false;
@@ -2248,8 +2400,7 @@ export class P2PConnection {
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
-      console.log('[ICE STATE]:', state);
-      p2pAudit('iceConnectionState', { state, callState: this.callState });
+      this.logPcHandshake('pc.iceConnectionState', { iceConnectionState: state });
       if (state === 'checking') {
         this.armIceCheckTimeout(pc);
         this.setSignalingStatus('Обмен маршрутами (ICE)...');
