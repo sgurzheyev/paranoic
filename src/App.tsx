@@ -16,11 +16,14 @@ import {
   Shield,
   Ban,
   UserCheck,
+  Users,
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
 import ChatHeader from './ChatHeader';
 import ChatSearchPanel from './ChatSearchPanel';
 import ContactsSearchPanel from './ContactsSearchPanel';
+import CreateGroupModal from './CreateGroupModal';
+import GroupListRow from './GroupListRow';
 import SettingsPanel from './SettingsPanel';
 import ProfileHome from './ProfileHome';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -121,6 +124,7 @@ import {
   appendStoredMessage,
   conversationId,
   formatFileSize,
+  groupConversationId,
   loadChatHistory,
   loadLastMessagePreviews,
   loadMediaBlob,
@@ -144,9 +148,21 @@ import {
 } from './outbox';
 import {
   syncPendingDeliveries,
+  uploadPendingGroupMedia,
+  uploadPendingGroupText,
   uploadPendingMedia,
   uploadPendingText,
 } from './storeForward';
+import {
+  broadcastGroupMessage,
+  createGroup,
+  groupRoomId,
+  listMyGroups,
+  subscribeGroupChannel,
+  unsubscribeAllGroupChannels,
+  type GroupRealtimePayload,
+  type GroupSummary,
+} from './groups';
 import {
   buildMagicLink,
   clearMagicParamFromUrl,
@@ -289,6 +305,10 @@ export default function App() {
   const [joining, setJoining] = useState(false);
   const [signalingStatus, setSignalingStatus] = useState<SignalingDebugStatus>('');
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [createGroupBusy, setCreateGroupBusy] = useState(false);
   const [contactsSearchQuery, setContactsSearchQuery] = useState('');
   const [contactsSearchAdding, setContactsSearchAdding] = useState<string | null>(null);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
@@ -359,6 +379,11 @@ export default function App() {
   const callDialLockRef = useRef(false);
   const peerIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
+  const activeGroupIdRef = useRef<string | null>(null);
+  const groupsRef = useRef<GroupSummary[]>([]);
+  const ingestGroupRealtimeRef = useRef<(payload: GroupRealtimePayload) => void>(
+    () => undefined
+  );
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -859,6 +884,10 @@ export default function App() {
     async (id: string | null, label?: string) => {
       peerIdRef.current = id;
       setPeerId(id);
+      if (id) {
+        activeGroupIdRef.current = null;
+        setActiveGroupId(null);
+      }
       if (label) setPeerLabel(label);
       setPeerTyping(false);
       stopTypingPing();
@@ -1052,6 +1081,52 @@ export default function App() {
   }, [addMessage]);
 
   syncPendingRef.current = syncStoreForward;
+
+  const ingestGroupRealtime = useCallback(
+    async (payload: GroupRealtimePayload) => {
+      if (!payload?.groupId || !payload.messageId) return;
+      if (payload.fromUserId === identityRef.current.id) return;
+      const conv = groupConversationId(payload.groupId);
+      const existing = await loadChatHistory(conv);
+      if (existing.some((m) => m.id === payload.messageId)) return;
+
+      try {
+        const key = await deriveKeyFromRoom(groupRoomId(payload.groupId));
+        if (payload.kind === 'text') {
+          const text = await decryptMessage(payload.cipher, payload.iv, key);
+          const row = {
+            id: payload.messageId,
+            sender: payload.senderName || 'Близкий',
+            text,
+            time: new Date(payload.at).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            mine: false,
+            kind: 'text' as const,
+            createdAt: payload.at,
+          };
+          await appendStoredMessage(conv, row);
+          if (conversationIdRef.current === conv) {
+            await addMessage(row, false);
+          }
+          playReceiveSound();
+          notifyIfHidden(payload.senderName || 'Новое сообщение', {
+            body: text.slice(0, 120),
+            tag: `paranoic-group-${payload.messageId}`,
+          });
+          void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+        }
+      } catch (e) {
+        console.warn('[groups] realtime ingest', e);
+      }
+    },
+    [addMessage]
+  );
+
+  ingestGroupRealtimeRef.current = (payload) => {
+    void ingestGroupRealtime(payload);
+  };
 
   useEffect(() => {
     const onOnline = () => {
@@ -2556,6 +2631,113 @@ export default function App() {
     void connectToLocalContact(c, { openChat: true });
   };
 
+  const refreshGroups = useCallback(async () => {
+    if (!hasSupabaseConfig()) {
+      setGroups([]);
+      groupsRef.current = [];
+      return;
+    }
+    try {
+      const next = await listMyGroups();
+      groupsRef.current = next;
+      setGroups(next);
+    } catch (e) {
+      console.warn('[groups] list', e);
+    }
+  }, []);
+
+  const openGroupChat = useCallback(
+    async (group: GroupSummary) => {
+      chatClosedRef.current = false;
+      leavingChatRef.current = false;
+      setAppMode('paranoic');
+      setMainTab('chats');
+      setScreen('chat');
+      setMessengerSidebarOpen(false);
+      setCreateGroupOpen(false);
+      setPeerTyping(false);
+      stopTypingPing();
+
+      activeGroupIdRef.current = group.id;
+      setActiveGroupId(group.id);
+      setPeerLabel(group.name);
+      setPeerColor('#60a5fa');
+      setPeerAvatarUrl(group.avatarUrl || '');
+
+      const conv = groupConversationId(group.id);
+      conversationIdRef.current = conv;
+
+      try {
+        const key = await deriveKeyFromRoom(groupRoomId(group.id));
+        setSecretKey(key);
+        secretKeyRef.current = key;
+      } catch (e) {
+        console.warn('[groups] derive key', e);
+      }
+
+      await hydrateConversation(conv);
+      void syncPendingRef.current();
+    },
+    [hydrateConversation, stopTypingPing]
+  );
+
+  const handleCreateGroup = useCallback(
+    async (opts: { name: string; memberIds: string[] }) => {
+      if (createGroupBusy) return;
+      setCreateGroupBusy(true);
+      setError('');
+      try {
+        const created = await createGroup(opts);
+        await refreshGroups();
+        setCreateGroupOpen(false);
+        await openGroupChat(created);
+        void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t('groups.createFailed'));
+      } finally {
+        setCreateGroupBusy(false);
+      }
+    },
+    [createGroupBusy, openGroupChat, refreshGroups, t]
+  );
+
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
+
+  useEffect(() => {
+    if (authGate !== 'ok' || !hasSupabaseConfig()) return;
+    void refreshGroups();
+  }, [authGate, refreshGroups]);
+
+  const groupIdsKey = useMemo(
+    () =>
+      groups
+        .map((g) => g.id)
+        .sort()
+        .join(','),
+    [groups]
+  );
+
+  useEffect(() => {
+    if (authGate !== 'ok' || !hasSupabaseConfig()) return;
+    let cancelled = false;
+    const snapshot = groups;
+    void (async () => {
+      await unsubscribeAllGroupChannels();
+      if (cancelled) return;
+      for (const g of snapshot) {
+        subscribeGroupChannel(g.id, (payload) => {
+          ingestGroupRealtimeRef.current(payload);
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      void unsubscribeAllGroupChannels();
+    };
+  }, [authGate, groupIdsKey, groups]);
+
   /** Call from contacts list — arm token, connect silently, never open chat on phone tap. */
   const handleContactsRowCall = (c: Contact, source = 'contacts-row-phone') => {
     if (isSelfPeerTarget(c.id) || c.id === identityRef.current.id) {
@@ -3237,6 +3419,59 @@ export default function App() {
     const text = inputText.trim();
     if (!text || !secretKey) return;
 
+    const groupId = activeGroupIdRef.current;
+    if (groupId) {
+      const conv = groupConversationId(groupId);
+      conversationIdRef.current = conv;
+      const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const encrypted = await encryptMessage(text, secretKey);
+      const group = groupsRef.current.find((g) => g.id === groupId);
+      const memberIds = group?.members.map((m) => m.userId) ?? [];
+
+      await addMessage({
+        id,
+        sender: 'Я',
+        text,
+        time: nowTime(),
+        mine: true,
+        kind: 'text',
+        deliveryStatus: 'sending',
+      });
+      setInputText('');
+      stopTypingPing();
+      setError('');
+      setScreen('chat');
+
+      try {
+        await broadcastGroupMessage(groupId, {
+          messageId: id,
+          fromUserId: identityRef.current.id,
+          senderName: identityRef.current.name,
+          kind: 'text',
+          cipher: encrypted.cipher,
+          iv: encrypted.iv,
+          at: Date.now(),
+        });
+        if (hasSupabaseConfig() && memberIds.length > 0) {
+          await uploadPendingGroupText({
+            id,
+            fromUserId: identityRef.current.id,
+            groupId,
+            memberIds,
+            senderName: identityRef.current.name,
+            plaintext: text,
+          });
+        }
+        await patchDeliveryStatus([id], 'delivered');
+        playSendSound();
+        void ensureNotifyPermission();
+        void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Не удалось отправить');
+      }
+      return;
+    }
+
     const peer = peerIdRef.current;
     const conv = conversationIdRef.current;
     if (!peer || !conv) {
@@ -3336,6 +3571,106 @@ export default function App() {
     opts?: { mediaKind?: 'file' | 'circle' | 'voice' }
   ) => {
     if (!secretKey) return;
+
+    const groupId = activeGroupIdRef.current;
+    if (groupId) {
+      if (!hasSupabaseConfig()) {
+        setError('Нет соединения — повторите, когда будете на связи');
+        return;
+      }
+      const mediaKind = opts?.mediaKind ?? 'file';
+      setError('');
+      const transferId =
+        reuseId || `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const conv = groupConversationId(groupId);
+      conversationIdRef.current = conv;
+      const group = groupsRef.current.find((g) => g.id === groupId);
+      const memberIds = group?.members.map((m) => m.userId) ?? [];
+
+      setUploadProgress(0);
+      setTransferProgressMap((p) => ({ ...p, [transferId]: 0 }));
+      setMessages((prev) => {
+        const row: ChatMessage = {
+          id: transferId,
+          sender: 'Я',
+          time: nowTime(),
+          mine: true,
+          kind: 'file-transfer',
+          mediaMime: file.type || 'application/octet-stream',
+          mediaName: file.name,
+          mediaSize: file.size,
+          mediaKind,
+          transferProgress: 0,
+          transferFailed: false,
+          deliveryStatus: 'sending',
+        };
+        if (prev.some((m) => m.id === transferId)) {
+          return prev.map((m) => (m.id === transferId ? { ...m, ...row } : m));
+        }
+        return [...prev, row];
+      });
+      setScreen('chat');
+
+      const mediaKey = mediaStorageKey(transferId);
+      try {
+        await saveMediaBlob(mediaKey, file);
+        await uploadPendingGroupMedia({
+          id: transferId,
+          fromUserId: identityRef.current.id,
+          groupId,
+          memberIds,
+          senderName: identityRef.current.name,
+          file,
+          onProgress: (ratio) => {
+            setUploadProgress(ratio < 1 ? ratio : null);
+            setTransferProgressMap((p) => ({ ...p, [transferId]: ratio }));
+          },
+        });
+        const mediaUrl = URL.createObjectURL(file);
+        mediaUrlsRef.current.add(mediaUrl);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === transferId
+              ? {
+                  ...m,
+                  kind: 'media',
+                  mediaUrl,
+                  mediaKey,
+                  transferProgress: 1,
+                  deliveryStatus: 'delivered',
+                }
+              : m
+          )
+        );
+        await appendStoredMessage(conv, {
+          id: transferId,
+          sender: 'Я',
+          time: nowTime(),
+          mine: true,
+          kind: 'media',
+          mediaMime: file.type || 'application/octet-stream',
+          mediaName: file.name,
+          mediaSize: file.size,
+          mediaKind,
+          mediaKey,
+          createdAt: Date.now(),
+          deliveryStatus: 'delivered',
+        });
+        setUploadProgress(null);
+        playSendSound();
+        void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+      } catch (e) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === transferId ? { ...m, transferFailed: true } : m
+          )
+        );
+        setError(e instanceof Error ? e.message : 'Не удалось отправить файл');
+        setUploadProgress(null);
+      }
+      return;
+    }
+
     const peer = peerIdRef.current;
     if (!peer) {
       setError('Сначала выберите собеседника');
@@ -3686,9 +4021,17 @@ export default function App() {
   );
   const showTrustBanner =
     screen === 'chat' &&
+    !activeGroupId &&
     Boolean(activePeerId) &&
     !peerIsTrusted &&
     messages.some((m) => !m.mine);
+
+  const activeGroup = useMemo(
+    () => (activeGroupId ? groups.find((g) => g.id === activeGroupId) ?? null : null),
+    [activeGroupId, groups]
+  );
+
+  const canComposeChat = Boolean(secretKey && (activeGroupId || peerId));
 
   const peerContacts = useMemo(
     () => contacts.filter((c) => c.id !== identity.id),
@@ -3703,6 +4046,15 @@ export default function App() {
       return a.name.localeCompare(b.name, 'ru');
     });
   }, [peerContacts, lastPreviews]);
+
+  const groupsOrdered = useMemo(() => {
+    return [...groups].sort((a, b) => {
+      const ta = lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0;
+      const tb = lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0;
+      if (tb !== ta) return tb - ta;
+      return a.name.localeCompare(b.name, 'ru');
+    });
+  }, [groups, lastPreviews]);
 
   const contactsFiltered = useMemo(() => {
     const q = contactsSearchQuery.trim().toLowerCase();
@@ -4122,7 +4474,18 @@ export default function App() {
                   <div className="tab-panel liquid-glass-card contacts-panel">
                     <div className="contacts-head">
                       <h2>{t('chats.title')}</h2>
-                      <span className="contacts-count">{peerContacts.length}</span>
+                      <div className="contacts-head-actions">
+                        <button
+                          type="button"
+                          className="text-link create-group-btn"
+                          onClick={() => setCreateGroupOpen(true)}
+                        >
+                          <Users size={16} /> {t('groups.createButton')}
+                        </button>
+                        <span className="contacts-count">
+                          {peerContacts.length + groups.length}
+                        </span>
+                      </div>
                     </div>
                     <ChatSearchPanel
                       selfId={identity.id}
@@ -4183,12 +4546,20 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {chatsSearchMode ? null : peerContacts.length === 0 ? (
+                    {chatsSearchMode ? null : peerContacts.length === 0 && groups.length === 0 ? (
                       <p className="empty-contacts">
                         {t('chats.empty')} {t('chats.emptyHint')}
                       </p>
                     ) : (
                       <ul className="contacts-list">
+                        {groupsOrdered.map((g) => (
+                          <GroupListRow
+                            key={g.id}
+                            group={g}
+                            preview={lastPreviews[groupConversationId(g.id)]}
+                            onOpen={() => void openGroupChat(g)}
+                          />
+                        ))}
                         {chatsOrdered.map((c) => {
                           const online = onlineIds.has(c.id);
                           const trusted = c.trusted || trustedIds.has(c.id);
@@ -4348,12 +4719,61 @@ export default function App() {
               </div>
               {sidebarSearchMode ? null : (
               <ul className="messenger-contacts">
-                {peerContacts.length === 0 ? (
+                {peerContacts.length === 0 && groups.length === 0 ? (
                   <li className="empty-contacts">{t('chats.noContacts')}</li>
                 ) : (
-                  peerContacts.map((c) => {
+                  <>
+                    {groupsOrdered.map((g) => {
+                      const active = activeGroupId === g.id;
+                      const preview = lastPreviews[groupConversationId(g.id)];
+                      return (
+                        <li key={`g-${g.id}`}>
+                          <button
+                            type="button"
+                            className={`messenger-contact${active ? ' active' : ''}`}
+                            onClick={() => {
+                              setMessengerSidebarOpen(false);
+                              if (active) return;
+                              void openGroupChat(g);
+                            }}
+                          >
+                            <span className="group-avatar-stack" aria-hidden>
+                              {g.members.slice(0, 3).map((m, i) => (
+                                <span
+                                  key={m.userId}
+                                  className="group-avatar-stack__face"
+                                  style={{
+                                    zIndex: 3 - i,
+                                    background: m.color || '#60a5fa',
+                                  }}
+                                >
+                                  {(m.name || '?').slice(0, 1).toUpperCase()}
+                                </span>
+                              ))}
+                            </span>
+                            <span className="contact-info min-w-0 flex-1">
+                              <span className="flex min-w-0 items-center justify-between gap-2">
+                                <span className="contact-name truncate">{g.name}</span>
+                                {preview?.timeLabel ? (
+                                  <span className="shrink-0 text-xs text-gray-400">
+                                    {preview.timeLabel}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span className="truncate text-sm text-gray-400">
+                                {preview?.snippet ||
+                                  t('groups.memberCount', {
+                                    count: String(g.memberCount),
+                                  })}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                    {peerContacts.map((c) => {
                     const online = onlineIds.has(c.id);
-                    const active = peerId === c.id;
+                    const active = !activeGroupId && peerId === c.id;
                     return (
                       <li key={c.id}>
                         <button
@@ -4393,7 +4813,8 @@ export default function App() {
                         </button>
                       </li>
                     );
-                  })
+                  })}
+                  </>
                 )}
               </ul>
               )}
@@ -4427,6 +4848,20 @@ export default function App() {
               callMediaBlocked={callMediaBlocked}
               callMediaBlockedMessage={MEDIA_ACCESS_DENIED_MESSAGE}
               activePeerId={activePeerId}
+              isGroup={Boolean(activeGroup)}
+              groupFaces={
+                activeGroup?.members.map((m) => ({
+                  userId: m.userId,
+                  name: m.name || m.userId.slice(0, 6),
+                  color: m.color,
+                  avatarUrl: m.avatarUrl,
+                })) ?? []
+              }
+              groupSubtitle={
+                activeGroup
+                  ? t('groups.memberCount', { count: String(activeGroup.memberCount) })
+                  : undefined
+              }
               onBack={handleChatBack}
               onToggleSidebar={() => setMessengerSidebarOpen((v) => !v)}
               onOpenProfile={() => {
@@ -4681,7 +5116,7 @@ export default function App() {
                 className="chat-attach-btn"
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Прикрепить файл"
-                disabled={!peerId}
+                disabled={!canComposeChat}
               >
                 <Paperclip size={17} />
               </button>
@@ -4690,29 +5125,33 @@ export default function App() {
                 onChange={(e) => {
                   const value = e.target.value;
                   setInputText(value);
-                  if (value.trim()) pingTyping();
-                  else stopTypingPing();
+                  if (!activeGroupId) {
+                    if (value.trim()) pingTyping();
+                    else stopTypingPing();
+                  }
                 }}
                 placeholder={
-                  peerId
-                    ? connected
-                      ? 'Ваше сообщение…'
-                      : 'Офлайн — сообщение уйдёт из очереди'
-                    : 'Выберите собеседника…'
+                  activeGroupId
+                    ? t('chat.placeholder')
+                    : peerId
+                      ? connected
+                        ? 'Ваше сообщение…'
+                        : 'Офлайн — сообщение уйдёт из очереди'
+                      : 'Выберите собеседника…'
                 }
-                disabled={!peerId || !secretKey}
+                disabled={!canComposeChat}
               />
               {inputText.trim() ? (
                 <button
                   type="submit"
-                  disabled={!peerId || !secretKey}
+                  disabled={!canComposeChat}
                   aria-label="Отправить"
                 >
                   <Send size={17} />
                 </button>
               ) : (
                 <ChatRecordButton
-                  disabled={!peerId || !secretKey}
+                  disabled={!canComposeChat}
                   onSend={(file, mediaKind) => {
                     void sendMedia(file, undefined, { mediaKind });
                   }}
@@ -4744,6 +5183,15 @@ export default function App() {
           onProfile={() => goMainTab('profile')}
         />
       )}
+
+      <CreateGroupModal
+        open={createGroupOpen}
+        contacts={peerContacts}
+        selfId={identity.id}
+        busy={createGroupBusy}
+        onClose={() => setCreateGroupOpen(false)}
+        onCreate={handleCreateGroup}
+      />
     </div>
 
       {!incomingRing && !selfCallBlocked && (

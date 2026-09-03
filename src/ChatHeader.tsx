@@ -1,5 +1,12 @@
-import { ArrowLeft, PanelLeft, Paperclip, Phone } from 'lucide-react';
+import { ArrowLeft, PanelLeft, Paperclip, Phone, Users } from 'lucide-react';
 import Avatar from './Avatar';
+
+export type GroupHeaderFace = {
+  userId: string;
+  name: string;
+  color?: string;
+  avatarUrl?: string;
+};
 
 type ChatHeaderProps = {
   backLabel: string;
@@ -20,6 +27,10 @@ type ChatHeaderProps = {
   callMediaBlockedMessage: string;
   activePeerId: string | null;
   showSidebarToggle?: boolean;
+  /** Group chat mode: stacked faces, no 1:1 call. */
+  isGroup?: boolean;
+  groupFaces?: GroupHeaderFace[];
+  groupSubtitle?: string;
   onBack: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onToggleSidebar?: () => void;
   onOpenProfile: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -47,6 +58,9 @@ export default function ChatHeader({
   callMediaBlockedMessage,
   activePeerId,
   showSidebarToggle = true,
+  isGroup = false,
+  groupFaces = [],
+  groupSubtitle,
   onBack,
   onToggleSidebar,
   onOpenProfile,
@@ -65,8 +79,11 @@ export default function ChatHeader({
     onCall(e);
   };
 
+  const canCompose = isGroup || Boolean(activePeerId);
+  const faces = groupFaces.slice(0, 3);
+
   return (
-    <div className="chat-top">
+    <div className={`chat-top${isGroup ? ' chat-top--group' : ''}`}>
       {showSidebarToggle ? (
         <button
           type="button"
@@ -93,41 +110,72 @@ export default function ChatHeader({
         className="chat-peer chat-peer--btn"
         onClick={(e) => {
           e.stopPropagation();
-          onOpenProfile(e);
+          if (!isGroup) onOpenProfile(e);
         }}
-        disabled={!activePeerId}
-        aria-label={`Профиль: ${peerLabel}`}
+        disabled={isGroup ? false : !activePeerId}
+        aria-label={isGroup ? peerLabel : `Профиль: ${peerLabel}`}
       >
-        <Avatar
-          name={peerLabel}
-          color={peerColor}
-          avatarUrl={peerAvatarUrl}
-          size="sm"
-        />
+        {isGroup ? (
+          <span className="group-avatar-stack group-avatar-stack--header" aria-hidden>
+            {faces.length === 0 ? (
+              <span className="group-avatar-fallback">
+                <Users size={14} />
+              </span>
+            ) : (
+              faces.map((m, i) => (
+                <span
+                  key={m.userId}
+                  className="group-avatar-stack__face"
+                  style={{
+                    zIndex: faces.length - i,
+                    background: m.color || peerColor || '#60a5fa',
+                  }}
+                >
+                  {(m.name || '?').slice(0, 1).toUpperCase()}
+                </span>
+              ))
+            )}
+          </span>
+        ) : (
+          <Avatar
+            name={peerLabel}
+            color={peerColor}
+            avatarUrl={peerAvatarUrl}
+            size="sm"
+          />
+        )}
         <div className="chat-peer-meta">
           <span className="chat-peer-name">{peerLabel}</span>
           <span className="chat-peer-sub">
-            {peerTyping ? typingLabel : connected ? onLinkLabel : offlineLabel}
+            {isGroup
+              ? groupSubtitle || offlineLabel
+              : peerTyping
+                ? typingLabel
+                : connected
+                  ? onLinkLabel
+                  : offlineLabel}
           </span>
         </div>
       </button>
-      <button
-        type="button"
-        className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
-        onClick={handleCall}
-        aria-label={callLive ? returnToCallLabel : callLabel}
-        title={
-          callMediaBlocked
-            ? callMediaBlockedMessage
-            : callLive
-              ? returnToCallLabel
-              : callLabel
-        }
-        disabled={!activePeerId}
-        aria-disabled={!activePeerId || callMediaBlocked}
-      >
-        <Phone size={17} />
-      </button>
+      {!isGroup ? (
+        <button
+          type="button"
+          className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
+          onClick={handleCall}
+          aria-label={callLive ? returnToCallLabel : callLabel}
+          title={
+            callMediaBlocked
+              ? callMediaBlockedMessage
+              : callLive
+                ? returnToCallLabel
+                : callLabel
+          }
+          disabled={!activePeerId}
+          aria-disabled={!activePeerId || callMediaBlocked}
+        >
+          <Phone size={17} />
+        </button>
+      ) : null}
       <button
         type="button"
         className="icon-btn chat-attach-btn"
@@ -136,7 +184,7 @@ export default function ChatHeader({
           onAttach(e);
         }}
         aria-label={attachLabel}
-        disabled={!activePeerId}
+        disabled={!canCompose}
       >
         <Paperclip size={17} />
       </button>

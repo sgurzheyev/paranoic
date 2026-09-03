@@ -44,6 +44,17 @@ export function conversationId(a: string, b: string): string {
   return [a, b].filter(Boolean).sort().join(':');
 }
 
+/** Conversation id for a group chat (`group:{uuid}`). */
+export function groupConversationId(groupId: string): string {
+  return `group:${groupId}`;
+}
+
+export function parseGroupConversationId(convId: string): string | null {
+  if (!convId.startsWith('group:')) return null;
+  const id = convId.slice('group:'.length).trim();
+  return id || null;
+}
+
 function historyKey(convId: string): string {
   return `chat:${convId}`;
 }
@@ -52,9 +63,17 @@ function historyKey(convId: string): string {
 function parseChatKey(key: string): [string, string] | null {
   if (!key.startsWith('chat:')) return null;
   const body = key.slice('chat:'.length);
+  if (body.startsWith('group:')) return null;
   const parts = body.split(':').filter(Boolean);
   if (parts.length !== 2) return null;
   return [parts[0]!, parts[1]!];
+}
+
+/** Разбор `chat:group:{uuid}` → groupId. */
+function parseGroupChatKey(key: string): string | null {
+  if (!key.startsWith('chat:group:')) return null;
+  const id = key.slice('chat:group:'.length).trim();
+  return id || null;
 }
 
 export async function loadChatHistory(convId: string): Promise<StoredMessage[]> {
@@ -125,6 +144,9 @@ export async function purgeLegacyGlobalHistory(selfId?: string): Promise<void> {
 
       if (!key.startsWith('chat:')) continue;
 
+      // Group histories: chat:group:{uuid}
+      if (parseGroupChatKey(key)) continue;
+
       const pair = parseChatKey(key);
       if (!pair) {
         await messagesDb.removeItem(key);
@@ -164,7 +186,7 @@ function messageAgeMs(row: StoredMessage, now: number): number | null {
 }
 
 /**
- * Удаляет сообщения старше maxAgeMs во всех `chat:idA:idB`.
+ * Удаляет сообщения старше maxAgeMs во всех `chat:idA:idB` и `chat:group:*`.
  * Возвращает число удалённых и список затронутых conversationId.
  */
 export async function purgeExpiredMessages(
@@ -178,8 +200,9 @@ export async function purgeExpiredMessages(
     const keys = await messagesDb.keys();
     for (const raw of keys) {
       const key = String(raw);
-      const pair = parseChatKey(key);
-      if (!pair) continue;
+      const groupId = parseGroupChatKey(key);
+      const pair = groupId ? null : parseChatKey(key);
+      if (!groupId && !pair) continue;
 
       const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
       const kept: StoredMessage[] = [];
@@ -189,7 +212,8 @@ export async function purgeExpiredMessages(
         const age = messageAgeMs(row, now);
         if (age != null && age > maxAgeMs) {
           removed += 1;
-          touched.add(conversationId(pair[0], pair[1]));
+          if (groupId) touched.add(groupConversationId(groupId));
+          else if (pair) touched.add(conversationId(pair[0], pair[1]));
           if (row.mediaKey) droppedMedia.push(row.mediaKey);
           continue;
         }
@@ -367,7 +391,7 @@ export async function searchLocalChatMessages(
   return out;
 }
 
-/** Последнее сообщение по каждому собеседнику (IndexedDB). */
+/** Последнее сообщение по каждому собеседнику / группе (IndexedDB). */
 export async function loadLastMessagePreviews(
   selfId: string
 ): Promise<Record<string, LastMessagePreview>> {
@@ -377,6 +401,21 @@ export async function loadLastMessagePreviews(
     const keys = await messagesDb.keys();
     for (const raw of keys) {
       const key = String(raw);
+      const groupId = parseGroupChatKey(key);
+      if (groupId) {
+        const history = (await messagesDb.getItem<StoredMessage[]>(key)) ?? [];
+        const last = history[history.length - 1];
+        if (!last) continue;
+        const snippet = formatMessageSnippet(last);
+        const peerId = groupConversationId(groupId);
+        out[peerId] = {
+          peerId,
+          snippet: last.mine ? `Вы: ${snippet}` : snippet,
+          timeLabel: previewTimeLabel(last),
+          createdAt: typeof last.createdAt === 'number' ? last.createdAt : 0,
+        };
+        continue;
+      }
       const pair = parseChatKey(key);
       if (!pair) continue;
       const [a, b] = pair;

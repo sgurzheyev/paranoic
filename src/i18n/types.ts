@@ -278,6 +278,22 @@ export type TranslationDict = {
     familyBadge: string;
     publicBadge: string;
   };
+  groups: {
+    createTitle: string;
+    createAction: string;
+    createButton: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    nameRequired: string;
+    membersRequired: string;
+    pickMembers: string;
+    noContacts: string;
+    maxMembers: string;
+    memberCount: string;
+    openAria: string;
+    createFailed: string;
+    empty: string;
+  };
   profileModal: {
     title: string;
     uploadPhoto: string;

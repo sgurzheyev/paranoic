@@ -20,7 +20,8 @@ import {
 } from './crypto';
 import { personalInboxRoom } from './identity';
 import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { conversationId } from './storage';
+import { conversationId, groupConversationId } from './storage';
+import { groupRoomId } from './groups';
 
 export const MESSAGES_TABLE = 'messages';
 export const OFFLINE_TRANSFERS_BUCKET = 'offline-transfers';
@@ -43,6 +44,7 @@ export type PendingMessageRow = {
   media_size: number | null;
   storage_path: string | null;
   created_at: string;
+  group_id?: string | null;
 };
 
 export type IngestedPendingText = {
@@ -181,6 +183,106 @@ export async function uploadPendingText(opts: {
   await insertMessageRow(row);
 }
 
+/**
+ * Fan-out encrypted text to every other group member (store-and-forward).
+ * Each row uses the shared group conversation_id + group_id, but encrypts
+ * with that member's personal inbox key so existing RLS still works.
+ */
+export async function uploadPendingGroupText(opts: {
+  id: string;
+  fromUserId: string;
+  groupId: string;
+  memberIds: string[];
+  senderName: string;
+  plaintext: string;
+}): Promise<void> {
+  if (!hasSupabaseConfig()) {
+    throw new Error('Supabase не настроен');
+  }
+  const fromUserId = await requireAuthUid();
+  const recipients = [
+    ...new Set(opts.memberIds.filter((id) => id && id !== fromUserId)),
+  ];
+  if (recipients.length === 0) return;
+
+  const conv = groupConversationId(opts.groupId);
+  const createdAt = new Date().toISOString();
+
+  await Promise.all(
+    recipients.map(async (toUserId) => {
+      const roomId = personalInboxRoom(toUserId);
+      const key = await deriveKeyFromRoom(roomId);
+      const { cipher, iv } = await encryptMessage(opts.plaintext, key);
+      // Unique PK per recipient; base id before `__` matches Realtime messageId.
+      const rowId = `${opts.id}__${toUserId}`;
+      await insertMessageRow({
+        id: rowId,
+        from_user_id: fromUserId,
+        to_user_id: toUserId,
+        conversation_id: conv,
+        room_id: roomId,
+        kind: 'text',
+        pending_delivery: true,
+        cipher,
+        iv,
+        sender_name: opts.senderName,
+        media_mime: null,
+        media_name: null,
+        media_size: null,
+        storage_path: null,
+        created_at: createdAt,
+        group_id: opts.groupId,
+      });
+    })
+  );
+}
+
+/** Strip fan-out suffix so Realtime + SAF share one local history id. */
+export function canonicalPendingMessageId(rowId: string): string {
+  const sep = rowId.indexOf('__');
+  if (sep <= 0) return rowId;
+  return rowId.slice(0, sep);
+}
+
+/** Fan-out media to each group member (per-inbox encryption). */
+export async function uploadPendingGroupMedia(opts: {
+  id: string;
+  fromUserId: string;
+  groupId: string;
+  memberIds: string[];
+  senderName: string;
+  file: File;
+  onProgress?: (ratio: number) => void;
+}): Promise<void> {
+  const fromUserId = await requireAuthUid();
+  const recipients = [
+    ...new Set(opts.memberIds.filter((id) => id && id !== fromUserId)),
+  ];
+  if (recipients.length === 0) return;
+  const total = recipients.length;
+  let done = 0;
+  for (const toUserId of recipients) {
+    await uploadPendingMedia({
+      id: `${opts.id}__${toUserId}`,
+      fromUserId,
+      toUserId,
+      senderName: opts.senderName,
+      file: opts.file,
+      groupId: opts.groupId,
+      onProgress: (ratio) => {
+        opts.onProgress?.((done + ratio) / total);
+      },
+    });
+    done += 1;
+    opts.onProgress?.(done / total);
+  }
+}
+
+/** @deprecated Prefer groupRoomId from groups.ts — kept for callers. */
+export function groupCryptoRoom(groupId: string): string {
+  return groupRoomId(groupId);
+}
+
 /** Зашифровать файл и положить в Storage + строку messages. */
 export async function uploadPendingMedia(opts: {
   id: string;
@@ -189,6 +291,8 @@ export async function uploadPendingMedia(opts: {
   senderName: string;
   file: File;
   onProgress?: (ratio: number) => void;
+  /** When set, row is tagged as a group fan-out message. */
+  groupId?: string;
 }): Promise<void> {
   if (!hasSupabaseConfig()) {
     throw new Error('Supabase не настроен');
@@ -233,7 +337,9 @@ export async function uploadPendingMedia(opts: {
   }
   opts.onProgress?.(0.85);
 
-  const conv = conversationId(fromUserId, toUserId);
+  const conv = opts.groupId
+    ? groupConversationId(opts.groupId)
+    : conversationId(fromUserId, toUserId);
   const row = {
     id: opts.id,
     from_user_id: fromUserId,
@@ -250,6 +356,7 @@ export async function uploadPendingMedia(opts: {
     media_size: opts.file.size,
     storage_path: path,
     created_at: new Date().toISOString(),
+    group_id: opts.groupId ?? null,
   };
 
   try {
@@ -313,7 +420,7 @@ export async function syncPendingDeliveries(
   const { data, error } = await sb
     .from(MESSAGES_TABLE)
     .select(
-      'id,from_user_id,to_user_id,conversation_id,room_id,kind,pending_delivery,cipher,iv,sender_name,media_mime,media_name,media_size,storage_path,created_at'
+      'id,from_user_id,to_user_id,conversation_id,room_id,kind,pending_delivery,cipher,iv,sender_name,media_mime,media_name,media_size,storage_path,created_at,group_id'
     )
     .eq('to_user_id', selfId)
     .eq('pending_delivery', true)
@@ -335,12 +442,21 @@ export async function syncPendingDeliveries(
       const createdAt = Date.parse(row.created_at) || Date.now();
       const senderName = row.sender_name || 'Близкий';
 
+      const localId = row.group_id
+        ? canonicalPendingMessageId(row.id)
+        : row.id;
+      const convId =
+        row.conversation_id ||
+        (row.group_id
+          ? groupConversationId(row.group_id)
+          : conversationId(row.from_user_id, selfId));
+
       if (row.kind === 'text') {
         if (!row.cipher) throw new Error('Нет cipher');
         const text = await decryptMessage(row.cipher, row.iv, key);
         await handlers.onText({
-          id: row.id,
-          conversationId: row.conversation_id || conversationId(row.from_user_id, selfId),
+          id: localId,
+          conversationId: convId,
           fromUserId: row.from_user_id,
           senderName,
           text,
@@ -362,8 +478,8 @@ export async function syncPendingDeliveries(
         const mime = row.media_mime || 'application/octet-stream';
         const blob = new Blob([plain], { type: mime });
         await handlers.onMedia({
-          id: row.id,
-          conversationId: row.conversation_id || conversationId(row.from_user_id, selfId),
+          id: localId,
+          conversationId: convId,
           fromUserId: row.from_user_id,
           senderName,
           mime,
