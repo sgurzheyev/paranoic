@@ -191,10 +191,14 @@ export class CallInbox {
     document.addEventListener('visibilitychange', this.visibilityHandler);
   }
 
-  /** Re-subscribe if Realtime channel dropped (foreground / app resume). */
-  async ensureAlive(): Promise<void> {
+  /** Re-subscribe if Realtime channel dropped (foreground / app resume / Call tap). */
+  async ensureAlive(opts?: { force?: boolean }): Promise<void> {
     if (!this.userId) return;
-    if (this.channel && this.subscribed) return;
+    const state = this.channel?.state;
+    const live =
+      Boolean(this.channel && this.subscribed) &&
+      (state === 'joined' || state === 'joining');
+    if (live && !opts?.force) return;
     await this.recoverIfNeeded();
   }
 
@@ -307,21 +311,19 @@ export class CallInbox {
   async sendOffer(toUserId: string, from: CallerInfo, callId: string): Promise<boolean> {
     if (!toUserId || toUserId === from.id) return false;
     const check = await checkCalleeOnline(toUserId);
-    if (check.missingProfile) {
-      console.warn('[SIGNAL OUT] skip call_offer — profile missing', { to: toUserId });
-      return false;
-    }
-    if (!check.ok) {
+    if (!check.ok && check.peer.status === 'in_call') {
       console.warn('[SIGNAL OUT] skip call_offer — callee busy', {
         to: toUserId,
         status: check.peer.status,
       });
       return false;
     }
-    if (check.appearsOffline) {
-      audit('call offer while callee appears offline — sending anyway', {
+    if (check.appearsOffline || check.missingProfile) {
+      audit('call offer despite stale presence — sending anyway', {
         to: toUserId,
         lastSeen: check.peer.lastSeen,
+        missingProfile: check.missingProfile,
+        appearsOffline: check.appearsOffline,
       });
     }
     const payload: CallOfferEvent = {
@@ -397,11 +399,11 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
 }> {
   if (!hasSupabaseConfig() || !toUserId) {
     return {
-      ok: false,
+      ok: true,
       peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
       needsOfflineConfirm: false,
       appearsOffline: true,
-      missingProfile: true,
+      missingProfile: !toUserId,
     };
   }
   try {
@@ -414,12 +416,13 @@ export async function checkCalleeOnline(toUserId: string): Promise<{
       .maybeSingle();
     if (error || !data) {
       if (error) console.warn('[presence] callee check', error.message);
+      // Transient fetch/RLS errors must not block a user-initiated call-invite.
       return {
-        ok: false,
+        ok: true,
         peer: { userId: toUserId, status: 'offline', isOnline: false, lastSeen: null },
         needsOfflineConfirm: false,
         appearsOffline: true,
-        missingProfile: true,
+        missingProfile: !error && !data,
       };
     }
     const row = data as {

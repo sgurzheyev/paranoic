@@ -30,6 +30,7 @@ const en: TranslationDict = {
     error: 'Something went wrong',
     now: 'Now',
     thisDevice: 'This device',
+    selfCall: 'You cannot call your own account.',
   },
   nav: {
     aria: 'Main navigation',
@@ -344,6 +345,7 @@ const ru: TranslationDict = {
     error: 'Что-то пошло не так',
     now: 'Сейчас',
     thisDevice: 'Это устройство',
+    selfCall: 'Нельзя позвонить самому себе.',
   },
   nav: {
     aria: 'Главная навигация',
@@ -660,6 +662,7 @@ const pl: TranslationDict = {
     error: 'Coś poszło nie tak',
     now: 'Teraz',
     thisDevice: 'To urządzenie',
+    selfCall: 'Nie możesz zadzwonić na własne konto.',
   },
   nav: {
     aria: 'Główna nawigacja',

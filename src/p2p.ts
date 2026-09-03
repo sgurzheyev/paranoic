@@ -781,6 +781,24 @@ export class P2PConnection {
     this.setSignalingStatus('Подключаемся к сокетам...');
     p2pAudit('joinRoom start', { roomId, isHost: options.isHost, peerId: this.peerId });
 
+    await this.subscribeRoomChannel(roomId);
+
+    if (this.isHost) {
+      this.setSignalingStatus('Ожидаем собеседника...');
+      this.setStatus('waiting-answer');
+      this.armWaitForPeerTimeout('host');
+    } else {
+      // Гость: join после SUBSCRIBED
+      await this.sendJoin();
+      this.startJoinRetry();
+      this.setSignalingStatus('Ожидаем собеседника...');
+      this.armWaitForPeerTimeout('guest');
+    }
+  }
+
+  /** (Re)subscribe the Realtime room channel without tearing down the PeerConnection. */
+  private async subscribeRoomChannel(roomId: string): Promise<void> {
+    this.detachSignal();
     const session = await waitForRealtimeAuth(`room:${roomId}`);
     const sb = getSupabase();
     const chName = `room:${roomId}`;
@@ -855,18 +873,6 @@ export class P2PConnection {
       peerId: this.peerId,
       isHost: this.isHost,
     });
-
-    if (this.isHost) {
-      this.setSignalingStatus('Ожидаем собеседника...');
-      this.setStatus('waiting-answer');
-      this.armWaitForPeerTimeout('host');
-    } else {
-      // Гость: join после SUBSCRIBED
-      await this.sendJoin();
-      this.startJoinRetry();
-      this.setSignalingStatus('Ожидаем собеседника...');
-      this.armWaitForPeerTimeout('guest');
-    }
   }
 
   private async sendJoin(): Promise<void> {
@@ -1018,40 +1024,33 @@ export class P2PConnection {
   }
 
   /**
-   * After background resume: re-join Realtime room channel if it dropped,
-   * and nudge a silent P2P reconnect when the DataChannel is dead.
+   * After background resume or Call tap: re-join Realtime room channel if it
+   * dropped. Does not tear down a live PeerConnection.
    */
   async ensureSignalingAlive(reason = 'foreground'): Promise<void> {
     if (!this.roomId || !hasSupabaseConfig()) return;
     const signalState = this.signal?.state;
+    const forceWake = reason === 'call-click' || reason.startsWith('call');
     p2pAudit('ensureSignalingAlive', {
       reason,
       signalState,
       status: this.status,
       dcReady: this.isReady,
       isHost: this.isHost,
+      forceWake,
     });
 
     const signalOk = signalState === 'joined' || signalState === 'joining';
 
-    // Live DataChannel — do not tear down PC just to refresh signaling.
-    if (this.isReady) {
-      if (!signalOk) {
-        p2pAudit('ensureSignalingAlive: DC open but signal stale — defer rejoin');
-      }
-      return;
-    }
-
-    if (!signalOk) {
-      const roomId = this.roomId;
-      const isHost = this.isHost;
+    if (!signalOk || forceWake) {
       try {
-        await this.joinRoom(roomId, { isHost });
+        await this.subscribeRoomChannel(this.roomId);
       } catch (e) {
         console.warn('[paranoic] ensureSignalingAlive rejoin failed', e);
       }
-      return;
     }
+
+    if (this.isReady) return;
 
     if (this.isHost) {
       this.setStatus('waiting-answer');
@@ -1126,7 +1125,11 @@ export class P2PConnection {
    * Камера/мик открываются после Accept на другой стороне.
    */
   async startCall(): Promise<MediaStream | null> {
-    if (!this.pc || !this.isReady) throw new Error('Сначала подключитесь к близкому');
+    // Realtime `ctrl` backup can deliver call-invite even before DataChannel is open.
+    if (!this.signal && !this.pc && !this.isReady) {
+      this.setCallState('calling');
+      return null;
+    }
     if (this.callState === 'in-call' || this.callState === 'calling') {
       return this.localStream;
     }

@@ -32,6 +32,7 @@ export type TranslationDict = {
     error: string;
     now: string;
     thisDevice: string;
+    selfCall: string;
   };
   nav: {
     aria: string;

@@ -20,6 +20,7 @@ export const uaPatch: LocalePatch = {
     error: 'Щось пішло не так',
     now: 'Зараз',
     thisDevice: 'Цей пристрій',
+    selfCall: 'Не можна зателефонувати самому собі.',
   },
   nav: {
     aria: 'Головна навігація',

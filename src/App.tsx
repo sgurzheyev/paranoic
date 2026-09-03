@@ -473,7 +473,33 @@ export default function App() {
 
   const isSelfPeerTarget = useCallback((targetId: string | null | undefined): boolean => {
     if (!targetId) return false;
-    return targetId === identityRef.current.id;
+    const me = identityRef.current;
+    if (targetId === me.id) return true;
+    const mine = (me.username || '').replace(/^@/, '').trim().toLowerCase();
+    const other = targetId.replace(/^@/, '').trim().toLowerCase();
+    return Boolean(mine && other && mine === other);
+  }, []);
+
+  const notifyCannotCallSelf = useCallback(() => {
+    logCallInit('self-call-blocked');
+    pendingOutboundCallRef.current = null;
+    callUserIntentRef.current = false;
+    setCallLaunching(false);
+    setCallExpanded(false);
+    setError(t('common.selfCall'));
+  }, [t]);
+
+  const wakeCallSignaling = useCallback(async () => {
+    try {
+      await callInboxRef.current?.ensureAlive?.({ force: true });
+    } catch (e) {
+      console.warn('[paranoic] call inbox wake failed', e);
+    }
+    try {
+      await p2pRef.current?.ensureSignalingAlive?.('call-click');
+    } catch (e) {
+      console.warn('[paranoic] signaling wake failed', e);
+    }
   }, []);
 
   /** На home после «Назад» — не даём P2P status/call callbacks открыть call/guest UI. */
@@ -2494,10 +2520,8 @@ export default function App() {
     const me = identityRef.current;
     const targetUserId = contact.id;
 
-    if (targetUserId === me.id) {
-      setError(
-        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-      );
+    if (targetUserId === me.id || isSelfPeerTarget(targetUserId)) {
+      notifyCannotCallSelf();
       return;
     }
 
@@ -2534,6 +2558,10 @@ export default function App() {
 
   /** Call from contacts list — arm token, connect silently, never open chat on phone tap. */
   const handleContactsRowCall = (c: Contact, source = 'contacts-row-phone') => {
+    if (isSelfPeerTarget(c.id) || c.id === identityRef.current.id) {
+      notifyCannotCallSelf();
+      return;
+    }
     if (callMediaBlocked) {
       setError(MEDIA_ACCESS_DENIED_MESSAGE);
       return;
@@ -2547,15 +2575,16 @@ export default function App() {
 
     pendingOutboundCallRef.current = { source, token, targetId: c.id };
 
-    if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
-      pendingOutboundCallRef.current = null;
-      void startCall(source, token);
-      return;
-    }
-
-    void connectToLocalContact(c, { openChat: false }).then(() => {
+    void (async () => {
+      await wakeCallSignaling();
+      if (isLiveConnectedTo(c.id) && p2pRef.current?.isReady) {
+        pendingOutboundCallRef.current = null;
+        await startCall(source, token);
+        return;
+      }
+      await connectToLocalContact(c, { openChat: false });
       tryFlushPendingOutboundCall();
-    });
+    })();
   };
 
   const connectToUser = async (
@@ -2576,10 +2605,8 @@ export default function App() {
 
     const me = identityRef.current;
 
-    if (targetUserId === me.id) {
-      setError(
-        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-      );
+    if (targetUserId === me.id || isSelfPeerTarget(targetUserId)) {
+      notifyCannotCallSelf();
       return;
     }
 
@@ -2596,9 +2623,7 @@ export default function App() {
 
     if (!validation.ok) {
       if (validation.reason === 'self') {
-        setError(
-          'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-        );
+        notifyCannotCallSelf();
         return;
       }
       if (validation.reason === 'missing' && isLiveConnectedTo(targetUserId)) {
@@ -2618,10 +2643,8 @@ export default function App() {
       setContacts(await loadContacts());
     }
 
-    if (resolvedId === me.id) {
-      setError(
-        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-      );
+    if (resolvedId === me.id || isSelfPeerTarget(resolvedId)) {
+      notifyCannotCallSelf();
       return;
     }
 
@@ -2716,12 +2739,9 @@ export default function App() {
       setError('Ваш аккаунт заблокирован. Звонки недоступны.');
       return;
     }
-    const me = identityRef.current;
     const target = peerIdRef.current || guestPeerIdRef.current;
-    if (target && target === me.id) {
-      setError(
-        'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-      );
+    if (target && isSelfPeerTarget(target)) {
+      notifyCannotCallSelf();
       return;
     }
     const token = armOutboundCallFromButton('guest-direct-call', { fromHome: true, openChat: false });
@@ -2791,35 +2811,29 @@ export default function App() {
       const me = getOrCreateIdentity();
       identityRef.current = me;
       const target = peerIdRef.current || guestPeerIdRef.current;
-      if (target && target === me.id) {
+      if (target && isSelfPeerTarget(target)) {
         logCallInit(`${source}-startCall-self-abort`);
         disarmOutboundCall(`${source}-self-call`);
         callDialLockRef.current = false;
-        setCallExpanded(false);
-        setScreen('home');
-        setMainTab('chats');
-        setError(
-          'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-        );
+        notifyCannotCallSelf();
         clearCallSessionResidue();
         return;
       }
 
+      await wakeCallSignaling();
+
       const confirmOfflineOrBusy = async (callTarget: string): Promise<boolean> => {
         const check = await checkCalleeOnline(callTarget);
-        if (check.missingProfile) {
-          setError(PROFILE_STALE_MESSAGE);
-          return false;
-        }
-        if (!check.ok) {
+        if (!check.ok && check.peer.status === 'in_call') {
           setError('Пользователь сейчас разговаривает. Попробуйте позже.');
           return false;
         }
-        // Presence может кратко показывать offline — всё равно шлём offer через call inbox.
-        if (check.appearsOffline) {
-          console.log('[paranoic] callee appears offline — attempting call via inbox anyway', {
+        // Stale UI presence / delayed heartbeat must not abort a user-initiated call.
+        if (check.appearsOffline || check.missingProfile) {
+          console.log('[paranoic] callee presence stale — sending call-invite anyway', {
             callTarget,
             lastSeen: check.peer.lastSeen,
+            missingProfile: check.missingProfile,
           });
         }
         return true;
@@ -2835,73 +2849,19 @@ export default function App() {
         });
         if (!validation.ok) {
           if (validation.reason === 'self') {
-            setError(
-              'Вы пытаетесь позвонить на это же устройство / аккаунт. Откройте ссылку другого человека или войдите с другого профиля.'
-            );
+            disarmOutboundCall(`${source}-self-call`);
+            notifyCannotCallSelf();
             return;
           }
-          if (validation.reason === 'missing' && isLiveConnectedTo(target)) {
-            if (!(await confirmOfflineOrBusy(target))) {
-              clearCallSessionResidue();
-              return;
-            }
-            const callTarget = target;
-            saveCallResidue({ peerId: callTarget, guestPeerId: callTarget });
-            const callId = newCallId();
-            outboundCallIdRef.current = callId;
-            void upsertCallSession({
-              callId,
-              fromUserId: me.id,
-              toUserId: callTarget,
-              status: 'ringing',
-            });
-            void callInboxRef.current?.sendOffer(
-              callTarget,
-              {
-                id: me.id,
-                name: me.name,
-                username: me.username || '',
-                avatarUrl: me.avatarUrl || '',
-                color: me.color,
-              },
-              callId
-            );
-            void markParticipantsInCall(me.id, callTarget);
-            presenceRef.current?.setInCall(true);
-            if (!canPlaceOutboundCall(`${source}-before-p2p-missing-profile`, buttonToken)) {
-              clearCallSessionResidue();
-              return;
-            }
-            setCallExpanded(true);
-            if (outboundOpenChatRef.current) {
-              screenRef.current = 'chat';
-              setScreen('chat');
-            }
-            await invokeP2PStartCall(`${source}-missing-profile-connected`, buttonToken);
-            attachLocalVideo(null);
-            return;
-          }
-          const title = peerLabel || known?.name || target;
-          const shouldRemove = window.confirm(
-            `${PROFILE_STALE_MESSAGE}\n\nУдалить «${title}» из записной книжки?`
-          );
-          if (shouldRemove) {
-            const next = await removeContact(target);
-            setContacts(next);
-            setError(PROFILE_STALE_MESSAGE);
-          } else {
-            setError(PROFILE_STALE_MESSAGE);
-          }
-          clearCallSessionResidue();
-          return;
-        }
-        if (validation.idChanged) {
+          // Missing/stale remote profile must not abort a direct call intent —
+          // Realtime call_offer can still wake the peer.
+        } else if (validation.idChanged) {
           setContacts(await loadContacts());
           setGuestPeerId(validation.contact.id);
           guestPeerIdRef.current = validation.contact.id;
           await setActivePeer(validation.contact.id, validation.contact.name);
         }
-        const callTarget = validation.contact.id;
+        const callTarget = validation.ok ? validation.contact.id : target;
         if (!(await confirmOfflineOrBusy(callTarget))) {
           clearCallSessionResidue();
           return;
@@ -2915,7 +2875,7 @@ export default function App() {
           toUserId: callTarget,
           status: 'ringing',
         });
-        void callInboxRef.current?.sendOffer(
+        await callInboxRef.current?.sendOffer(
           callTarget,
           {
             id: me.id,
@@ -2997,6 +2957,8 @@ export default function App() {
     }
 
     pendingOutboundCallRef.current = { source, token: buttonToken, targetId: target };
+
+    await wakeCallSignaling();
 
     const dialGen = callDialGenerationRef.current + 1;
     callDialGenerationRef.current = dialGen;
@@ -3728,25 +3690,30 @@ export default function App() {
     !peerIsTrusted &&
     messages.some((m) => !m.mine);
 
+  const peerContacts = useMemo(
+    () => contacts.filter((c) => c.id !== identity.id),
+    [contacts, identity.id]
+  );
+
   const chatsOrdered = useMemo(() => {
-    return [...contacts].sort((a, b) => {
+    return [...peerContacts].sort((a, b) => {
       const ta = lastPreviews[a.id]?.createdAt ?? 0;
       const tb = lastPreviews[b.id]?.createdAt ?? 0;
       if (tb !== ta) return tb - ta;
       return a.name.localeCompare(b.name, 'ru');
     });
-  }, [contacts, lastPreviews]);
+  }, [peerContacts, lastPreviews]);
 
   const contactsFiltered = useMemo(() => {
     const q = contactsSearchQuery.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter(
+    if (!q) return peerContacts;
+    return peerContacts.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.id.toLowerCase().includes(q) ||
         (c.username || '').toLowerCase().includes(q)
     );
-  }, [contacts, contactsSearchQuery]);
+  }, [peerContacts, contactsSearchQuery]);
 
   const handleContactsSearchQuery = useCallback((query: string) => {
     setContactsSearchQuery(query);
@@ -3754,6 +3721,10 @@ export default function App() {
 
   const handleAddGlobalContact = useCallback(async (profile: RemoteProfile) => {
     if (contactsSearchAdding) return;
+    if (profile.id === identity.id || isSelfPeerTarget(profile.id)) {
+      notifyCannotCallSelf();
+      return;
+    }
     setContactsSearchAdding(profile.id);
     try {
       await upsertContact({
@@ -3768,7 +3739,7 @@ export default function App() {
     } finally {
       setContactsSearchAdding(null);
     }
-  }, [contactsSearchAdding]);
+  }, [contactsSearchAdding, identity.id, isSelfPeerTarget, notifyCannotCallSelf]);
 
   const goMainTab = (tab: LiquidNavTab) => {
     setMainTab(tab);
@@ -3897,6 +3868,10 @@ export default function App() {
               );
             }}
             onCallUser={(user) => {
+              if (isSelfPeerTarget(user.userId)) {
+                notifyCannotCallSelf();
+                return;
+              }
               if (isBannedRef.current) {
                 setError('Ваш аккаунт заблокирован. Звонки недоступны.');
                 setAppMode('paranoic');
@@ -3917,16 +3892,20 @@ export default function App() {
                 token,
                 targetId: user.userId,
               };
-              if (isLiveConnectedTo(user.userId) && p2pRef.current?.isReady) {
-                pendingOutboundCallRef.current = null;
-                void startCall('globe-map-call', token);
-                return;
-              }
-              void connectToUser(
-                user.userId,
-                user.isContact ? user.name : 'Незнакомец',
-                { openChat: false }
-              ).then(() => tryFlushPendingOutboundCall());
+              void (async () => {
+                await wakeCallSignaling();
+                if (isLiveConnectedTo(user.userId) && p2pRef.current?.isReady) {
+                  pendingOutboundCallRef.current = null;
+                  await startCall('globe-map-call', token);
+                  return;
+                }
+                await connectToUser(
+                  user.userId,
+                  user.isContact ? user.name : 'Незнакомец',
+                  { openChat: false }
+                );
+                tryFlushPendingOutboundCall();
+              })();
             }}
           />
         </div>
@@ -4143,14 +4122,18 @@ export default function App() {
                   <div className="tab-panel liquid-glass-card contacts-panel">
                     <div className="contacts-head">
                       <h2>{t('chats.title')}</h2>
-                      <span className="contacts-count">{contacts.length}</span>
+                      <span className="contacts-count">{peerContacts.length}</span>
                     </div>
                     <ChatSearchPanel
                       selfId={identity.id}
-                      contacts={contacts}
+                      contacts={peerContacts}
                       onResultsModeChange={setChatsSearchMode}
                       onOpenPeer={(peerId, peerName) => {
-                        const known = contacts.find((c) => c.id === peerId);
+                        if (isSelfPeerTarget(peerId)) {
+                          notifyCannotCallSelf();
+                          return;
+                        }
+                        const known = peerContacts.find((c) => c.id === peerId);
                         if (known) quickChatContact(known);
                         else void connectToUser(peerId, peerName, { openChat: true });
                       }}
@@ -4200,7 +4183,7 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {chatsSearchMode ? null : contacts.length === 0 ? (
+                    {chatsSearchMode ? null : peerContacts.length === 0 ? (
                       <p className="empty-contacts">
                         {t('chats.empty')} {t('chats.emptyHint')}
                       </p>
@@ -4235,14 +4218,18 @@ export default function App() {
                   <div className="tab-panel liquid-glass-card contacts-panel">
                     <div className="contacts-head">
                       <h2>{t('contacts.title')}</h2>
-                      <span className="contacts-count">{contacts.length}</span>
+                      <span className="contacts-count">{peerContacts.length}</span>
                     </div>
                     <ContactsSearchPanel
                       selfId={identity.id}
-                      contacts={contacts}
+                      contacts={peerContacts}
                       onQueryChange={handleContactsSearchQuery}
                       addingId={contactsSearchAdding}
                       onStartChat={(profile) => {
+                        if (isSelfPeerTarget(profile.id)) {
+                          notifyCannotCallSelf();
+                          return;
+                        }
                         void connectToUser(profile.id, profile.name, { openChat: true });
                       }}
                       onAddContact={(profile) => handleAddGlobalContact(profile)}
@@ -4252,7 +4239,7 @@ export default function App() {
                         {t('contacts.hint')}
                       </p>
                     )}
-                    {contacts.length === 0 ? (
+                    {peerContacts.length === 0 ? (
                       <p className="empty-contacts">
                         {t('contacts.empty')}
                       </p>
@@ -4345,11 +4332,15 @@ export default function App() {
                 <ChatSearchPanel
                   compact
                   selfId={identity.id}
-                  contacts={contacts}
+                  contacts={peerContacts}
                   onResultsModeChange={setSidebarSearchMode}
                   onOpenPeer={(peerId, peerName) => {
                     setMessengerSidebarOpen(false);
-                    const known = contacts.find((c) => c.id === peerId);
+                    if (isSelfPeerTarget(peerId)) {
+                      notifyCannotCallSelf();
+                      return;
+                    }
+                    const known = peerContacts.find((c) => c.id === peerId);
                     if (known) quickChatContact(known);
                     else void connectToUser(peerId, peerName, { openChat: true });
                   }}
@@ -4357,10 +4348,10 @@ export default function App() {
               </div>
               {sidebarSearchMode ? null : (
               <ul className="messenger-contacts">
-                {contacts.length === 0 ? (
+                {peerContacts.length === 0 ? (
                   <li className="empty-contacts">{t('chats.noContacts')}</li>
                 ) : (
-                  contacts.map((c) => {
+                  peerContacts.map((c) => {
                     const online = onlineIds.has(c.id);
                     const active = peerId === c.id;
                     return (
