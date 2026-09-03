@@ -24,6 +24,7 @@ import ChatSearchPanel from './ChatSearchPanel';
 import ContactsSearchPanel from './ContactsSearchPanel';
 import CreateGroupModal from './CreateGroupModal';
 import GroupListRow from './GroupListRow';
+import GroupManagementModal from './GroupManagementModal';
 import SettingsPanel from './SettingsPanel';
 import ProfileHome from './ProfileHome';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -309,6 +310,7 @@ export default function App() {
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [createGroupBusy, setCreateGroupBusy] = useState(false);
+  const [groupMgmtOpen, setGroupMgmtOpen] = useState(false);
   const [contactsSearchQuery, setContactsSearchQuery] = useState('');
   const [contactsSearchAdding, setContactsSearchAdding] = useState<string | null>(null);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
@@ -2857,6 +2859,9 @@ export default function App() {
       setScreen('home');
       setMainTab('chats');
       setMessengerSidebarOpen(false);
+      setGroupMgmtOpen(false);
+      activeGroupIdRef.current = null;
+      setActiveGroupId(null);
       window.setTimeout(() => {
         suppressChatAutoOpenRef.current = false;
         setUiNavLock(false);
@@ -2864,6 +2869,24 @@ export default function App() {
     },
     [abortActiveCallUi]
   );
+
+  /**
+   * Called when the user leaves or deletes a group from within the chat.
+   * Closes the management modal, resets group state, and returns home.
+   */
+  const handleGroupLeft = useCallback(() => {
+    setGroupMgmtOpen(false);
+    activeGroupIdRef.current = null;
+    setActiveGroupId(null);
+    setSecretKey(null);
+    secretKeyRef.current = null;
+    conversationIdRef.current = null;
+    setMessages([]);
+    setScreen('home');
+    setMainTab('chats');
+    void refreshGroups();
+    void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
+  }, [refreshGroups]);
 
   /**
    * Явный Hang Up / «Разорвать связь»: закрываем PC и возвращаемся в свой инбокс.
@@ -4865,7 +4888,11 @@ export default function App() {
               onBack={handleChatBack}
               onToggleSidebar={() => setMessengerSidebarOpen((v) => !v)}
               onOpenProfile={() => {
-                if (activePeerId) setPeerProfileOpen(true);
+                if (activeGroup) {
+                  setGroupMgmtOpen(true);
+                } else if (activePeerId) {
+                  setPeerProfileOpen(true);
+                }
               }}
               onCall={handleChatHeaderCall}
               onAttach={() => fileInputRef.current?.click()}
@@ -5192,6 +5219,21 @@ export default function App() {
         onClose={() => setCreateGroupOpen(false)}
         onCreate={handleCreateGroup}
       />
+
+      {activeGroup && (
+        <GroupManagementModal
+          open={groupMgmtOpen}
+          group={activeGroup}
+          selfId={identity.id}
+          contacts={peerContacts}
+          onClose={() => setGroupMgmtOpen(false)}
+          onRefresh={async () => {
+            await refreshGroups();
+            void loadLastMessagePreviews(identity.id).then(setLastPreviews);
+          }}
+          onLeft={handleGroupLeft}
+        />
+      )}
     </div>
 
       {!incomingRing && !selfCallBlocked && (

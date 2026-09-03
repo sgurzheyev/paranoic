@@ -110,7 +110,7 @@ export default function ChatHeader({
         className="chat-peer chat-peer--btn"
         onClick={(e) => {
           e.stopPropagation();
-          if (!isGroup) onOpenProfile(e);
+          onOpenProfile(e);
         }}
         disabled={isGroup ? false : !activePeerId}
         aria-label={isGroup ? peerLabel : `Профиль: ${peerLabel}`}

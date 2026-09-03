@@ -293,6 +293,24 @@ export type TranslationDict = {
     openAria: string;
     createFailed: string;
     empty: string;
+    mgmt: {
+      title: string;
+      addMembers: string;
+      addAction: string;
+      noNewContacts: string;
+      removeMember: string;
+      leaveGroup: string;
+      leavePromoteFirst: string;
+      leaveConfirm: string;
+      leaveConfirmAdmin: string;
+      leaveAction: string;
+      deleteGroup: string;
+      deleteConfirm: string;
+      deleteAction: string;
+      admin: string;
+      tapToRename: string;
+      actionFailed: string;
+    };
   };
   profileModal: {
     title: string;

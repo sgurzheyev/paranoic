@@ -329,3 +329,122 @@ export async function unsubscribeAllGroupChannels(): Promise<void> {
   liveGroupChannels.clear();
   await Promise.all(channels.map((ch) => sb.removeChannel(ch).catch(() => undefined)));
 }
+
+// ─── Mutating group-management API ───────────────────────────────────────────
+
+/**
+ * Add new members to an existing group.
+ * Caller must be admin or creator. Enforces MAX_GROUP_MEMBERS.
+ */
+export async function addGroupMembers(opts: {
+  groupId: string;
+  memberIds: string[];
+  existingCount: number;
+}): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const { groupId, memberIds, existingCount } = opts;
+  const uid = await requireUid();
+  const unique = [...new Set(memberIds.filter((id) => id && id !== uid))];
+  if (unique.length === 0) return;
+  if (existingCount + unique.length > MAX_GROUP_MEMBERS) {
+    throw new Error(`В группе максимум ${MAX_GROUP_MEMBERS} участников`);
+  }
+  const sb = getSupabase();
+  const rows = unique.map((id) => ({
+    group_id: groupId,
+    user_id: id,
+    role: 'member' as const,
+  }));
+  const { error } = await sb.from('group_members').insert(rows);
+  if (error) throw new Error(error.message || 'Не удалось добавить участников');
+}
+
+/**
+ * Admin removes another member (cannot remove themselves — use leaveGroup).
+ */
+export async function removeGroupMember(opts: {
+  groupId: string;
+  userId: string;
+}): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const sb = getSupabase();
+  const { error } = await sb
+    .from('group_members')
+    .delete()
+    .eq('group_id', opts.groupId)
+    .eq('user_id', opts.userId);
+  if (error) throw new Error(error.message || 'Не удалось удалить участника');
+}
+
+/**
+ * Current user leaves the group. If they are the last admin,
+ * promotes the first non-admin member to admin automatically.
+ */
+export async function leaveGroup(groupId: string): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const uid = await requireUid();
+  const sb = getSupabase();
+
+  // Promote another member first if caller is the last admin.
+  const { data: admins } = await sb
+    .from('group_members')
+    .select('user_id')
+    .eq('group_id', groupId)
+    .eq('role', 'admin');
+  const adminIds = (admins ?? []).map((r) => r.user_id as string);
+  if (adminIds.length === 1 && adminIds[0] === uid) {
+    // Find first non-admin member to promote.
+    const { data: others } = await sb
+      .from('group_members')
+      .select('user_id')
+      .eq('group_id', groupId)
+      .neq('user_id', uid)
+      .limit(1);
+    const next = others?.[0]?.user_id as string | undefined;
+    if (next) {
+      await sb
+        .from('group_members')
+        .update({ role: 'admin' })
+        .eq('group_id', groupId)
+        .eq('user_id', next);
+    }
+  }
+
+  const { error } = await sb
+    .from('group_members')
+    .delete()
+    .eq('group_id', groupId)
+    .eq('user_id', uid);
+  if (error) throw new Error(error.message || 'Не удалось покинуть группу');
+}
+
+/**
+ * Delete the entire group (admin/creator only).
+ * Cascades to group_members and clears the Realtime subscription.
+ */
+export async function deleteGroup(groupId: string): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const ch = liveGroupChannels.get(groupId);
+  if (ch) {
+    liveGroupChannels.delete(groupId);
+    try { await getSupabase().removeChannel(ch); } catch { /* */ }
+  }
+  const sb = getSupabase();
+  const { error } = await sb.from('groups').delete().eq('id', groupId);
+  if (error) throw new Error(error.message || 'Не удалось удалить группу');
+}
+
+/**
+ * Rename a group (admin only).
+ */
+export async function renameGroup(groupId: string, name: string): Promise<void> {
+  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Введите название группы');
+  const sb = getSupabase();
+  const { error } = await sb
+    .from('groups')
+    .update({ name: trimmed })
+    .eq('id', groupId);
+  if (error) throw new Error(error.message || 'Не удалось переименовать группу');
+}
