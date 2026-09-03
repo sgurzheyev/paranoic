@@ -243,10 +243,56 @@ export async function createGroup(opts: {
 
 const liveGroupChannels = new Map<string, RealtimeChannel>();
 
+const GROUP_CALL_EVENT_NAMES = [
+  'group-call-invite',
+  'group-call-join',
+  'group-call-leave',
+  'group-call-end',
+  'group-call-offer',
+  'group-call-answer',
+  'group-call-ice',
+] as const;
+
+/** Broadcast an arbitrary Realtime event on the live group channel (or a short-lived one). */
+export async function broadcastGroupEvent(
+  groupId: string,
+  event: string,
+  payload: unknown
+): Promise<void> {
+  if (!hasSupabaseConfig() || !groupId) return;
+  const live = liveGroupChannels.get(groupId);
+  if (live) {
+    await live.send({ type: 'broadcast', event, payload });
+    return;
+  }
+  const sb = getSupabase();
+  const ch = sb.channel(channelName(groupId), {
+    config: { broadcast: { self: false } },
+  });
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('group channel timeout')), 8_000);
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        window.clearTimeout(timer);
+        resolve();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        window.clearTimeout(timer);
+        reject(new Error(`group channel ${status}`));
+      }
+    });
+  });
+  try {
+    await ch.send({ type: 'broadcast', event, payload });
+  } finally {
+    void sb.removeChannel(ch);
+  }
+}
+
 /** Subscribe to live group message broadcasts (one channel per group). */
 export async function subscribeGroupChannel(
   groupId: string,
-  onMessage: (payload: GroupRealtimePayload) => void
+  onMessage: (payload: GroupRealtimePayload) => void,
+  onCallEvent?: (event: string, payload: unknown) => void
 ): Promise<RealtimeChannel | null> {
   if (!hasSupabaseConfig() || !groupId) return null;
   let session;
@@ -272,6 +318,13 @@ export async function subscribeGroupChannel(
     if (!msg || msg.type !== 'group_msg' || msg.groupId !== groupId) return;
     onMessage(msg);
   });
+  if (onCallEvent) {
+    for (const event of GROUP_CALL_EVENT_NAMES) {
+      ch.on('broadcast', { event }, ({ payload }) => {
+        onCallEvent(event, payload);
+      });
+    }
+  }
   void ch.subscribe();
   liveGroupChannels.set(groupId, ch);
   return ch;

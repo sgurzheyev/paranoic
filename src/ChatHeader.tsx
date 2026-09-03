@@ -63,6 +63,9 @@ type ChatHeaderProps = {
   onToggleMute?: () => void;
   onBlockUser?: () => void;
   onClearHistory?: () => void;
+  /** Group mesh call starters. */
+  onGroupAudioCall?: () => void;
+  onGroupVideoCall?: () => void;
 };
 
 type DropdownState = 'idle' | 'open' | 'confirm-clear';
@@ -101,6 +104,8 @@ export default function ChatHeader({
   onToggleMute,
   onBlockUser,
   onClearHistory,
+  onGroupAudioCall,
+  onGroupVideoCall,
 }: ChatHeaderProps) {
   const { t } = useLanguage();
   const [ddState, setDdState] = useState<DropdownState>('idle');
@@ -123,7 +128,9 @@ export default function ChatHeader({
 
   const hasMenu = Boolean(
     !isGroup && (onEditContact || onToggleMute || onBlockUser || onClearHistory)
-  ) || Boolean(isGroup && (onToggleMute || onClearHistory));
+  ) || Boolean(
+    isGroup && (onGroupAudioCall || onGroupVideoCall || onToggleMute || onClearHistory)
+  );
 
   return (
     <div className={`chat-top${isGroup ? ' chat-top--group' : ''}`}>
@@ -232,7 +239,41 @@ export default function ChatHeader({
         >
           <Phone size={17} />
         </button>
-      ) : null}
+      ) : (
+        <>
+          <button
+            type="button"
+            className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}${callLive ? ' is-call-live' : ''}`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (callLive) return;
+              onGroupAudioCall?.();
+            }}
+            aria-label={callLive ? returnToCallLabel : t('chatMenu.audioCall')}
+            title={callMediaBlocked ? callMediaBlockedMessage : t('chatMenu.audioCall')}
+            disabled={!onGroupAudioCall && !callLive}
+            aria-disabled={callMediaBlocked || (!onGroupAudioCall && !callLive)}
+          >
+            <Phone size={17} />
+          </button>
+          <button
+            type="button"
+            className={`icon-btn chat-call-btn${callMediaBlocked ? ' is-media-blocked' : ''}`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onGroupVideoCall?.();
+            }}
+            aria-label={t('chatMenu.videoCall')}
+            title={callMediaBlocked ? callMediaBlockedMessage : t('chatMenu.videoCall')}
+            disabled={!onGroupVideoCall || callLive}
+            aria-disabled={callMediaBlocked || !onGroupVideoCall || callLive}
+          >
+            <Video size={17} />
+          </button>
+        </>
+      )}
 
       <button
         type="button"
@@ -307,8 +348,19 @@ export default function ChatHeader({
                       {t('chatMenu.audioCall')}
                     </button>
                   )}
+                  {isGroup && onGroupAudioCall && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="chat-dropdown-item"
+                      onClick={() => { setDdState('idle'); onGroupAudioCall(); }}
+                    >
+                      <PhoneCall size={15} />
+                      {t('chatMenu.audioCall')}
+                    </button>
+                  )}
 
-                  {/* Video call — placeholder (wire video in App.tsx) */}
+                  {/* Video call */}
                   {!isGroup && (
                     <button
                       type="button"
@@ -319,6 +371,17 @@ export default function ChatHeader({
                         setDdState('idle');
                         onCall(e as unknown as React.MouseEvent<HTMLButtonElement>);
                       }}
+                    >
+                      <Video size={15} />
+                      {t('chatMenu.videoCall')}
+                    </button>
+                  )}
+                  {isGroup && onGroupVideoCall && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="chat-dropdown-item"
+                      onClick={() => { setDdState('idle'); onGroupVideoCall(); }}
                     >
                       <Video size={15} />
                       {t('chatMenu.videoCall')}

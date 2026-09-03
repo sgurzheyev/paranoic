@@ -1,0 +1,100 @@
+.group-call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 9, 12, 0.94);
+  padding: max(12px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+}
+
+.group-call-head {
+  text-align: center;
+  padding: 8px 8px 12px;
+}
+
+.group-call-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #eef1f6;
+}
+
+.group-call-sub {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: #7a8494;
+}
+
+.group-call-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.group-call-tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #16181e;
+  min-height: 140px;
+}
+
+.group-call-tile__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0c0d12;
+}
+
+.group-call-tile__fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #93c5fd;
+  pointer-events: none;
+}
+
+.group-call-tile__name {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 0.75rem;
+  color: #fff;
+}
+
+.group-call-controls {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding-top: 14px;
+}
+
+.group-call-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #eef1f6;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.group-call-btn.is-off {
+  background: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.group-call-btn.hangup {
+  background: #dc2626;
+  color: #fff;
+}

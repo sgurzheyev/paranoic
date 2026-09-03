@@ -7,6 +7,8 @@ import { MEDIA_ACCESS_DENIED_MESSAGE } from './mediaPermissions';
 type IncomingCallModalProps = {
   caller: CallerInfo;
   mediaBlocked?: boolean;
+  /** Shown for group mesh invites. */
+  groupName?: string;
   onAccept: () => void;
   onReject: () => void;
 };
@@ -15,13 +17,15 @@ type IncomingCallModalProps = {
 export default function IncomingCallModal({
   caller,
   mediaBlocked = false,
+  groupName,
   onAccept,
   onReject,
 }: IncomingCallModalProps) {
   const { t } = useLanguage();
-  const label = callerDisplayName(caller);
-  const sub =
-    caller.username && caller.name && caller.name !== 'Я'
+  const label = groupName || callerDisplayName(caller);
+  const sub = groupName
+    ? `${t('groups.call.incoming')} · ${callerDisplayName(caller)}`
+    : caller.username && caller.name && caller.name !== 'Я'
       ? caller.name
       : caller.username
         ? 'Paranoic'
@@ -32,11 +36,13 @@ export default function IncomingCallModal({
       className="incoming-call-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={t('call.incoming')}
+      aria-label={groupName ? t('groups.call.incoming') : t('call.incoming')}
     >
       <div className="incoming-call-modal-glow" aria-hidden />
       <div className="incoming-call-modal-card">
-        <p className="incoming-call-modal-eyebrow">{t('call.incoming')}</p>
+        <p className="incoming-call-modal-eyebrow">
+          {groupName ? t('groups.call.incoming') : t('call.incoming')}
+        </p>
         <div className="incoming-call-modal-avatar-wrap">
           <span className="incoming-call-modal-ring" aria-hidden />
           <Avatar

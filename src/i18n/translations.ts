@@ -314,6 +314,12 @@ const en: TranslationDict = {
       tapToRename: 'Tap to rename',
       actionFailed: 'Action failed',
     },
+    call: {
+      incoming: 'Incoming group call',
+      inCall: 'Group call',
+      startFailed: 'Could not start group call',
+      busy: 'Finish the current call first',
+    },
   },
   localContact: {
     editTitle: 'Edit Contact',
@@ -688,6 +694,12 @@ const ru: TranslationDict = {
       tapToRename: 'Нажмите для переименования',
       actionFailed: 'Действие не удалось',
     },
+    call: {
+      incoming: 'Входящий групповой звонок',
+      inCall: 'Групповой звонок',
+      startFailed: 'Не удалось начать групповой звонок',
+      busy: 'Сначала завершите текущий звонок',
+    },
   },
   localContact: {
     editTitle: 'Редактировать контакт',
@@ -1061,6 +1073,12 @@ const pl: TranslationDict = {
       admin: 'Admin',
       tapToRename: 'Naciśnij, aby zmienić nazwę',
       actionFailed: 'Akcja nie powiodła się',
+    },
+    call: {
+      incoming: 'Przychodzące połączenie grupowe',
+      inCall: 'Połączenie grupowe',
+      startFailed: 'Nie udało się rozpocząć połączenia grupowego',
+      busy: 'Najpierw zakończ bieżące połączenie',
     },
   },
   localContact: {

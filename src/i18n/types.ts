@@ -311,6 +311,12 @@ export type TranslationDict = {
       tapToRename: string;
       actionFailed: string;
     };
+    call: {
+      incoming: string;
+      inCall: string;
+      startFailed: string;
+      busy: string;
+    };
   };
   localContact: {
     editTitle: string;

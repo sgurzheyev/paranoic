@@ -25,6 +25,8 @@ import ContactsSearchPanel from './ContactsSearchPanel';
 import CreateGroupModal from './CreateGroupModal';
 import GroupListRow from './GroupListRow';
 import GroupManagementModal from './GroupManagementModal';
+import GroupCallGrid from './GroupCallGrid';
+import { groupCallMesh, type GroupCallSignal, type RemoteGroupStream } from './groupCall';
 import SettingsPanel from './SettingsPanel';
 import ProfileHome from './ProfileHome';
 import GlobeLobby, { type MapPerson } from './GlobeLobby';
@@ -357,6 +359,10 @@ export default function App() {
     callId: string;
     from: CallerInfo;
   } | null>(null);
+  const [incomingGroupCall, setIncomingGroupCall] = useState<GroupCallSignal | null>(null);
+  const [groupCallLive, setGroupCallLive] = useState(false);
+  const [groupCallRemotes, setGroupCallRemotes] = useState<RemoteGroupStream[]>([]);
+  const [groupCallLocalStream, setGroupCallLocalStream] = useState<MediaStream | null>(null);
   /** PiP свёрнут / развёрнут на весь экран. */
   const [callExpanded, setCallExpanded] = useState(false);
   /** Armed outbound call — keeps Call UI up while DC connects / media invite is in flight. */
@@ -408,6 +414,9 @@ export default function App() {
   const activeGroupIdRef = useRef<string | null>(null);
   const groupsRef = useRef<GroupSummary[]>([]);
   const ingestGroupRealtimeRef = useRef<(payload: GroupRealtimePayload) => void>(
+    () => undefined
+  );
+  const ingestGroupCallRef = useRef<(event: string, payload: unknown) => void>(
     () => undefined
   );
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -1175,6 +1184,36 @@ export default function App() {
   ingestGroupRealtimeRef.current = (payload) => {
     void ingestGroupRealtime(payload);
   };
+
+  ingestGroupCallRef.current = (event, payload) => {
+    void groupCallMesh.handleSignal(event, payload);
+  };
+
+  useEffect(() => {
+    groupCallMesh.setHandlers({
+      onLocalStream: (stream) => setGroupCallLocalStream(stream),
+      onRemotes: (remotes) => setGroupCallRemotes(remotes),
+      onIncoming: (signal) => {
+        if (groupCallMesh.isActive()) return;
+        setIncomingGroupCall(signal);
+        startRingtone();
+        const gName =
+          groupsRef.current.find((g) => g.id === signal.groupId)?.name || 'Group';
+        notifyIfHidden(gName, {
+          body: `${signal.fromName || 'Member'}`,
+          tag: 'paranoic-group-call',
+        });
+      },
+      onEnded: () => {
+        stopRingtone();
+        setGroupCallLive(false);
+        setIncomingGroupCall(null);
+        setGroupCallRemotes([]);
+        setGroupCallLocalStream(null);
+      },
+      onError: (message) => setError(message),
+    });
+  }, []);
 
   useEffect(() => {
     const onOnline = () => {
@@ -2788,6 +2827,8 @@ export default function App() {
         if (!g?.id) continue;
         await subscribeGroupChannel(g.id, (payload) => {
           ingestGroupRealtimeRef.current(payload);
+        }, (event, payload) => {
+          ingestGroupCallRef.current(event, payload);
         });
       }
     })();
@@ -2962,6 +3003,79 @@ export default function App() {
     setMessages([]);
     void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
   }, [guestPeerId]);
+
+  const startGroupCall = useCallback(
+    async (video: boolean) => {
+      const group = groupsRef.current.find((g) => g.id === activeGroupIdRef.current);
+      if (!group) return;
+      if (
+        groupCallMesh.isActive() ||
+        callState === 'calling' ||
+        callState === 'in-call' ||
+        incomingRing
+      ) {
+        setError(t('groups.call.busy'));
+        return;
+      }
+      if (callMediaBlocked) {
+        setError(MEDIA_ACCESS_DENIED_MESSAGE);
+        return;
+      }
+      try {
+        await groupCallMesh.start({
+          selfId: identityRef.current.id,
+          selfName: identityRef.current.name,
+          groupId: group.id,
+          video,
+          memberCount: group.memberCount || group.members?.length || 1,
+        });
+        setGroupCallLive(true);
+        setIncomingGroupCall(null);
+        setMicMuted(false);
+        setCameraOff(!video);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t('groups.call.startFailed'));
+      }
+    },
+    [callMediaBlocked, callState, incomingRing, t]
+  );
+
+  const acceptIncomingGroupCall = useCallback(async () => {
+    const invite = incomingGroupCall;
+    if (!invite) return;
+    if (callMediaBlocked) {
+      setError(MEDIA_ACCESS_DENIED_MESSAGE);
+      return;
+    }
+    stopRingtone();
+    try {
+      await groupCallMesh.accept({
+        selfId: identityRef.current.id,
+        selfName: identityRef.current.name,
+        groupId: invite.groupId,
+        callId: invite.callId,
+        video: invite.video !== false,
+        hostId: invite.fromUserId,
+        hostName: invite.fromName,
+      });
+      setIncomingGroupCall(null);
+      setGroupCallLive(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('groups.call.startFailed'));
+    }
+  }, [callMediaBlocked, incomingGroupCall, t]);
+
+  const declineIncomingGroupCall = useCallback(() => {
+    stopRingtone();
+    setIncomingGroupCall(null);
+  }, []);
+
+  const hangUpGroupCall = useCallback(() => {
+    void groupCallMesh.hangUp(false);
+    setGroupCallLive(false);
+    setGroupCallRemotes([]);
+    setGroupCallLocalStream(null);
+  }, []);
 
   const handleGroupLeft = useCallback(() => {
     setGroupMgmtOpen(false);
@@ -4099,7 +4213,7 @@ export default function App() {
   }, [authGate]);
 
   const connected = p2pStatus === 'connected';
-  const callLive = callState === 'calling' || callState === 'in-call' || callLaunching;
+  const callLive = callState === 'calling' || callState === 'in-call' || callLaunching || groupCallLive;
   const activePeerId = peerId || guestPeerId;
   const selfCallBlocked = isSelfPeerTarget(activePeerId);
   const showCallBanner =
@@ -4123,7 +4237,9 @@ export default function App() {
     screen !== 'chat' &&
     !callUiOpen &&
     !guestPeerId &&
-    !incomingRing;
+    !incomingRing &&
+    !incomingGroupCall &&
+    !groupCallLive;
 
   const peerIsTrusted = Boolean(
     activePeerId &&
@@ -4447,6 +4563,26 @@ export default function App() {
                 void acceptMediaCall();
               }}
               onReject={() => void declineMediaCall()}
+            />
+          )}
+          {incomingGroupCall && (
+            <IncomingCallModal
+              caller={{
+                id: incomingGroupCall.fromUserId,
+                name: incomingGroupCall.fromName || incomingGroupCall.fromUserId.slice(0, 8),
+                username: '',
+                avatarUrl: '',
+                color: '#60a5fa',
+              }}
+              groupName={
+                groups.find((g) => g.id === incomingGroupCall.groupId)?.name || t('groups.call.inCall')
+              }
+              mediaBlocked={callMediaBlocked}
+              onAccept={() => {
+                setAppMode('paranoic');
+                void acceptIncomingGroupCall();
+              }}
+              onReject={() => declineIncomingGroupCall()}
             />
           )}
         </div>
@@ -5010,6 +5146,8 @@ export default function App() {
               onToggleMute={() => void handleToggleMute()}
               onBlockUser={!activeGroup && activePeerId ? () => void handleBlockPeer() : undefined}
               onClearHistory={() => void handleClearHistory()}
+              onGroupAudioCall={activeGroup ? () => void startGroupCall(false) : undefined}
+              onGroupVideoCall={activeGroup ? () => void startGroupCall(true) : undefined}
             />
 
             {showTrustBanner && (
@@ -5314,6 +5452,23 @@ export default function App() {
           onReject={() => void declineMediaCall()}
         />
       )}
+      {incomingGroupCall && (
+        <IncomingCallModal
+          caller={{
+            id: incomingGroupCall.fromUserId,
+            name: incomingGroupCall.fromName || incomingGroupCall.fromUserId.slice(0, 8),
+            username: '',
+            avatarUrl: '',
+            color: '#60a5fa',
+          }}
+          groupName={
+            groups.find((g) => g.id === incomingGroupCall.groupId)?.name || t('groups.call.inCall')
+          }
+          mediaBlocked={callMediaBlocked}
+          onAccept={() => void acceptIncomingGroupCall()}
+          onReject={() => declineIncomingGroupCall()}
+        />
+      )}
 
       {showBottomNav && (
         <LiquidNavigationBar
@@ -5380,7 +5535,29 @@ export default function App() {
         />
       )}
 
-      {!incomingRing && !selfCallBlocked && (
+      {groupCallLive && (
+        <GroupCallGrid
+          groupName={
+            groups.find((g) => g.id === groupCallMesh.getGroupId())?.name ||
+            t('groups.call.inCall')
+          }
+          localStream={groupCallLocalStream}
+          remotes={groupCallRemotes}
+          micMuted={micMuted}
+          cameraOff={cameraOff}
+          onToggleMute={() => {
+            const muted = groupCallMesh.toggleMic();
+            setMicMuted(muted);
+          }}
+          onToggleCamera={() => {
+            const off = groupCallMesh.toggleCamera();
+            setCameraOff(off);
+          }}
+          onHangUp={hangUpGroupCall}
+        />
+      )}
+
+      {!incomingRing && !incomingGroupCall && !selfCallBlocked && !groupCallLive && (
       <CallOverlay
         callState={
           callState === 'ringing'
