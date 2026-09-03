@@ -1368,6 +1368,18 @@ svg.lucide {
   color: #fecaca;
 }
 
+.user-actions-btn.delete {
+  width: 100%;
+  margin-top: 4px;
+  background: transparent;
+  border-color: rgb(239, 68, 68);
+  color: rgb(239, 68, 68);
+}
+
+.user-actions-btn.delete:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .user-actions-btn.report,
 .user-actions-btn.report-submit {
   background: rgba(251, 191, 36, 0.1);

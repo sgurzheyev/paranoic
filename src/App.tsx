@@ -49,6 +49,7 @@ import {
   isTrusted,
   loadBlockedIds,
   loadTrustedIds,
+  untrustUser,
 } from './trust';
 import { blockUserSafety } from './userSafety';
 import {
@@ -3658,6 +3659,33 @@ export default function App() {
     disconnect();
   };
 
+  /** Remove peer from address book + clear active chat selection. */
+  const handleDeleteContact = async () => {
+    const id = activePeerId;
+    if (!id) return;
+    const label = peerLabel || 'Контакт';
+
+    try {
+      // Clear trusted relation in local + Supabase user_peer_relations.
+      await untrustUser(id);
+      const next = await removeContact(id, { force: true });
+      setContacts(next);
+      setTrustedIds(loadTrustedIds());
+      setBlockedIds(loadBlockedIds());
+      setPeerProfileOpen(false);
+      setScreen('home');
+      setMainTab('contacts');
+      setMessengerSidebarOpen(false);
+      setCallExpanded(false);
+      setError(t('safety.deleteSuccess', { name: label }));
+      // Leave peer session / clear selected contact (same as block cleanup).
+      disconnect();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('safety.deleteFailed'));
+      throw e;
+    }
+  };
+
   const shellStyle =
     appMode === 'paranoic'
       ? ({ background: 'var(--app-shell-bg, #0a0b0e)' } as React.CSSProperties)
@@ -3863,6 +3891,7 @@ export default function App() {
             setPeerProfileOpen(false);
             disconnect();
           }}
+          onDeleteContact={() => handleDeleteContact()}
           onClose={() => setPeerProfileOpen(false)}
         />
       )}

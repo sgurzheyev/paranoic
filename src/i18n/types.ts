@@ -248,6 +248,10 @@ export type TranslationDict = {
     reportSubmit: string;
     reportSuccess: string;
     reportFailed: string;
+    deleteContact: string;
+    deleteConfirm: string;
+    deleteSuccess: string;
+    deleteFailed: string;
     reason: {
       spam: string;
       harassment: string;

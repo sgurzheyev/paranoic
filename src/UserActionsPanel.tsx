@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Ban, Flag, Loader2 } from 'lucide-react';
+import { Ban, Flag, Loader2, Trash2 } from 'lucide-react';
 import { useLanguage } from './i18n';
 import {
   REPORT_REASON_KEYS,
@@ -15,6 +15,8 @@ type UserActionsPanelProps = {
   isBlocked?: boolean;
   /** After a successful block (parent refreshes IDs, disconnects, closes modal). */
   onBlocked?: () => void;
+  /** Delete from address book + clear peer session (parent handles storage/nav). */
+  onDeleteContact?: () => void | Promise<void>;
 };
 
 /**
@@ -25,9 +27,10 @@ export default function UserActionsPanel({
   peerName,
   isBlocked = false,
   onBlocked,
+  onDeleteContact,
 }: UserActionsPanelProps) {
   const { t } = useLanguage();
-  const [busy, setBusy] = useState<'block' | 'report' | null>(null);
+  const [busy, setBusy] = useState<'block' | 'report' | 'delete' | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reasonKey, setReasonKey] = useState<ReportReasonKey>('spam');
   const [details, setDetails] = useState('');
@@ -78,6 +81,22 @@ export default function UserActionsPanel({
     }
   };
 
+  const handleDeleteContact = async () => {
+    if (busy || !onDeleteContact) return;
+    if (!window.confirm(t('safety.deleteConfirm'))) return;
+
+    setBusy('delete');
+    setStatus(null);
+    try {
+      await onDeleteContact();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : t('safety.deleteFailed');
+      setStatus({ kind: 'err', text: message || t('safety.deleteFailed') });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <section className="user-actions-panel peer-profile-section" aria-label={t('safety.sectionAria')}>
       <p className="peer-profile-label">{t('safety.sectionTitle')}</p>
@@ -105,6 +124,18 @@ export default function UserActionsPanel({
           {t('safety.reportUser')}
         </button>
       </div>
+
+      {onDeleteContact ? (
+        <button
+          type="button"
+          className="user-actions-btn delete text-red-500 border border-red-500 hover:bg-red-500/10"
+          disabled={busy === 'delete'}
+          onClick={() => void handleDeleteContact()}
+        >
+          {busy === 'delete' ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
+          {t('safety.deleteContact')}
+        </button>
+      ) : null}
 
       {reportOpen ? (
         <div className="user-actions-report">

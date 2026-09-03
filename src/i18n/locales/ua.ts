@@ -243,6 +243,10 @@ export const uaPatch: LocalePatch = {
     reportSubmit: 'Надіслати скаргу',
     reportSuccess: 'Скаргу надіслано. Дякуємо.',
     reportFailed: 'Не вдалося надіслати скаргу.',
+    deleteContact: 'Видалити контакт',
+    deleteConfirm: 'Ви впевнені, що хочете видалити цей контакт?',
+    deleteSuccess: '«{name}» видалено з контактів.',
+    deleteFailed: 'Не вдалося видалити контакт.',
     reason: {
       spam: 'Спам',
       harassment: 'Образи або цькування',

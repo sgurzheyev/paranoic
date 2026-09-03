@@ -83,9 +83,12 @@ export async function upsertContact(
   return list;
 }
 
-export async function removeContact(id: string): Promise<Contact[]> {
-  // Доверенные контакты не удаляются из книжки.
-  if (isTrusted(id)) {
+export async function removeContact(
+  id: string,
+  opts?: { force?: boolean }
+): Promise<Contact[]> {
+  // Доверенные контакты не удаляются из книжки — unless forced (явное «Удалить контакт»).
+  if (!opts?.force && isTrusted(id)) {
     return loadContacts();
   }
   const list = (await loadContacts()).filter((c) => c.id !== id);

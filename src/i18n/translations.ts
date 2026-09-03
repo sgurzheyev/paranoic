@@ -251,6 +251,10 @@ const en: TranslationDict = {
     reportSubmit: 'Submit report',
     reportSuccess: 'Report submitted. Thank you.',
     reportFailed: 'Could not submit the report.',
+    deleteContact: 'Delete contact',
+    deleteConfirm: 'Are you sure you want to delete this contact?',
+    deleteSuccess: '«{name}» removed from contacts.',
+    deleteFailed: 'Could not delete this contact.',
     reason: {
       spam: 'Spam',
       harassment: 'Harassment or bullying',
@@ -563,6 +567,10 @@ const ru: TranslationDict = {
     reportSubmit: 'Отправить жалобу',
     reportSuccess: 'Жалоба отправлена. Спасибо.',
     reportFailed: 'Не удалось отправить жалобу.',
+    deleteContact: 'Удалить контакт',
+    deleteConfirm: 'Вы уверены, что хотите удалить этот контакт?',
+    deleteSuccess: '«{name}» удалён из контактов.',
+    deleteFailed: 'Не удалось удалить контакт.',
     reason: {
       spam: 'Спам',
       harassment: 'Оскорбления или травля',
@@ -875,6 +883,10 @@ const pl: TranslationDict = {
     reportSubmit: 'Wyślij zgłoszenie',
     reportSuccess: 'Zgłoszenie wysłane. Dziękujemy.',
     reportFailed: 'Nie udało się wysłać zgłoszenia.',
+    deleteContact: 'Usuń kontakt',
+    deleteConfirm: 'Na pewno chcesz usunąć ten kontakt?',
+    deleteSuccess: '«{name}» został usunięty z kontaktów.',
+    deleteFailed: 'Nie udało się usunąć kontaktu.',
     reason: {
       spam: 'Spam',
       harassment: 'Nękanie lub bullying',

@@ -21,6 +21,7 @@ type PeerProfileModalProps = {
   messages: Array<StoredMessage & { mediaUrl?: string }>;
   isBlocked?: boolean;
   onBlocked?: () => void;
+  onDeleteContact?: () => void | Promise<void>;
   onClose: () => void;
 };
 
@@ -38,6 +39,7 @@ export default function PeerProfileModal({
   messages,
   isBlocked = false,
   onBlocked,
+  onDeleteContact,
   onClose,
 }: PeerProfileModalProps) {
   const { t } = useLanguage();
@@ -143,6 +145,7 @@ export default function PeerProfileModal({
           peerName={peer.name}
           isBlocked={isBlocked}
           onBlocked={onBlocked}
+          onDeleteContact={onDeleteContact}
         />
 
         <section className="peer-profile-section">
