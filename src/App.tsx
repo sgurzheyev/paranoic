@@ -457,6 +457,7 @@ export default function App() {
   /** После Accept по Realtime — принять WebRTC, когда придёт call-invite. */
   const pendingRingAcceptRef = useRef(false);
   const pendingAcceptCallerRef = useRef<CallerInfo | null>(null);
+  const incomingRingRef = useRef<{ callId: string; from: CallerInfo } | null>(null);
   const outboundCallIdRef = useRef<string | null>(null);
   const callInboxRef = useRef<CallInbox | null>(null);
   const isBannedRef = useRef(false);
@@ -513,6 +514,8 @@ export default function App() {
     return (
       callUserIntentRef.current ||
       Boolean(pendingOutboundCallRef.current) ||
+      pendingRingAcceptRef.current ||
+      Boolean(incomingRingRef.current) ||
       live === 'calling' ||
       live === 'in-call' ||
       live === 'ringing'
@@ -551,7 +554,8 @@ export default function App() {
 
   const wakeCallSignaling = useCallback(async () => {
     try {
-      await callInboxRef.current?.ensureAlive?.({ force: true });
+      // Do not force-resubscribe a live inbox — that drops in-flight call_offer / ctrl.
+      await callInboxRef.current?.ensureAlive?.();
     } catch (e) {
       console.warn('[paranoic] call inbox wake failed', e);
     }
@@ -1543,6 +1547,59 @@ export default function App() {
     };
   }, [identity.id]);
 
+  /**
+   * Media handshake lives on `inbox-{calleeId}`. After chat Back we stay a guest
+   * in the last peer's room, so the caller joins an empty inbox. Return to our
+   * own inbox unless we already have a live session with this caller.
+   */
+  const prepareInboxForIncomingCall = useCallback(async (callerId: string) => {
+    if (!callerId) return;
+    const live = getP2PSession() || p2pRef.current;
+    const linkedToCaller =
+      peerIdRef.current === callerId ||
+      guestPeerIdRef.current === callerId ||
+      peerMetaRef.current.id === callerId;
+    const sessionWithCaller =
+      Boolean(live) &&
+      linkedToCaller &&
+      (live!.isReady ||
+        live!.currentStatus === 'connected' ||
+        live!.currentStatus === 'connecting' ||
+        live!.currentStatus === 'creating-offer' ||
+        live!.currentStatus === 'waiting-answer');
+
+    if (sessionWithCaller) {
+      try {
+        await live!.ensureSignalingAlive?.('incoming-call');
+      } catch (e) {
+        console.warn('[paranoic] incoming-call signaling wake failed', e);
+      }
+      return;
+    }
+
+    const myRoom = personalInboxRoom(identityRef.current.id);
+    if (live?.currentRoomId === myRoom) {
+      try {
+        await live.ensureSignalingAlive?.('incoming-call');
+      } catch (e) {
+        console.warn('[paranoic] own-inbox wake failed', e);
+      }
+      return;
+    }
+
+    console.log('[P2P_DEBUG] incoming call — rejoin own inbox so caller can join', {
+      callerId,
+      wasRoom: live?.currentRoomId ?? null,
+    });
+    clearMagicParamFromUrl();
+    setGuestPeerId(null);
+    guestPeerIdRef.current = null;
+    setHostingSelf(true);
+    destroyP2PSession();
+    p2pRef.current = null;
+    setSessionEpoch((n) => n + 1);
+  }, []);
+
   const applyIncomingCallOffer = useCallback((offer: CallOfferEvent) => {
     if (isBannedRef.current) return;
     if (isBlocked(offer.from.id)) return;
@@ -1556,6 +1613,7 @@ export default function App() {
       avatarUrl: offer.from.avatarUrl || '',
       color: offer.from.color || '#60a5fa',
     };
+    incomingRingRef.current = { callId: offer.callId, from: offer.from };
     setIncomingRing({ callId: offer.callId, from: offer.from });
     setCallExpanded(true);
     startRingtone();
@@ -1563,7 +1621,8 @@ export default function App() {
       body: `Вам звонит ${callerDisplayName(offer.from)}`,
       tag: 'paranoic-call',
     });
-  }, []);
+    void prepareInboxForIncomingCall(offer.from.id);
+  }, [prepareInboxForIncomingCall]);
 
   /** Постоянный слушатель call_offer на calls:{myId} — только после Auth JWT. */
   useEffect(() => {
@@ -1671,6 +1730,7 @@ export default function App() {
           if (!applied) continue;
 
           console.log('[P2P Audit] call_sessions poll recovered offer', row.call_id);
+          incomingRingRef.current = { callId: row.call_id, from: caller };
           setPeerLabel(caller.name || callerDisplayName(caller));
           setPeerAvatarUrl(caller.avatarUrl || '');
           setPeerColor(caller.color || '#60a5fa');
@@ -1680,6 +1740,7 @@ export default function App() {
             avatarUrl: caller.avatarUrl || '',
             color: caller.color || '#60a5fa',
           };
+          void prepareInboxForIncomingCall(caller.id);
           startRingtone();
           notifyIfHidden('Входящий звонок', {
             body: `Вам звонит ${callerDisplayName(caller)}`,
@@ -1702,7 +1763,11 @@ export default function App() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [identity.id]);
+  }, [identity.id, prepareInboxForIncomingCall]);
+
+  useEffect(() => {
+    incomingRingRef.current = incomingRing;
+  }, [incomingRing]);
 
   useEffect(() => {
     peerIdRef.current = peerId;
@@ -1876,9 +1941,13 @@ export default function App() {
               setCallAlertToastOpen(false);
               setCallFailKind(null);
               setIncomingConnection(false);
-              setIncomingRing(null);
-              stopRingtone();
-              closeActiveNotification();
+              // Silent DataChannel connect must not dismiss a Realtime ring /
+              // pending Accept — that is how 1:1 media never starts.
+              if (!incomingRingRef.current && !pendingRingAcceptRef.current) {
+                setIncomingRing(null);
+                stopRingtone();
+                closeActiveNotification();
+              }
               // Гость по магической ссылке — сразу в диалог с этим peer.
               // Never steal an armed/active media call into the text-chat screen.
               if (
@@ -1895,10 +1964,7 @@ export default function App() {
             void flushOutboxRef.current();
             void syncPendingRef.current();
             tryFlushPendingOutboundCallRef.current();
-            if (pendingRingAcceptRef.current) {
-              pendingRingAcceptRef.current = false;
-              // Ждём call-invite — auto-accept в onCallState/onIncomingCall.
-            }
+            // Keep pendingRingAcceptRef — auto-accept runs on call-invite / ringing.
           } else {
             setPeerTyping(false);
             typingSentRef.current = false;
@@ -3306,6 +3372,38 @@ export default function App() {
         screenRef.current = 'chat';
         setScreen('chat');
       }
+
+      const live = p2pRef.current;
+      const callPeer = peerIdRef.current || guestPeerIdRef.current || target;
+      const readyWithTarget =
+        Boolean(callPeer) &&
+        Boolean(live?.isReady) &&
+        (peerIdRef.current === callPeer || guestPeerIdRef.current === callPeer);
+      if (callPeer && !readyWithTarget) {
+        // Hosting our own empty inbox would send call-invite into the wrong room.
+        logCallInit(`${source}-startCall-join-callee-room`, {
+          room: live?.currentRoomId ?? null,
+          ready: Boolean(live?.isReady),
+        });
+        pendingOutboundCallRef.current = {
+          source,
+          token: buttonToken ?? outboundCallButtonTokenRef.current,
+          targetId: callPeer,
+        };
+        const known = contacts.find((c) => c.id === callPeer);
+        if (known) {
+          await connectToLocalContact(known, {
+            openChat: outboundOpenChatRef.current,
+          });
+        } else {
+          await connectToUser(callPeer, peerLabel, {
+            openChat: outboundOpenChatRef.current,
+          });
+        }
+        tryFlushPendingOutboundCall();
+        return;
+      }
+
       await invokeP2PStartCall(source, buttonToken);
       attachLocalVideo(null);
     } catch (e) {
@@ -3499,13 +3597,15 @@ export default function App() {
         return;
       }
 
-      // Realtime offer: звонящий сам заходит в наш inbox — принимаем join и ждём invite.
+      // Realtime offer: caller joins our inbox — stay hosted there and wait for invite.
       if (ring?.from.id) {
         pendingRingAcceptRef.current = true;
         pendingAcceptCallerRef.current = ring.from;
+        incomingRingRef.current = ring;
         setIncomingRing(null);
         setCallExpanded(true);
         setScreen('chat');
+        await prepareInboxForIncomingCall(ring.from.id);
         return;
       }
 
@@ -3530,6 +3630,7 @@ export default function App() {
     stopRingtone();
     closeActiveNotification();
     const ring = incomingRing;
+    incomingRingRef.current = null;
     setIncomingRing(null);
     pendingRingAcceptRef.current = false;
     pendingAcceptCallerRef.current = null;
