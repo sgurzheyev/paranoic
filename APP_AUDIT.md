@@ -92,8 +92,8 @@ Features that are implemented and appear wired end-to-end (UI + backend or local
 | Voice notes + video circles | WORKS | `src/ChatRecordButton.tsx`, `src/mediaNotes.ts` | Same as media | Hold-to-record; `mediaKind` `'voice' \| 'circle'` |
 | Local chat history + previews | WORKS | `src/storage.ts`, `src/App.tsx` | IndexedDB `messages` / `media` | `loadLastMessagePreviews`; chats + groups ordered by preview time |
 | Local chat search | WORKS | `src/ChatSearchPanel.tsx`, `src/storage.ts` | IndexedDB only | Filters All / Media / Links / Files / Voice |
-| Mute conversation | WORKS | `src/App.tsx` `handleToggleMute`, `src/storage.ts` | Local mute set | Header `···` → mute; suppresses notify for that conv |
-| Clear history | WORKS | `src/App.tsx` `handleClearHistory`, `src/storage.ts` | IndexedDB | `clearConversation` + confirm in `ChatHeader` |
+| Mute conversation | PARTIAL | `src/App.tsx` `handleToggleMute`, `src/localSettings.ts` | Local mute set | Header `···` persists mute + badge; **`notifyIfHidden` is not gated** by `mutedIds` |
+| Clear history | PARTIAL | `src/App.tsx` `handleClearHistory`, `src/storage.ts` | IndexedDB | `clearConversation` + confirm; **does not delete media blobs** (`clearConversationMedia` unused) |
 | Typing indicator (1:1 live) | WORKS | `src/p2p.ts` `sendTyping`, `src/App.tsx` | DataChannel only | Header + compose dots when DC is up |
 | Delivery / read ticks (1:1 live) | WORKS | `src/p2p.ts` `sendMessageAck`, `src/App.tsx` | DataChannel only | `delivered` / `read` on live P2P; not for SAF/group |
 | Heart reaction (1:1 live) | WORKS | `src/p2p.ts` `sendReaction` | DataChannel only | Double-tap; not persisted server-side |
@@ -115,8 +115,9 @@ Features that are implemented and appear wired end-to-end (UI + backend or local
 |------|--------|---------------|---------|----------|
 | Create group | WORKS | `src/CreateGroupModal.tsx`, `src/groups.ts` `createGroup` | `groups` + `group_members` | Creator admin; ≥1 other member; max 20 |
 | List + open group chat | WORKS | `src/App.tsx`, `src/GroupListRow.tsx` | Same + IndexedDB `group:{id}` | Subscribes `group:{id}` after Realtime auth |
-| Live group text | WORKS | `src/groups.ts` `broadcastGroupMessage`, `src/App.tsx` `sendText` | Realtime broadcast + AES-GCM | Cipher over `group_msg` |
-| Group offline fan-out | WORKS | `src/storeForward.ts` `uploadPendingGroupText` / `Media` | `messages.group_id` + storage | One ciphertext per member inbox |
+| Live group text | WORKS | `src/groups.ts` `broadcastGroupMessage`, `src/App.tsx` `sendText` | Realtime broadcast + AES-GCM | Cipher over `group_msg`; ingest handles `kind === 'text'` only |
+| Group media | PARTIAL | `src/App.tsx` `sendMedia`, `src/storeForward.ts` | SAF only (`uploadPendingGroupMedia`) | **No Realtime `group_msg` for media** — online members wait for the 45s/foreground SAF pull |
+| Group offline text fan-out | WORKS | `src/storeForward.ts` `uploadPendingGroupText` | `messages.group_id` + storage | One ciphertext per member inbox |
 | Manage members / rename / leave / delete | WORKS | `src/GroupManagementModal.tsx`, `src/groups.ts` | `group_members` / `groups` | Admin add/remove/rename/delete; leave promotes last admin |
 | Group chat header | WORKS | `src/ChatHeader.tsx` | None | Stacked faces; audio/video call buttons |
 
@@ -126,7 +127,7 @@ Features that are implemented and appear wired end-to-end (UI + backend or local
 |------|--------|---------------|---------|----------|
 | Mapbox globe | WORKS | `src/GlobeLobby.tsx`, `src/lib/mapbox.ts` | Mapbox (`VITE_MAPBOX_TOKEN`) | Missing token → overlay + Back |
 | Presence avatars + GPS | WORKS | `src/presence.ts`, `src/GlobeLobby.tsx` | `profiles` + Realtime presence | Heartbeat 15s; Ghost Mode → Antarctica `-78.5, 16.5` |
-| Unified memory gems CRUD | WORKS | `src/memoryGems.ts`, `src/MemoryGemComposer.tsx`, `src/MemoryGemDrawer.tsx` | `memory_gems` + R2 `map-gems/` | `visibility` `private` / `family` / `public`; `canViewGem()` client filter |
+| Unified memory gems CRUD | PARTIAL | `src/memoryGems.ts`, `src/MemoryGemComposer.tsx`, `src/MemoryGemDrawer.tsx` | `memory_gems` + R2 `map-gems/` | UI + `canViewGem()` client filter; **RLS still exposes non-`is_private` rows (incl. `family`) to all authenticated users** — see HIGH RISK |
 | Gem likes / comments | WORKS | `src/gemSocial.ts`, `src/MemoryGemDrawer.tsx` | `gem_likes`, `gem_comments` | Optimistic toggle + rollback |
 | Owner edit / move / delete | WORKS | `src/memoryGems.ts`, `src/GlobeLobby.tsx` | UPDATE/DELETE + R2 delete | Targeting + move-pin modes |
 | Zip Lift ↔ map preset | WORKS | `src/themeSpectrum.ts`, `src/GlobeLobby.tsx` | localStorage | `paranoic-theme-spectrum` → Mapbox `lightPreset` |
@@ -152,7 +153,7 @@ Features that are implemented and appear wired end-to-end (UI + backend or local
 | Trust / block cloud sync | WORKS | `src/trust.ts`, `src/trustSync.ts` | `user_peer_relations` + localStorage cache | `bootstrapPeerRelations()` on login |
 | Trust banner on new peer | WORKS | `src/App.tsx` | Same + contacts book | Shown when chat open, untrusted, has incoming msgs |
 | Block + report UI | WORKS | `src/UserActionsPanel.tsx`, `src/userSafety.ts`, `src/ChatHeader.tsx` | `blocked_users`, `reports` | Reasons spam/harassment/…; mirrors `trust.blockUser` |
-| Enforce block on connect / inbound ring | WORKS | `src/App.tsx` | Local blocked set | `isBlocked` aborts connect; `applyIncomingCallOffer` drops blocked callers |
+| Enforce block on connect / inbound ring | PARTIAL | `src/App.tsx` | Local blocked set | `isBlocked` aborts **connect/call** and inbound ring; **`sendText` / `sendMedia` have no block check** if the chat is already open |
 
 ### Admin
 
@@ -243,7 +244,7 @@ Implemented but incomplete, fragile, or easy to misconfigure.
 | Item | Status | Primary files | Backend | Evidence |
 |------|--------|---------------|---------|----------|
 | Family visibility | PARTIAL | `src/mapGems.ts` `canViewGem` | Client filter after SELECT | “Family” = viewer’s **local** contact IDs, not a server family graph |
-| Free gem cap | PARTIAL | `src/mapGems.ts` `FREE_MAP_GEM_LIMIT = 5` | `profiles.is_premium` or `paranoic-premium-v1` | Paywall is a flag, not a payment flow |
+| Free gem cap | PARTIAL | `src/mapGems.ts` `FREE_MAP_GEM_LIMIT = 5` | `paranoic-premium-v1` localStorage; client also queries `profiles.is_premium` | **`is_premium` column is not in repo SQL** — bypass is a local flag, not IAP |
 | AR Footprints | PARTIAL | `src/ArFootprints.tsx` | Device WebXR / camera | Lazy overlay; falls back to camera; many strings hardcoded RU |
 | AI Secretary | PARTIAL | `src/useAiSecretary.ts`, `src/AiBodyguardChat.tsx`, `supabase/functions/ai-secretary` | Edge Function → OpenAI | Works only if function + secrets deployed; errors → “Канал оборван” |
 | Composer i18n | PARTIAL | `src/GlobeLobby.tsx` targeting/move | None | Several targeting strings still hardcoded Russian |
@@ -281,7 +282,7 @@ Implemented but incomplete, fragile, or easy to misconfigure.
 | Token registration | PARTIAL | `src/pushNotifications.ts`, `src/profile.ts` `saveFcmToken` | `profiles.fcm_token` | Native only (`Capacitor.isNativePlatform()`); permission + channel `paranoic-calls` |
 | Incoming-call push receive | PARTIAL | `src/pushNotifications.ts`, `src/App.tsx` | FCM data payload | Parses `call_offer` and calls `applyIncomingCallOffer` |
 | **FCM send** | PARTIAL / missing server | — | **No sender in this repo** | No Edge Function / API writes FCM. Token is stored; **nothing here sends a push**. Background ring still depends on Realtime or 8s `call_sessions` poll while foreground |
-| `google-services.json` | PARTIAL | `android/` | Firebase | **Not in the repo** — Capacitor Push plugin is declared, but Android FCM will not register without a Firebase app file |
+| `google-services.json` | PARTIAL | `android/app/build.gradle` | Firebase | File gitignored; Gradle logs *“google-services.json not found… Push Notifications won't work”* |
 | Hide preview | PARTIAL | `src/notify.ts` | Browser notifications | Honored for **web** `Notification`; native FCM payload is whatever the missing sender would send |
 
 ### Guest / magic link
@@ -295,7 +296,7 @@ Implemented but incomplete, fragile, or easy to misconfigure.
 
 | Item | Status | Primary files | Backend | Evidence |
 |------|--------|---------------|---------|----------|
-| Release APK | PARTIAL | `android/app/release/output-metadata.json`, Auth download link | R2 CDN APK | Metadata references `app-release.apk`; AuthScreen hardcodes an R2 URL. APK binary is not necessarily in git |
+| Release APK | PARTIAL | `android/app/release/output-metadata.json`, `public/download/android/index.html` | Optional R2 CDN | Metadata references `app-release.apk` but **binary is not in git**; download page says APK is unpublished |
 | iOS | PARTIAL | `.env.example` `VITE_IOS_CLIENT_URL` | None | No `ios/` project in repo |
 | Web vs native | PARTIAL | `src/main.tsx`, `src/pushNotifications.ts` | None | Same SPA; FCM native-only; in-app browsers blocked |
 
@@ -366,6 +367,15 @@ Implemented but incomplete, fragile, or easy to misconfigure.
 | **Backend** | Realtime |
 | **Evidence** | Lost room channel sets `failed` unless already in-call; later inbound joins have no host until a full rejoin. |
 
+### Family gem RLS vs client filter — HIGH
+
+| | |
+|--|--|
+| **Status** | **HIGH RISK** |
+| **Files** | `src/mapGems.ts` `canViewGem`, `supabase/harden_rls_policies.sql` |
+| **Backend** | `memory_gems` SELECT `coalesce(is_private,false)=false OR user_id=auth.uid()` |
+| **Evidence** | Client hides `family` from non-contacts; **PostgREST still returns those rows**. `visibility='family'` is not in RLS. |
+
 ---
 
 ## 4. MISSING
@@ -430,12 +440,12 @@ What it **does** have that many clones skip: magic-link guest call, Family map +
 | **Auth** | WORKS (email/password + reset). Google unused. No 2FA. |
 | **Chats / E2EE / offline** | WORKS for send/receive/SAF/voice. E2EE is deterministic-room — PARTIAL/HIGH. |
 | **Contacts** | WORKS locally + global search. No cloud book. |
-| **Groups** | WORKS CRUD + Realtime/SAF. Weak crypto + EN-only i18n for most locales. |
+| **Groups** | WORKS CRUD + live **text**. Media is SAF-only (no Realtime). Weak crypto + EN-only i18n for most locales. |
 | **1:1 Calls** | UI WORKS; **media handshake BROKEN on `main`** (PR #1). |
 | **Group / mesh Calls** | PARTIAL mesh; subscribe-or-miss; TURN risk. |
-| **Family map & gems** | WORKS end-to-end if Mapbox + R2 + SQL applied. |
+| **Family map & gems** | CRUD WORKS in UI; **family visibility is client-only** (RLS still leaks). |
 | **Profile / settings / i18n / theme** | WORKS; locale patches incomplete; leftover `profiles.password`. |
-| **Trust / block / report** | WORKS insert + enforce; unblock UI missing. |
+| **Trust / block / report** | Insert WORKS; calls blocked; **open-chat text still sends**; no unblock UI. |
 | **Storage / privacy** | WORKS local manager + 24h purge. No remote wipe. Public profile SELECT is broad. |
 | **Admin** | WORKS for gated roles; delete does not drop Auth user. |
 | **Push / FCM** | PARTIAL client; **no sender**; no `google-services.json`. |
@@ -501,4 +511,4 @@ This file is a **functional** audit: WORKS / PARTIAL / BROKEN / MISSING, with fi
 
 ---
 
-*Static analysis of `main` @ `f927c93` and PR #1. Runtime still depends on applied SQL, RLS, `VITE_*` secrets, and browser/OS permission (camera, mic, GPS, notifications).*
+*Static analysis of `main` @ `f927c93` and PR #1, plus a second-pass cross-check of mute/notify, group media, block-on-send, and gem RLS. Runtime still depends on applied SQL, RLS, `VITE_*` secrets, and browser/OS permission (camera, mic, GPS, notifications).*
