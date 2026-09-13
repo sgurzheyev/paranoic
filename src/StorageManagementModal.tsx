@@ -246,14 +246,16 @@ export default function StorageManagementModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose, detailId]);
 
-  const refreshTotals = async (cancelled?: () => boolean) => {
+  const refreshTotals = async (cancelled?: () => boolean, usageCeiling?: number) => {
     try {
       if (navigator.storage?.estimate) {
         const est = await navigator.storage.estimate();
         if (cancelled?.()) return;
         const used = est.usage ?? 0;
         const nextQuota = est.quota ?? 0;
-        setUsedEstimate(used);
+        setUsedEstimate(
+          usageCeiling != null ? Math.min(used, Math.max(0, usageCeiling)) : used
+        );
         setQuota(nextQuota);
         setHasQuota(nextQuota > 0);
         setTotalsReady(true);
@@ -335,8 +337,10 @@ export default function StorageManagementModal({
     if (!window.confirm(confirmText)) return;
     setDeleting(id);
     try {
+      const freed = breakdown[id];
+      const usageCeiling = Math.max(0, Math.max(usedEstimate, catSum) - freed);
       await clearStorageCategory(id);
-      await Promise.all([refreshBreakdown(), refreshTotals()]);
+      await Promise.all([refreshBreakdown(), refreshTotals(undefined, usageCeiling)]);
       if (id === detailId) setDetailId(null);
     } catch (e) {
       console.warn('[paranoic storage] clear failed', id, e);
