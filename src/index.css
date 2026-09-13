@@ -9070,7 +9070,7 @@ html.memory-gem-active .liquid-nav {
   }
 }
 
-/* ——— Paranoic Liquid Glass / Silver Chrome logo ——— */
+/* ——— Paranoic V1 Glass P logo ——— */
 .paranoic-logo {
   --logo-size: 72px;
   display: inline-flex;
@@ -9085,10 +9085,8 @@ html.memory-gem-active .liquid-nav {
 
 .paranoic-logo:focus-visible .paranoic-logo-orb {
   box-shadow:
-    0 0 0 2px rgba(15, 23, 42, 0.9),
-    0 0 0 4px rgba(226, 232, 240, 0.55),
-    0 18px 40px rgba(15, 23, 42, 0.55),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    0 0 0 2px rgba(10, 13, 20, 0.9),
+    0 0 0 4px rgba(126, 249, 255, 0.55);
 }
 
 .paranoic-logo-orb {
@@ -9098,69 +9096,39 @@ html.memory-gem-active .liquid-nav {
   display: grid;
   place-items: center;
   border-radius: 28%;
-  background:
-    linear-gradient(155deg, rgba(255, 255, 255, 0.28), rgba(148, 163, 184, 0.08) 45%, rgba(100, 116, 139, 0.18)),
-    rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(226, 232, 240, 0.35);
-  backdrop-filter: blur(18px) saturate(1.35);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
-  box-shadow:
-    0 22px 48px rgba(15, 23, 42, 0.55),
-    0 8px 18px rgba(15, 23, 42, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55),
-    inset 0 -1px 0 rgba(71, 85, 105, 0.35);
+  background: transparent;
   transform-origin: center;
   animation: paranoic-logo-breathe 4.8s ease-in-out infinite;
-  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.35s ease;
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .paranoic-logo:hover .paranoic-logo-orb {
-  transform: translateY(-2px) scale(1.03);
-  box-shadow:
-    0 28px 56px rgba(15, 23, 42, 0.6),
-    0 10px 22px rgba(15, 23, 42, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7),
-    inset 0 -1px 0 rgba(71, 85, 105, 0.4);
+  transform: translateY(-2px) scale(1.04);
 }
 
 .paranoic-logo.is-rippling .paranoic-logo-orb {
   animation: paranoic-logo-squash 0.55s cubic-bezier(0.34, 1.45, 0.64, 1);
 }
 
-.paranoic-logo-svg {
+.paranoic-logo-mark {
   display: block;
   position: relative;
   z-index: 1;
-  filter: drop-shadow(0 6px 12px rgba(15, 23, 42, 0.28));
-}
-
-.paranoic-logo-shield {
-  animation: paranoic-logo-liquid-shift 5.5s ease-in-out infinite;
-}
-
-.paranoic-logo-blob {
-  transform-origin: 28px 26px;
-  animation: paranoic-logo-blob 4.2s ease-in-out infinite;
-}
-
-.paranoic-logo-liquid {
-  animation: paranoic-logo-wash 6s ease-in-out infinite;
-}
-
-.paranoic-logo-chrome {
-  animation: paranoic-logo-chrome-sweep 5.5s ease-in-out infinite;
-}
-
-.paranoic-logo-p {
-  animation: paranoic-logo-p-glow 4.8s ease-in-out infinite;
+  width: var(--logo-size);
+  height: var(--logo-size);
+  object-fit: contain;
+  pointer-events: none;
+  filter:
+    drop-shadow(0 0 6px rgba(126, 249, 255, 0.28))
+    drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
 }
 
 .paranoic-logo-ripple {
   position: absolute;
-  inset: 18%;
+  inset: 12%;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.55);
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.35), transparent 68%);
+  border: 1.5px solid rgba(126, 249, 255, 0.55);
+  background: radial-gradient(circle, rgba(126, 249, 255, 0.22), transparent 68%);
   opacity: 0;
   pointer-events: none;
   z-index: 2;
@@ -9217,77 +9185,8 @@ html.memory-gem-active .liquid-nav {
   }
 }
 
-@keyframes paranoic-logo-chrome-sweep {
-  0%,
-  62% {
-    transform: translateX(-50px) rotate(28deg);
-    opacity: 0;
-  }
-  68% {
-    opacity: 1;
-  }
-  78% {
-    transform: translateX(90px) rotate(28deg);
-    opacity: 0.85;
-  }
-  86%,
-  100% {
-    transform: translateX(120px) rotate(28deg);
-    opacity: 0;
-  }
-}
-
-@keyframes paranoic-logo-blob {
-  0%,
-  100% {
-    transform: translate(0, 0) scale(1);
-    opacity: 0.9;
-  }
-  50% {
-    transform: translate(10px, 8px) scale(1.18);
-    opacity: 1;
-  }
-}
-
-@keyframes paranoic-logo-wash {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.75;
-  }
-  50% {
-    transform: translateY(6px);
-    opacity: 1;
-  }
-}
-
-@keyframes paranoic-logo-liquid-shift {
-  0%,
-  100% {
-    filter: brightness(1) saturate(1);
-  }
-  50% {
-    filter: brightness(1.08) saturate(1.15);
-  }
-}
-
-@keyframes paranoic-logo-p-glow {
-  0%,
-  100% {
-    fill-opacity: 0.5;
-  }
-  50% {
-    fill-opacity: 0.62;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .paranoic-logo-orb,
-  .paranoic-logo-shield,
-  .paranoic-logo-blob,
-  .paranoic-logo-liquid,
-  .paranoic-logo-chrome,
-  .paranoic-logo-p {
+  .paranoic-logo-orb {
     animation: none !important;
   }
 }
@@ -9296,17 +9195,22 @@ html.memory-gem-active .liquid-nav {
   gap: 0;
 }
 
+.paranoic-logo.is-compact:has(.paranoic-logo-word) {
+  gap: 8px;
+}
+
 .paranoic-logo.is-compact .paranoic-logo-orb {
-  border-radius: 26%;
   animation: none;
-  box-shadow:
-    0 10px 22px rgba(15, 23, 42, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    inset 0 -1px 0 rgba(71, 85, 105, 0.3);
+}
+
+.paranoic-logo.is-compact .paranoic-logo-mark {
+  filter:
+    drop-shadow(0 0 4px rgba(126, 249, 255, 0.22))
+    drop-shadow(0 2px 6px rgba(0, 0, 0, 0.28));
 }
 
 .paranoic-logo.is-compact:hover .paranoic-logo-orb {
-  transform: scale(1.04);
+  transform: scale(1.06);
 }
 
 .brand-logo-mark {
