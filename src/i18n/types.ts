@@ -141,9 +141,13 @@ export type TranslationDict = {
     storageMgmt: {
       title: string;
       totalLabel: string;
+      usageLine: string;
+      usageLineNoQuota: string;
       trustBanner: string;
       delete: string;
       deleteConfirm: string;
+      freeUp: string;
+      freeCacheConfirm: string;
       irreversible: string;
       e2ee: string;
       cat: {
@@ -151,6 +155,7 @@ export type TranslationDict = {
         images: string;
         videos: string;
         mapbox: string;
+        other: string;
       };
     };
   };

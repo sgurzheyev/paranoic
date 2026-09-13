@@ -140,11 +140,16 @@ const en: TranslationDict = {
     storageMgmt: {
       title: 'Storage management',
       totalLabel: 'Total on this device',
+      usageLine: '{used} / {total} occupied | {free} free',
+      usageLineNoQuota: '{used} occupied',
       trustBanner:
         'Paranoic does not store your chats on its servers. All data stays exclusively on your device. You are fully in control.',
       delete: 'Delete',
       deleteConfirm:
-        'Delete “{name}” from this device? This cannot be undone. (Clearing will be fully wired in a later update.)',
+        'Delete “{name}” from this device? This cannot be undone.',
+      freeUp: 'Free up {size}',
+      freeCacheConfirm:
+        'Clear the Mapbox map cache ({size})? Only cached map tiles are removed. Chats and media stay on this device.',
       irreversible: '⚠️ Deleting local data is irreversible.',
       e2ee:
         '🔒 Your calls and chats are protected with end-to-end encryption (E2EE) and travel P2P. Paranoic has no technical ability to intercept, listen to, or store them.',
@@ -153,6 +158,7 @@ const en: TranslationDict = {
         images: 'Images',
         videos: 'Video files',
         mapbox: 'Mapbox map cache',
+        other: 'Other',
       },
     },
   },
@@ -518,11 +524,16 @@ const ru: TranslationDict = {
     storageMgmt: {
       title: 'Управление данными',
       totalLabel: 'Всего на устройстве',
+      usageLine: '{used} / {total} занято | {free} свободно',
+      usageLineNoQuota: '{used} занято',
       trustBanner:
         'Paranoic не хранит вашу переписку на своих серверах. Все данные находятся исключительно на вашем устройстве. Вы полностью их контролируете.',
       delete: 'Удалить',
       deleteConfirm:
-        'Удалить «{name}» с этого устройства? Действие необратимо. (Полная очистка будет подключена позже.)',
+        'Удалить «{name}» с этого устройства? Действие необратимо.',
+      freeUp: 'Освободить {size}',
+      freeCacheConfirm:
+        'Очистить кэш карт Mapbox ({size})? Удалятся только кэшированные тайлы карты. Переписка и медиа останутся на устройстве.',
       irreversible: '⚠️ Удаление локальных данных необратимо.',
       e2ee:
         '🔒 Ваши звонки и чаты защищены сквозным шифрованием (E2EE) и передаются P2P. У Paranoic нет технической возможности их перехватить, прослушать или хранить.',
@@ -531,6 +542,7 @@ const ru: TranslationDict = {
         images: 'Изображения',
         videos: 'Видеофайлы',
         mapbox: 'Кэш карт Mapbox',
+        other: 'Другое',
       },
     },
   },
@@ -898,11 +910,16 @@ const pl: TranslationDict = {
     storageMgmt: {
       title: 'Zarządzanie danymi',
       totalLabel: 'Łącznie na urządzeniu',
+      usageLine: '{used} / {total} zajęte | {free} wolne',
+      usageLineNoQuota: '{used} zajęte',
       trustBanner:
         'Paranoic nie przechowuje Twojej korespondencji na swoich serwerach. Wszystkie dane są wyłącznie na Twoim urządzeniu. Masz nad nimi pełną kontrolę.',
       delete: 'Usuń',
       deleteConfirm:
-        'Usunąć „{name}” z tego urządzenia? Tej operacji nie można cofnąć. (Pełne czyszczenie zostanie podłączone później.)',
+        'Usunąć „{name}” z tego urządzenia? Tej operacji nie można cofnąć.',
+      freeUp: 'Zwolnij {size}',
+      freeCacheConfirm:
+        'Wyczyścić cache map Mapbox ({size})? Usunięte zostaną tylko buforowane kafelki mapy. Czaty i media zostaną na urządzeniu.',
       irreversible: '⚠️ Usunięcie danych lokalnych jest nieodwracalne.',
       e2ee:
         '🔒 Twoje rozmowy i czaty są chronione szyfrowaniem end-to-end (E2EE) i działają P2P. Paranoic nie ma technicznej możliwości ich przechwycenia, podsłuchania ani przechowywania.',
@@ -911,6 +928,7 @@ const pl: TranslationDict = {
         images: 'Obrazy',
         videos: 'Pliki wideo',
         mapbox: 'Cache map Mapbox',
+        other: 'Inne',
       },
     },
   },
