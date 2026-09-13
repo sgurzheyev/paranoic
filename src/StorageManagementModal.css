@@ -215,7 +215,10 @@ html.theme-light .storage-mgmt-backdrop,
   gap: 10px;
   align-items: flex-start;
   margin-top: 20px;
-  padding: 10px 2px 0;
+  padding: 12px 12px 11px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--sm-shield) 32%, transparent);
+  background: color-mix(in srgb, var(--sm-shield) 10%, transparent);
 }
 
 .storage-mgmt__privacy-icon {
@@ -234,7 +237,7 @@ html.theme-light .storage-mgmt-backdrop,
 .storage-mgmt__privacy-copy p {
   margin: 0;
   color: color-mix(in srgb, var(--sm-shield) 82%, var(--sm-fg));
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 550;
   line-height: 1.45;
 }
@@ -360,11 +363,11 @@ html.theme-light .storage-mgmt__ripple,
 
 /* —— 3D glass liquid tank (not a donut) —— */
 .storage-tank {
-  --tank-h: 236px;
+  --tank-h: 268px;
   position: relative;
-  width: min(42vw, 148px);
+  width: min(46vw, 172px);
   height: var(--tank-h);
-  filter: drop-shadow(0 14px 22px rgba(0, 0, 0, 0.55));
+  filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.62));
 }
 
 .storage-tank__svg {
@@ -418,8 +421,8 @@ html.theme-light .storage-mgmt__ripple,
   }
 
   .storage-tank {
-    --tank-h: 320px;
-    width: min(100%, 168px);
+    --tank-h: 378px;
+    width: min(100%, 196px);
   }
 }
 

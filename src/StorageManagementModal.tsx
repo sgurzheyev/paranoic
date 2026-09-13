@@ -86,11 +86,11 @@ function StorageTank({ segments, capacityBytes }: { segments: TankSegment[]; cap
   const voidId = `sm-tank-void-${uid}`;
   const rimId = `sm-tank-rim-${uid}`;
 
-  const X = 34;
-  const W = 52;
-  const Y = 22;
-  const H = 256;
-  const R = 26;
+  const X = 20;
+  const W = 60;
+  const Y = 18;
+  const H = 264;
+  const R = 30;
   const innerY = Y + 2;
   const innerH = H - 4;
   const innerBottom = innerY + innerH;
@@ -122,15 +122,15 @@ function StorageTank({ segments, capacityBytes }: { segments: TankSegment[]; cap
             <stop offset="100%" stopColor="#000" />
           </linearGradient>
           <linearGradient id={shadeId} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#fff" stopOpacity="0.34" />
-            <stop offset="18%" stopColor="#fff" stopOpacity="0.1" />
-            <stop offset="42%" stopColor="#fff" stopOpacity="0" />
-            <stop offset="78%" stopColor="#000" stopOpacity="0.18" />
-            <stop offset="100%" stopColor="#000" stopOpacity="0.48" />
+            <stop offset="0%" stopColor="#fff" stopOpacity="0.42" />
+            <stop offset="14%" stopColor="#fff" stopOpacity="0.16" />
+            <stop offset="38%" stopColor="#fff" stopOpacity="0.02" />
+            <stop offset="70%" stopColor="#000" stopOpacity="0.12" />
+            <stop offset="100%" stopColor="#000" stopOpacity="0.55" />
           </linearGradient>
           <linearGradient id={sheenId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#fff" stopOpacity="0.22" />
-            <stop offset="18%" stopColor="#fff" stopOpacity="0.04" />
+            <stop offset="0%" stopColor="#fff" stopOpacity="0.38" />
+            <stop offset="22%" stopColor="#fff" stopOpacity="0.08" />
             <stop offset="100%" stopColor="#fff" stopOpacity="0" />
           </linearGradient>
           <linearGradient id={rimId} x1="0" y1="0" x2="0" y2="1">
@@ -143,17 +143,17 @@ function StorageTank({ segments, capacityBytes }: { segments: TankSegment[]; cap
           </clipPath>
         </defs>
 
-        <ellipse cx={cx} cy={Y + H - 2} rx={W / 2 + 3} ry="8" fill="rgba(0,0,0,0.45)" />
+        <ellipse cx={cx} cy={Y + H - 1} rx={W / 2 + 6} ry="10" fill="rgba(0,0,0,0.55)" />
 
         <rect
-          x={X - 1.2}
-          y={Y - 1.2}
-          width={W + 2.4}
-          height={H + 2.4}
-          rx={R + 1}
+          x={X - 1.6}
+          y={Y - 1.6}
+          width={W + 3.2}
+          height={H + 3.2}
+          rx={R + 1.4}
           fill="none"
-          stroke="rgba(255,255,255,0.2)"
-          strokeWidth="1.2"
+          stroke="rgba(255,255,255,0.28)"
+          strokeWidth="1.4"
         />
 
         <g clipPath={`url(#${clipId})`}>
@@ -173,18 +173,18 @@ function StorageTank({ segments, capacityBytes }: { segments: TankSegment[]; cap
             <ellipse cx={cx} cy={fillTop} rx={W / 2} ry="7" fill={surfaceColor} opacity="0.95" />
           )}
           <rect x={X} y={Y} width={W} height={H} fill={`url(#${shadeId})`} />
-          <rect x={X + 6} y={Y + 14} width={9} height={H - 36} rx="4.5" fill={`url(#${sheenId})`} />
-          <rect x={X} y={Y} width={W} height={34} fill={`url(#${rimId})`} />
+          <rect x={X + 7} y={Y + 16} width={11} height={H - 40} rx="5.5" fill={`url(#${sheenId})`} />
+          <rect x={X} y={Y} width={W} height={38} fill={`url(#${rimId})`} />
         </g>
 
         <ellipse
           cx={cx}
-          cy={Y + 11}
-          rx={W / 2 - 1}
-          ry="9"
-          fill="rgba(255,255,255,0.07)"
-          stroke="rgba(255,255,255,0.32)"
-          strokeWidth="1.1"
+          cy={Y + 13}
+          rx={W / 2 - 1.5}
+          ry="10"
+          fill="rgba(255,255,255,0.1)"
+          stroke="rgba(255,255,255,0.42)"
+          strokeWidth="1.2"
         />
       </svg>
     </div>
