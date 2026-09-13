@@ -5695,6 +5695,38 @@ body.power-saving {
   touch-action: none;
 }
 
+/* Canvas-only grade so Zip Lift hues wash the globe without covering markers/controls. */
+.family-mapbox .mapboxgl-canvas-container {
+  position: relative;
+}
+
+.family-mapbox .mapboxgl-canvas-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(
+      120% 85% at 50% 115%,
+      color-mix(in srgb, var(--lux-emerald) 40%, transparent) 0%,
+      transparent 58%
+    ),
+    radial-gradient(
+      90% 55% at 82% 0%,
+      color-mix(in srgb, var(--lux-gold) 22%, transparent) 0%,
+      transparent 52%
+    );
+  mix-blend-mode: soft-light;
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .family-mapbox .mapboxgl-canvas-container::after {
+    display: none;
+  }
+}
+
 /* Своя дорожка слева от правого dock, иначе компас и attribution
    вылезают из-под колонки. */
 .family-mapbox .mapboxgl-ctrl-bottom-right {
