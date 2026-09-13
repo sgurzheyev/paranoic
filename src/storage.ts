@@ -84,11 +84,36 @@ export async function loadChatHistory(convId: string): Promise<StoredMessage[]> 
 
 /**
  * Wipe all stored messages for a single conversation.
- * Does NOT touch media blobs — call clearConversationMedia separately if needed.
+ * Prefer {@link clearConversationHistory} so media blobs are removed too.
  */
 export async function clearConversation(convId: string): Promise<void> {
   if (!convId) return;
   await messagesDb.removeItem(historyKey(convId));
+}
+
+/** Delete IndexedDB media blobs referenced by a conversation (and id-keyed fallbacks). */
+export async function clearConversationMedia(convId: string): Promise<void> {
+  if (!convId) return;
+  const history = await loadChatHistory(convId);
+  const keys = new Set<string>();
+  for (const row of history) {
+    if (row.mediaKey) keys.add(row.mediaKey);
+    if (row.id) keys.add(mediaStorageKey(row.id));
+  }
+  for (const mk of keys) {
+    try {
+      await mediaDb.removeItem(mk);
+    } catch {
+      /* */
+    }
+  }
+}
+
+/** Remove message rows and their media blobs for one 1:1 or group conversation. */
+export async function clearConversationHistory(convId: string): Promise<void> {
+  if (!convId) return;
+  await clearConversationMedia(convId);
+  await clearConversation(convId);
 }
 
 export async function saveChatHistory(

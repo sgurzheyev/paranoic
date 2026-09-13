@@ -125,7 +125,7 @@ import {
 import AuthScreen from './AuthScreen';
 import {
   appendStoredMessage,
-  clearConversation,
+  clearConversationHistory,
   conversationId,
   formatFileSize,
   groupConversationId,
@@ -199,6 +199,7 @@ import {
   type LocalContact,
 } from './localContacts';
 import {
+  isConversationMuted,
   loadMutedIds,
   muteConversation,
   unmuteConversation,
@@ -217,6 +218,20 @@ import { ANTARCTICA, GEO_BLOCKED_MESSAGE, watchGeo, WorldPresence, type GeoPoint
 /** Мессенджер и карта семьи — две поверхности одного интерфейса, без экрана выбора. */
 type AppMode = 'paranoic' | 'family';
 type Screen = 'home' | 'chat' | 'call';
+
+const BLOCKED_CONTACT_MESSAGE =
+  'Этот контакт заблокирован. Разблокируйте его, чтобы связаться.';
+
+/** Sound + hidden notification, unless this conversation is muted. Unread/history still persist. */
+function notifyConversationActivity(
+  convId: string | null | undefined,
+  title: string,
+  options?: { body?: string; tag?: string }
+): void {
+  if (isConversationMuted(convId)) return;
+  playReceiveSound();
+  notifyIfHidden(title, options);
+}
 
 type ChatMessage = StoredMessage & {
   mediaUrl?: string;
@@ -764,6 +779,7 @@ export default function App() {
 
   useEffect(() => {
     if (authGate !== 'ok') return;
+    void loadMutedIds().then(setMutedIds);
     void bootstrapPeerRelations().then(({ trusted, blocked }) => {
       setTrustedIds(trusted);
       setBlockedIds(blocked);
@@ -1051,6 +1067,7 @@ export default function App() {
     const peer = peerIdRef.current;
     if (!p2p?.isReady || !peer) return;
     const pending = await listOutbox(peer);
+    if (isBlocked(peer)) return;
     for (const item of pending) {
       try {
         p2p.send(item.packet);
@@ -1074,6 +1091,7 @@ export default function App() {
     try {
       await syncPendingDeliveries(me, {
         onText: async (msg) => {
+          if (!msg.conversationId.startsWith('group:') && isBlocked(msg.fromUserId)) return;
           const existing = await loadChatHistory(msg.conversationId);
           if (existing.some((m) => m.id === msg.id)) return;
 
@@ -1093,13 +1111,13 @@ export default function App() {
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage(row, false);
           }
-          playReceiveSound();
-          notifyIfHidden(msg.senderName || 'Новое сообщение', {
+          notifyConversationActivity(msg.conversationId, msg.senderName || 'Новое сообщение', {
             body: msg.text.slice(0, 120),
             tag: `paranoic-msg-${msg.id}`,
           });
         },
         onMedia: async (msg) => {
+          if (!msg.conversationId.startsWith('group:') && isBlocked(msg.fromUserId)) return;
           const existing = await loadChatHistory(msg.conversationId);
           if (existing.some((m) => m.id === msg.id)) return;
 
@@ -1127,8 +1145,7 @@ export default function App() {
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage({ ...row, mediaUrl }, false);
           }
-          playReceiveSound();
-          notifyIfHidden(msg.senderName || 'Новый файл', {
+          notifyConversationActivity(msg.conversationId, msg.senderName || 'Новый файл', {
             body: msg.name || 'Медиафайл',
             tag: `paranoic-media-${msg.id}`,
           });
@@ -1171,8 +1188,7 @@ export default function App() {
           if (conversationIdRef.current === conv) {
             await addMessage(row, false);
           }
-          playReceiveSound();
-          notifyIfHidden(payload.senderName || 'Новое сообщение', {
+          notifyConversationActivity(conv, payload.senderName || 'Новое сообщение', {
             body: text.slice(0, 120),
             tag: `paranoic-group-${payload.messageId}`,
           });
@@ -2037,6 +2053,12 @@ export default function App() {
             void clearParticipantsInCall([meId, peer].filter(Boolean));
           }
           if (state === 'ringing') {
+            const ringPeer = peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+            if (ringPeer && isBlocked(ringPeer)) {
+              logCallInit('onCallState-blocked-peer-ringing-abort');
+              void p2pRef.current?.declineCall();
+              return;
+            }
             if (isSelfPeerTarget(peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id)) {
               logCallInit('onCallState-self-call-ringing-abort');
               void p2pRef.current?.declineCall();
@@ -2128,6 +2150,10 @@ export default function App() {
             logCallInit('onIncomingConnection-self-peer-ignored');
             return;
           }
+          if (isBlocked(info.userId || info.peerId)) {
+            logCallInit('onIncomingConnection-blocked');
+            return;
+          }
           // Магическая ссылка: сразу устанавливаем DataChannel (silent — no call UI).
           void (async () => {
             try {
@@ -2179,6 +2205,15 @@ export default function App() {
             logCallInit('onIncomingCall-blocked-home');
             void p2pRef.current?.declineCall();
             return;
+          }
+          {
+            const incomingPeer =
+              peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+            if (incomingPeer && isBlocked(incomingPeer)) {
+              logCallInit('onIncomingCall-blocked-peer');
+              void p2pRef.current?.declineCall();
+              return;
+            }
           }
           if (isSelfPeerTarget(peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id)) {
             logCallInit('onIncomingCall-self-peer-abort');
@@ -2268,6 +2303,8 @@ export default function App() {
         onMessage: async (payload) => {
           const key = secretKeyRef.current;
           if (!key) return;
+          const livePeer = peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+          if (livePeer && isBlocked(livePeer)) return;
           try {
             const packet = JSON.parse(payload) as {
               cipher: string;
@@ -2287,11 +2324,14 @@ export default function App() {
               kind: 'text',
             });
             if (packet.sender) setPeerLabel(packet.sender);
-            playReceiveSound();
-            notifyIfHidden(packet.sender || 'Новое сообщение', {
-              body: text.slice(0, 120),
-              tag: `paranoic-msg-${id}`,
-            });
+            notifyConversationActivity(
+              conversationIdRef.current,
+              packet.sender || 'Новое сообщение',
+              {
+                body: text.slice(0, 120),
+                tag: `paranoic-msg-${id}`,
+              }
+            );
             p2pRef.current?.sendMessageAck([id], 'delivered');
             if (screenRef.current === 'chat') {
               p2pRef.current?.sendMessageAck([id], 'read');
@@ -2322,6 +2362,8 @@ export default function App() {
           applyHeart(id, emoji === '❤️');
         },
         onFileIncoming: (meta) => {
+          const livePeer = peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+          if (livePeer && isBlocked(livePeer)) return;
           setMessages((prev) => {
             if (prev.some((m) => m.id === meta.id)) return prev;
             return [
@@ -2345,6 +2387,8 @@ export default function App() {
         onEncryptedFile: async (meta, cipher, iv) => {
           const key = secretKeyRef.current;
           if (!key) return;
+          const livePeer = peerIdRef.current || guestPeerIdRef.current || peerMetaRef.current.id;
+          if (livePeer && isBlocked(livePeer)) return;
           try {
             const plain = await decryptBytes(cipher, iv, key);
             const blob = new Blob([plain], { type: meta.mime });
@@ -2394,8 +2438,7 @@ export default function App() {
               return rest;
             });
             setScreen('chat');
-            playReceiveSound();
-            notifyIfHidden(peerLabel || 'Новый файл', {
+            notifyConversationActivity(conversationIdRef.current, peerLabel || 'Новый файл', {
               body: meta.name || 'Медиафайл',
               tag: `paranoic-media-${meta.id}`,
             });
@@ -2754,7 +2797,7 @@ export default function App() {
     }
 
     if (isBlocked(targetUserId)) {
-      setError('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+      setError(BLOCKED_CONTACT_MESSAGE);
       return;
     }
 
@@ -2813,6 +2856,8 @@ export default function App() {
 
       activeGroupIdRef.current = group.id;
       setActiveGroupId(group.id);
+      peerIdRef.current = null;
+      setPeerId(null);
       setPeerLabel(group.name);
       setPeerColor('#60a5fa');
       setPeerAvatarUrl(group.avatarUrl || '');
@@ -2959,7 +3004,7 @@ export default function App() {
     }
 
     if (isBlocked(targetUserId)) {
-      setError('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+      setError(BLOCKED_CONTACT_MESSAGE);
       return;
     }
 
@@ -3041,34 +3086,25 @@ export default function App() {
   // ── Chat header menu handlers ─────────────────────────────────────────────
 
   const handleToggleMute = useCallback(async () => {
-    const activePeerId = peerIdRef.current || guestPeerId;
-    const conv = activePeerId
-      ? conversationId(identityRef.current.id, activePeerId)
-      : activeGroupIdRef.current
-        ? groupConversationId(activeGroupIdRef.current)
-        : null;
+    const conv = conversationIdRef.current;
     if (!conv) return;
-    if (mutedIds.has(conv)) {
+    if (mutedIds.has(conv) || isConversationMuted(conv)) {
       const next = await unmuteConversation(conv);
       setMutedIds(next);
     } else {
       const next = await muteConversation(conv);
       setMutedIds(next);
     }
-  }, [guestPeerId, mutedIds]);
+  }, [mutedIds]);
 
   const handleClearHistory = useCallback(async () => {
-    const activePeerId = peerIdRef.current || guestPeerId;
-    const conv = activePeerId
-      ? conversationId(identityRef.current.id, activePeerId)
-      : activeGroupIdRef.current
-        ? groupConversationId(activeGroupIdRef.current)
-        : null;
+    const conv = conversationIdRef.current;
     if (!conv) return;
-    await clearConversation(conv);
+    await clearConversationHistory(conv);
+    revokeMediaUrls();
     setMessages([]);
     void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
-  }, [guestPeerId]);
+  }, [revokeMediaUrls]);
 
   const startGroupCall = useCallback(
     async (video: boolean) => {
@@ -3293,6 +3329,13 @@ export default function App() {
         clearCallSessionResidue();
         return;
       }
+      if (target && isBlocked(target)) {
+        logCallInit(`${source}-startCall-blocked-peer`);
+        disarmOutboundCall(`${source}-blocked-peer`);
+        callDialLockRef.current = false;
+        setError(BLOCKED_CONTACT_MESSAGE);
+        return;
+      }
 
       await wakeCallSignaling();
 
@@ -3456,6 +3499,11 @@ export default function App() {
     if (liveCall === 'ringing') return;
 
     const target = peerIdRef.current || guestPeerIdRef.current;
+    if (target && isBlocked(target)) {
+      setError(BLOCKED_CONTACT_MESSAGE);
+      disarmOutboundCall(`${source}-blocked-peer`);
+      return;
+    }
     if (!target) {
       setError('Нет собеседника для звонка');
       disarmOutboundCall(`${source}-no-target`);
@@ -3805,6 +3853,10 @@ export default function App() {
       setError('Сначала выберите собеседника');
       return;
     }
+    if (isBlocked(peer)) {
+      setError(BLOCKED_CONTACT_MESSAGE);
+      return;
+    }
 
     const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const encrypted = await encryptMessage(text, secretKey);
@@ -4001,6 +4053,10 @@ export default function App() {
     const peer = peerIdRef.current;
     if (!peer) {
       setError('Сначала выберите собеседника');
+      return;
+    }
+    if (isBlocked(peer)) {
+      setError(BLOCKED_CONTACT_MESSAGE);
       return;
     }
 
@@ -4360,7 +4416,9 @@ export default function App() {
     [activeGroupId, groups]
   );
 
-  const canComposeChat = Boolean(secretKey && (activeGroupId || peerId));
+  const canComposeChat = Boolean(
+    secretKey && (activeGroupId || (peerId && !blockedIds.has(peerId)))
+  );
 
   /** Conversation ID for the currently active 1:1 or group chat. */
   const activeChatConvId = activePeerId
@@ -4454,19 +4512,39 @@ export default function App() {
     setBlockedIds(loadBlockedIds());
   };
 
+  const applyBlockedPeerSessionStop = (peerLabelName?: string) => {
+    setTrustedIds(loadTrustedIds());
+    setBlockedIds(loadBlockedIds());
+    stopRingtone();
+    closeActiveNotification();
+    setIncomingRing(null);
+    setCallExpanded(false);
+    try {
+      void p2pRef.current?.cancelCall();
+      void p2pRef.current?.declineCall();
+    } catch {
+      /* */
+    }
+    disconnect();
+    setPeerProfileOpen(false);
+    setScreen('home');
+    setMainTab('chats');
+    if (peerLabelName) {
+      setError(t('safety.blockSuccess', { name: peerLabelName }));
+    }
+  };
+
   const handleBlockPeer = async () => {
     const id = activePeerId;
     if (!id) return;
     const result = await blockUserSafety(id);
-    setTrustedIds(loadTrustedIds());
-    setBlockedIds(loadBlockedIds());
     if (!result.ok) {
+      setTrustedIds(loadTrustedIds());
+      setBlockedIds(loadBlockedIds());
       setError(result.message || t('safety.blockFailed'));
       return;
     }
-    setError(t('safety.blockSuccess', { name: peerLabel }));
-    setPeerProfileOpen(false);
-    disconnect();
+    applyBlockedPeerSessionStop(peerLabel);
   };
 
   /** Remove peer from address book + clear active chat selection. */
@@ -4730,11 +4808,7 @@ export default function App() {
           messages={messages}
           isBlocked={blockedIds.has(activePeerId)}
           onBlocked={() => {
-            setTrustedIds(loadTrustedIds());
-            setBlockedIds(loadBlockedIds());
-            setError(t('safety.blockSuccess', { name: peerLabel }));
-            setPeerProfileOpen(false);
-            disconnect();
+            applyBlockedPeerSessionStop(peerLabel);
           }}
           onDeleteContact={() => handleDeleteContact()}
           onClose={() => setPeerProfileOpen(false)}

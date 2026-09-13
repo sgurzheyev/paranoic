@@ -11,12 +11,25 @@ const db = localforage.createInstance({
 
 const MUTED_KEY = 'muted-conversations';
 
+/** In-memory cache so notify/ingest paths can check mute without a stale React snapshot. */
+let mutedCache = new Set<string>();
+
+function rememberMuted(ids: Set<string>): Set<string> {
+  mutedCache = new Set(ids);
+  return new Set(mutedCache);
+}
+
+export function isConversationMuted(convId: string | null | undefined): boolean {
+  return Boolean(convId) && mutedCache.has(convId as string);
+}
+
 export async function loadMutedIds(): Promise<Set<string>> {
   const arr = await db.getItem<string[]>(MUTED_KEY);
-  return new Set(arr ?? []);
+  return rememberMuted(new Set(arr ?? []));
 }
 
 export async function saveMutedIds(ids: Set<string>): Promise<void> {
+  rememberMuted(ids);
   await db.setItem(MUTED_KEY, [...ids]);
 }
 

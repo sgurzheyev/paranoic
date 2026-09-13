@@ -64,4 +64,4 @@ create index if not exists memory_gems_visibility
   on public.memory_gems (visibility);
 
 comment on column public.memory_gems.visibility is
-  'private = owner only; family = owner + contacts; public = everyone';
+  'private = owner only; family = owner only until a reciprocal family graph exists (see memory_gems_visibility_rls.sql); public = signed-in / anon viewers';

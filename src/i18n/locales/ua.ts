@@ -267,7 +267,7 @@ export const uaPatch: LocalePatch = {
     visibilityFamily: 'Контакти',
     visibilityPublic: 'Усі',
     visibilityPrivateDesc: 'Лише ви',
-    visibilityFamilyDesc: 'Ваші контакти',
+    visibilityFamilyDesc: 'Лише ви, поки спільний доступ для сімʼї не ввімкнено',
     visibilityPublicDesc: 'Усі на карті',
     privateBadge: 'Приватна',
     familyBadge: 'Контакти',

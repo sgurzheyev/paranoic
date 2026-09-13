@@ -22,6 +22,7 @@ import { personalInboxRoom } from './identity';
 import { ensureAuthSession, getSupabase, hasSupabaseConfig } from './lib/supabase';
 import { conversationId, groupConversationId } from './storage';
 import { groupRoomId } from './groups';
+import { isBlocked } from './trust';
 
 export const MESSAGES_TABLE = 'messages';
 export const OFFLINE_TRANSFERS_BUCKET = 'offline-transfers';
@@ -157,6 +158,9 @@ export async function uploadPendingText(opts: {
   }
 
   const toUserId = opts.toUserId.trim();
+  if (isBlocked(toUserId)) {
+    throw new Error('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+  }
   const roomId = personalInboxRoom(toUserId);
   const key = await deriveKeyFromRoom(roomId);
   const { cipher, iv } = await encryptMessage(opts.plaintext, key);
@@ -313,6 +317,9 @@ export async function uploadPendingMedia(opts: {
   }
 
   const toUserId = opts.toUserId.trim();
+  if (isBlocked(toUserId)) {
+    throw new Error('Этот контакт заблокирован. Разблокируйте его, чтобы связаться.');
+  }
   const roomId = personalInboxRoom(toUserId);
   const key = await deriveKeyFromRoom(roomId);
   opts.onProgress?.(0.05);
@@ -437,6 +444,11 @@ export async function syncPendingDeliveries(
 
   for (const row of rows) {
     try {
+      // 1:1 only — group fan-out still delivers other members' messages.
+      if (!row.group_id && isBlocked(row.from_user_id)) {
+        await purgePendingDelivery(row);
+        continue;
+      }
       const roomId = row.room_id || personalInboxRoom(selfId);
       const key = await deriveKeyFromRoom(roomId);
       const createdAt = Date.parse(row.created_at) || Date.now();

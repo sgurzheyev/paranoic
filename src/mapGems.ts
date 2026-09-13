@@ -68,16 +68,22 @@ export function gemVisibility(gem: Pick<MapGem, 'visibility' | 'is_private'>): G
   return gem.is_private ? 'private' : 'public';
 }
 
-/** Whether viewer can see a gem on the map. */
+/**
+ * Client-side visibility (defense in depth; RLS is authoritative).
+ *
+ * family fails closed: contacts live in IndexedDB and `trusted` is not a
+ * family graph, so we cannot distinguish family from merely-known peers.
+ * `contactIds` is accepted for API compatibility and ignored until a
+ * server-side reciprocal family relation exists.
+ */
 export function canViewGem(
   gem: MapGem,
   viewerId: string,
-  contactIds: ReadonlySet<string>
+  _contactIds?: ReadonlySet<string>
 ): boolean {
-  if (!viewerId || gem.author_id === viewerId) return true;
+  if (viewerId && gem.author_id === viewerId) return true;
   const vis = gemVisibility(gem);
   if (vis === 'public') return true;
-  if (vis === 'family') return contactIds.has(gem.author_id);
   return false;
 }
 
