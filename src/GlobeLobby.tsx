@@ -22,9 +22,9 @@ import {
 import { initials } from './identity';
 import { useLanguage } from './i18n';
 import {
-  applyMapThemePreset,
+  applyMapSpectrumTheme,
   applyMapboxAccessToken,
-  MAPBOX_STANDARD_STYLE_WITH_CONFIG,
+  mapboxStandardStyleForTheme,
   whenMapStyleReady,
 } from './lib/mapbox';
 import { loadSettings } from './settings';
@@ -497,11 +497,13 @@ export default function GlobeLobby({
       ? [me.lng, me.lat]
       : [ANTARCTICA.lng, ANTARCTICA.lat];
 
+    const bootTheme = interpolateTheme(themeSpectrumFromSettings(loadSettings().themeSpectrum));
+
     let map: mapboxgl.Map;
     try {
       map = new mapboxgl.Map({
         container,
-        style: MAPBOX_STANDARD_STYLE_WITH_CONFIG,
+        style: mapboxStandardStyleForTheme(bootTheme.mapPreset, bootTheme.palette),
         center,
         zoom: WORLD_ZOOM,
         pitch: 42,
@@ -569,7 +571,8 @@ export default function GlobeLobby({
 
     const cancelReady = whenMapStyleReady(map, (readyMap) => {
       const t = themeSpectrumFromSettings(loadSettings().themeSpectrum);
-      applyMapThemePreset(readyMap, interpolateTheme(t).mapPreset);
+      const theme = interpolateTheme(t);
+      applyMapSpectrumTheme(readyMap, { mapPreset: theme.mapPreset, palette: theme.palette });
       forceResize();
       setMapReady(true);
       setMapBootDone(true);
@@ -772,15 +775,25 @@ export default function GlobeLobby({
     const map = mapRef.current;
     if (!mapReady || !map) return;
 
+    let raf = 0;
     const applyFromDetail = (detail: ThemeSpectrumDetail) => {
-      whenMapStyleReady(map, (readyMap) => {
-        applyMapThemePreset(readyMap, detail.mapPreset);
+      const palette = detail.palette ?? interpolateTheme(detail.t).palette;
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        whenMapStyleReady(map, (readyMap) => {
+          applyMapSpectrumTheme(readyMap, { mapPreset: detail.mapPreset, palette });
+        });
       });
     };
 
     const t0 = themeSpectrumFromSettings(loadSettings().themeSpectrum);
     const theme0 = interpolateTheme(t0);
-    applyFromDetail({ t: t0, mapPreset: theme0.mapPreset, stopId: theme0.stopId });
+    applyFromDetail({
+      t: t0,
+      mapPreset: theme0.mapPreset,
+      stopId: theme0.stopId,
+      palette: theme0.palette,
+    });
 
     const onTheme = (event: Event) => {
       const detail = (event as CustomEvent<ThemeSpectrumDetail>).detail;
@@ -789,7 +802,10 @@ export default function GlobeLobby({
     };
 
     window.addEventListener(THEME_SPECTRUM_EVENT, onTheme);
-    return () => window.removeEventListener(THEME_SPECTRUM_EVENT, onTheme);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener(THEME_SPECTRUM_EVENT, onTheme);
+    };
   }, [mapReady]);
 
   /** HTML-маркеры капсул с превью media_urls[0] (на достаточном зуме). */

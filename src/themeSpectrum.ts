@@ -1,4 +1,4 @@
-import type { MapboxLightPreset } from './lib/mapbox';
+import type { MapboxLightPreset, MapSpectrumPalette } from './lib/mapbox';
 
 /** Palette stop on the Zip Lift spectrum (0–1). */
 export type ThemePaletteStop = {
@@ -219,11 +219,30 @@ export const THEME_STOP_COUNT = THEME_SPECTRUM_STOPS.length;
 
 export const THEME_SPECTRUM_EVENT = 'paranoic-theme-spectrum';
 
+const FALLBACK_MAP_PALETTE: MapSpectrumPalette = {
+  bg: '#060b16',
+  emerald: '#7dd3fc',
+  gold: '#f87171',
+  indigo: '#1e3a5f',
+  purple: '#7f1d1d',
+};
+
 export type ThemeSpectrumDetail = {
   t: number;
   mapPreset: MapboxLightPreset;
   stopId: string;
+  palette: MapSpectrumPalette;
 };
+
+export function mapPaletteFromVars(vars: Record<string, string>): MapSpectrumPalette {
+  return {
+    bg: vars['--lux-bg'] ?? FALLBACK_MAP_PALETTE.bg,
+    emerald: vars['--lux-emerald'] ?? FALLBACK_MAP_PALETTE.emerald,
+    gold: vars['--lux-gold'] ?? FALLBACK_MAP_PALETTE.gold,
+    indigo: vars['--lux-indigo'] ?? FALLBACK_MAP_PALETTE.indigo,
+    purple: vars['--lux-purple'] ?? FALLBACK_MAP_PALETTE.purple,
+  };
+}
 
 function parseColor(input: string): [number, number, number, number] | null {
   const hex = input.trim();
@@ -300,13 +319,14 @@ export function interpolateTheme(t: number): {
   shellBackground: string;
   mapPreset: MapboxLightPreset;
   stopId: string;
+  palette: MapSpectrumPalette;
 } {
   const { left, right, local } = findStops(t);
   const vars = lerpVars(left.vars, right.vars, local);
   const shellBackground = local < 0.5 ? left.shellBackground : right.shellBackground;
   const mapPreset = local < 0.5 ? left.mapPreset : right.mapPreset;
   const stopId = local < 0.5 ? left.id : right.id;
-  return { vars, shellBackground, mapPreset, stopId };
+  return { vars, shellBackground, mapPreset, stopId, palette: mapPaletteFromVars(vars) };
 }
 
 /** Index 0..9 for the nearest country-flag stop. */
@@ -340,11 +360,11 @@ let lastAppliedT = -1;
 
 export function applyThemeSpectrum(t: number, opts?: { silent?: boolean }): ThemeSpectrumDetail {
   if (typeof document === 'undefined') {
-    return { t, mapPreset: 'night', stopId: 'en' };
+    return { t, mapPreset: 'night', stopId: 'en', palette: FALLBACK_MAP_PALETTE };
   }
 
   const norm = Math.max(0, Math.min(1, t));
-  const { vars, shellBackground, mapPreset, stopId } = interpolateTheme(norm);
+  const { vars, shellBackground, mapPreset, stopId, palette } = interpolateTheme(norm);
   const root = document.documentElement;
 
   for (const [key, value] of Object.entries(vars)) {
@@ -362,7 +382,7 @@ export function applyThemeSpectrum(t: number, opts?: { silent?: boolean }): Them
   root.classList.toggle('theme-ua', stopId === 'ua');
   root.dataset.themeStop = stopId;
 
-  const detail: ThemeSpectrumDetail = { t: norm, mapPreset, stopId };
+  const detail: ThemeSpectrumDetail = { t: norm, mapPreset, stopId, palette };
 
   if (!opts?.silent && Math.abs(norm - lastAppliedT) > 0.001) {
     lastAppliedT = norm;
