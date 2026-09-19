@@ -457,6 +457,8 @@ export default function App() {
   const retrySendFilesRef = useRef<Map<string, File>>(new Map());
   const presenceRef = useRef<WorldPresence | null>(null);
   const guestPeerIdRef = useRef<string | null>(guestPeerId);
+  /** Bumped when leaving a peer session so an in-flight inbox join cannot re-arm guest/Direct Call. */
+  const p2pJoinGenRef = useRef(0);
   /** One-shot token set ONLY in Call button onClick — consumed by startCall / invokeP2PStartCall. */
   const outboundCallButtonTokenRef = useRef(0);
   /** Явное намерение пользователя позвонить — ONLY set via armOutboundCallFromButton in phone onClick handlers. */
@@ -977,6 +979,12 @@ export default function App() {
 
   const setActivePeer = useCallback(
     async (id: string | null, label?: string, opts?: { unhide?: boolean }) => {
+      if (id && isContactDeleted(id)) {
+        peerIdRef.current = null;
+        setPeerId(null);
+        conversationIdRef.current = null;
+        return;
+      }
       peerIdRef.current = id;
       setPeerId(id);
       if (id) {
@@ -2621,6 +2629,7 @@ export default function App() {
     let cancelled = false;
 
     void (async () => {
+      const joinGen = p2pJoinGenRef.current;
       setJoining(true);
       setError('');
       try {
@@ -2663,7 +2672,7 @@ export default function App() {
           urlRoute = { kind: 'self' };
         } else if (urlRoute.kind === 'guest' && urlHandle) {
           const resolvedId = await resolvePeerHandle(urlHandle);
-          if (cancelled) return;
+          if (cancelled || joinGen !== p2pJoinGenRef.current) return;
           if (!resolvedId) {
             setGuestPeerId(null);
             guestPeerIdRef.current = null;
@@ -2691,10 +2700,19 @@ export default function App() {
         }
 
         // Sticky guest > URL guest > null (свой инбокс). Не сбрасываем гостя при family/select.
-        const guestId =
+        let guestId =
           stickyGuest ||
           (urlRoute.kind === 'guest' ? urlRoute.peerId : null) ||
           null;
+
+        if (
+          cancelled ||
+          joinGen !== p2pJoinGenRef.current ||
+          (guestId && isContactDeleted(guestId))
+        ) {
+          if (cancelled || joinGen !== p2pJoinGenRef.current) return;
+          guestId = null;
+        }
 
         let room: string;
         let isHost: boolean;
@@ -2735,7 +2753,7 @@ export default function App() {
           }
         }
 
-        if (cancelled) return;
+        if (cancelled || joinGen !== p2pJoinGenRef.current) return;
 
         const liveStatus = p2pRef.current?.currentStatus;
         if (
@@ -2761,12 +2779,17 @@ export default function App() {
         setMagicLink(buildMagicLink(me));
 
         if (provisionalPeer) {
+          if (cancelled || joinGen !== p2pJoinGenRef.current || isContactDeleted(provisionalPeer)) {
+            return;
+          }
           const captured = await captureHostFromMagicLink({
             hostId: provisionalPeer,
             myUserId: me.id,
             urlHandle,
           });
-          if (cancelled) return;
+          if (cancelled || joinGen !== p2pJoinGenRef.current || isContactDeleted(provisionalPeer)) {
+            return;
+          }
           if (captured) {
             setContacts(await loadContacts());
           }
@@ -2780,12 +2803,13 @@ export default function App() {
           setPeerColor(presence?.color || known?.color || '#60a5fa');
           setPeerLabel(label);
           await setActivePeer(provisionalPeer, label);
+          if (cancelled || joinGen !== p2pJoinGenRef.current) return;
         } else if (isHost && appMode === 'paranoic') {
           await setActivePeer(null);
         }
 
         const key = await deriveKeyFromRoom(room);
-        if (cancelled) return;
+        if (cancelled || joinGen !== p2pJoinGenRef.current) return;
         setSecretKey(key);
         secretKeyRef.current = key;
         const exported = await exportKey(key);
@@ -3225,6 +3249,8 @@ export default function App() {
    */
   const leaveOpenChatToList = useCallback(
     (tab: 'chats' | 'contacts', source = 'leaveOpenChatToList') => {
+      // Invalidate in-flight guest joins before touching peer state.
+      p2pJoinGenRef.current += 1;
       abortActiveCallUi(source);
       chatNavDismissedRef.current = true;
       setChatNavDismissed(true);
@@ -3241,13 +3267,15 @@ export default function App() {
       clearRoomParamFromUrl();
       clearCallSessionResidue();
       clearEphemeralGuestId();
-      setGuestPeerId(null);
       guestPeerIdRef.current = null;
+      setGuestPeerId(null);
+      peerIdRef.current = null;
+      setPeerId(null);
+      conversationIdRef.current = null;
       setHostingSelf(true);
       setJoining(false);
       setSignalingStatus('');
       mirrorSignalingStatus('');
-      void setActivePeer(null);
       destroyP2PSession();
       p2pRef.current = null;
       setP2pStatus('idle');
@@ -3262,7 +3290,7 @@ export default function App() {
         setUiNavLock(false);
       }, 800);
     },
-    [abortActiveCallUi, mirrorSignalingStatus, setActivePeer]
+    [abortActiveCallUi, mirrorSignalingStatus]
   );
 
   /**
@@ -3374,9 +3402,22 @@ export default function App() {
       return;
     }
 
+    p2pJoinGenRef.current += 1;
     optimisticHideConv(conv, peer, null);
+    if (peer) {
+      setContacts((prev) => prev.filter((c) => c.id !== peer));
+    }
     try {
       p2pRef.current?.sendChatDeleted(conv);
+      if (peer) {
+        try {
+          await untrustUser(peer);
+        } catch (untrustErr) {
+          console.warn('[contacts] untrust on delete chat', untrustErr);
+        }
+        setContacts(await removeContact(peer, { force: true }));
+        setTrustedIds(loadTrustedIds());
+      }
       await clearConversationHistory(conv);
       await clearOutboxForConversation(conv);
       setHiddenIds(await hideConversation(conv));
@@ -3384,8 +3425,10 @@ export default function App() {
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
       conversationIdRef.current = null;
-      leaveOpenChatToList('chats', 'handleDeleteChat');
+      // Contact-opened 1:1: land on Contacts with the row gone, never Direct Call.
+      leaveOpenChatToList('contacts', 'handleDeleteChat');
     } catch (e) {
+      setContacts(await loadContacts());
       setHiddenIds(await loadHiddenIds());
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
       setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
@@ -4776,7 +4819,7 @@ export default function App() {
   const activeConvIsMuted = Boolean(activeChatConvId && mutedIds.has(activeChatConvId));
 
   const peerContacts = useMemo(
-    () => contacts.filter((c) => c.id !== identity.id),
+    () => contacts.filter((c) => c.id !== identity.id && !isContactDeleted(c.id)),
     [contacts, identity.id]
   );
 
