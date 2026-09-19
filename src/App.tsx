@@ -3158,10 +3158,19 @@ export default function App() {
     if (!conv) return;
     const peer = peerIdRef.current;
     const groupId = activeGroupIdRef.current;
-    optimisticHideConv(conv, peer, groupId);
+    // 1:1: hide so the row leaves Chats. Groups stay listed while you are a member.
+    if (!groupId) optimisticHideConv(conv, peer, null);
+    else {
+      setLastPreviews((prev) => {
+        const next = { ...prev };
+        delete next[groupConversationId(groupId)];
+        return next;
+      });
+    }
     try {
-      const nextHidden = await wipeLocalConversation(conv);
-      setHiddenIds(nextHidden);
+      await clearConversationHistory(conv);
+      await clearOutboxForConversation(conv);
+      if (!groupId) setHiddenIds(await hideConversation(conv));
       revokeMediaUrls();
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
@@ -3171,17 +3180,25 @@ export default function App() {
       setError(e instanceof Error ? e.message : t('chatMenu.clearFailed'));
       throw e;
     }
-  }, [optimisticHideConv, revokeMediaUrls, t, wipeLocalConversation]);
+  }, [optimisticHideConv, revokeMediaUrls, t]);
 
   const handleDeleteChat = useCallback(async () => {
     const conv = conversationIdRef.current;
     if (!conv) return;
     const peer = peerIdRef.current;
     const groupId = activeGroupIdRef.current;
-    optimisticHideConv(conv, peer, groupId);
+    if (!groupId) optimisticHideConv(conv, peer, null);
+    else {
+      setLastPreviews((prev) => {
+        const next = { ...prev };
+        delete next[groupConversationId(groupId)];
+        return next;
+      });
+    }
     try {
-      const nextHidden = await wipeLocalConversation(conv);
-      setHiddenIds(nextHidden);
+      await clearConversationHistory(conv);
+      await clearOutboxForConversation(conv);
+      if (!groupId) setHiddenIds(await hideConversation(conv));
       revokeMediaUrls();
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
@@ -3198,7 +3215,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
       throw e;
     }
-  }, [optimisticHideConv, revokeMediaUrls, t, wipeLocalConversation]);
+  }, [optimisticHideConv, revokeMediaUrls, t]);
 
   const startGroupCall = useCallback(
     async (video: boolean) => {
