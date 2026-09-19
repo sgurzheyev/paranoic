@@ -85,6 +85,8 @@ export type P2PHandlers = {
   /** Передача файла сорвалась (обрыв DC / таймаут ACK). */
   onFileTransferFailed?: (id: string, reason: string) => void;
   onPeerHello?: (peer: PeerIdentity) => void;
+  /** Peer deleted this 1:1 chat — hide + wipe local copy (local-first delete-for-both). */
+  onChatDeleted?: (info: { conversationId?: string }) => void;
   /** ACK доставки/прочтения от пира. */
   onMessageDelivery?: (ids: string[], status: 'delivered' | 'read') => void;
   /** Пир печатает / перестал печатать. */
@@ -327,6 +329,7 @@ type ControlPacket =
   | { t: 'renegotiate-answer'; sdp: RTCSessionDescriptionInit; msgId?: string }
   | { t: 'media-refresh'; msgId?: string }
   | { t: 'hello'; userId: string; name: string; color: string; avatarUrl?: string; msgId?: string }
+  | { t: 'chat-deleted'; conversationId?: string; msgId?: string }
   | { t: 'file-meta'; id: string; name: string; mime: string; size: string; iv: string; chunks: number; msgId?: string }
   | { t: 'file-done'; id: string; msgId?: string }
   | { t: 'file-ack'; id: string; upTo: number; msgId?: string }
@@ -1127,6 +1130,20 @@ export class P2PConnection {
       emoji: emoji || '❤️',
       msgId: this.newMsgId(),
     });
+  }
+
+  /** Ask the live peer to drop this 1:1 conversation from their Chats list. */
+  sendChatDeleted(conversationId?: string): void {
+    if (!this.isReady) return;
+    try {
+      this.sendControl({
+        t: 'chat-deleted',
+        conversationId,
+        msgId: this.newMsgId(),
+      });
+    } catch {
+      /* Best-effort; local hide already happened. */
+    }
   }
 
   /**
@@ -2204,6 +2221,11 @@ export class P2PConnection {
         color: packet.color,
         avatarUrl: packet.avatarUrl || '',
       });
+      return;
+    }
+
+    if (packet.t === 'chat-deleted') {
+      this.handlers.onChatDeleted?.({ conversationId: packet.conversationId });
       return;
     }
 

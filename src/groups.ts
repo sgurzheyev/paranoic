@@ -318,6 +318,9 @@ export async function subscribeGroupChannel(
     if (!msg || msg.type !== 'group_msg' || msg.groupId !== groupId) return;
     onMessage(msg);
   });
+  ch.on('broadcast', { event: 'group_deleted' }, ({ payload }) => {
+    onCallEvent?.('group_deleted', payload);
+  });
   if (onCallEvent) {
     for (const event of GROUP_CALL_EVENT_NAMES) {
       ch.on('broadcast', { event }, ({ payload }) => {
@@ -480,18 +483,54 @@ export async function leaveGroup(groupId: string): Promise<void> {
   if (error) throw new Error(error.message || 'Не удалось покинуть группу');
 }
 
+function isMissingRpcError(message: string | undefined): boolean {
+  const msg = (message || '').toLowerCase();
+  return (
+    msg.includes('could not find the function') ||
+    msg.includes('schema cache') ||
+    msg.includes('pgrst202') ||
+    msg.includes('42883')
+  );
+}
+
 /**
- * Delete the entire group (admin/creator only).
- * Cascades to group_members and clears the Realtime subscription.
+ * Delete the group for every member: broadcast so open clients drop the row,
+ * then hard-delete group + memberships + pending SAF copies.
+ *
+ * Prefers `delete_group_for_everyone` (any current member). Falls back to the
+ * admin-only table DELETE if the RPC has not been applied yet.
  */
 export async function deleteGroup(groupId: string): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
+  const uid = await requireUid();
+  try {
+    await broadcastGroupEvent(groupId, 'group_deleted', {
+      type: 'group_deleted',
+      groupId,
+      deletedBy: uid,
+      at: Date.now(),
+    });
+  } catch (e) {
+    console.warn('[groups] group_deleted broadcast', e);
+  }
+
   const ch = liveGroupChannels.get(groupId);
   if (ch) {
     liveGroupChannels.delete(groupId);
     try { await getSupabase().removeChannel(ch); } catch { /* */ }
   }
+
   const sb = getSupabase();
+  const { error: rpcErr } = await sb.rpc('delete_group_for_everyone', {
+    p_group_id: groupId,
+  });
+  if (!rpcErr) return;
+
+  if (!isMissingRpcError(rpcErr.message)) {
+    throw new Error(rpcErr.message || 'Не удалось удалить группу');
+  }
+
+  // RPC not deployed yet — admin/creator can still delete via existing RLS.
   const { error } = await sb.from('groups').delete().eq('id', groupId);
   if (error) throw new Error(error.message || 'Не удалось удалить группу');
 }

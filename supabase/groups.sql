@@ -167,3 +167,38 @@ comment on function public.is_group_admin(uuid) is
   'RLS helper: true if auth.uid() is an admin of the group (bypasses RLS).';
 comment on function public.is_group_creator(uuid) is
   'RLS helper: true if auth.uid() created the group (bypasses RLS).';
+
+-- Any current member can hard-delete the group for everyone. SECURITY DEFINER
+-- so pending SAF rows (all members) can be removed without widening table RLS.
+create or replace function public.delete_group_for_everyone(p_group_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if p_group_id is null then
+    raise exception 'missing group id';
+  end if;
+
+  if not public.is_group_member(p_group_id) then
+    raise exception 'not a group member';
+  end if;
+
+  delete from public.messages
+  where group_id = p_group_id;
+
+  delete from public.groups
+  where id = p_group_id;
+end;
+$$;
+
+revoke all on function public.delete_group_for_everyone(uuid) from public;
+grant execute on function public.delete_group_for_everyone(uuid) to authenticated;
+
+comment on function public.delete_group_for_everyone(uuid) is
+  'Member-triggered hard delete: group + memberships + pending group messages. Does not weaken table RLS.';

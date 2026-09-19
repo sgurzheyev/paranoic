@@ -352,7 +352,7 @@ const en: TranslationDict = {
     deleteChat: 'Delete chat',
     deleteChatConfirm: 'Remove this chat from your list and delete all local messages? This cannot be undone.',
     deleteChatConfirmGroup:
-      'Remove this group chat from your list and delete local messages? You stay in the group until you leave.',
+      'Delete this group for everyone? It will disappear from all members’ chats and cannot be undone.',
     deleteFailed: 'Could not delete this chat.',
     clearFailed: 'Could not clear this chat.',
   },
@@ -745,7 +745,7 @@ const ru: TranslationDict = {
     deleteChatConfirm:
       'Убрать этот чат из списка и удалить все локальные сообщения? Отменить невозможно.',
     deleteChatConfirmGroup:
-      'Убрать этот групповой чат из списка и удалить локальные сообщения? Вы останетесь в группе, пока не выйдете.',
+      'Удалить этот групповой чат для всех участников? Чат исчезнет у всех и отменить это нельзя.',
     deleteFailed: 'Не удалось удалить чат.',
     clearFailed: 'Не удалось очистить чат.',
   },
@@ -1138,7 +1138,7 @@ const pl: TranslationDict = {
     deleteChatConfirm:
       'Usunąć ten czat z listy i skasować lokalne wiadomości? Tej operacji nie można cofnąć.',
     deleteChatConfirmGroup:
-      'Usunąć ten czat grupowy z listy i skasować lokalne wiadomości? Pozostaniesz w grupie, dopóki jej nie opuścisz.',
+      'Usunąć tę grupę dla wszystkich? Zniknie z czatów wszystkich członków i nie można tego cofnąć.',
     deleteFailed: 'Nie udało się usunąć czatu.',
     clearFailed: 'Nie udało się wyczyścić czatu.',
   },

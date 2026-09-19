@@ -6,8 +6,8 @@
  *   - Viewing members with roles
  *   - Adding new members (admin only)
  *   - Removing members (admin only)
- *   - Leaving the group
- *   - Deleting the group (admin only)
+ *   - Leaving the group (self only)
+ *   - Deleting the group for every member
  *   - Renaming the group (admin only)
  */
 import './groups.css';
@@ -359,16 +359,14 @@ export default function GroupManagementModal({
                   ? t('groups.mgmt.leavePromoteFirst')
                   : t('groups.mgmt.leaveGroup')}
               </button>
-              {isAdmin && (
-                <button
-                  type="button"
-                  className="group-mgmt-action-btn is-delete"
-                  disabled={busy}
-                  onClick={() => { setErr(''); setStep('confirm-delete'); }}
-                >
-                  <Trash2 size={15} /> {t('groups.mgmt.deleteGroup')}
-                </button>
-              )}
+              <button
+                type="button"
+                className="group-mgmt-action-btn is-delete"
+                disabled={busy}
+                onClick={() => { setErr(''); setStep('confirm-delete'); }}
+              >
+                <Trash2 size={15} /> {t('groups.mgmt.deleteGroup')}
+              </button>
             </div>
           </>
         )}

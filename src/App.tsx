@@ -161,6 +161,7 @@ import {
 import {
   broadcastGroupMessage,
   createGroup,
+  deleteGroup,
   groupRoomId,
   listMyGroups,
   subscribeGroupChannel,
@@ -442,6 +443,10 @@ export default function App() {
   const ingestGroupCallRef = useRef<(event: string, payload: unknown) => void>(
     () => undefined
   );
+  const applyRemoteGroupDeletedRef = useRef<(payload: unknown) => void>(
+    () => undefined
+  );
+  const refreshGroupsRef = useRef<() => Promise<void>>(async () => undefined);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -970,7 +975,7 @@ export default function App() {
   }, []);
 
   const setActivePeer = useCallback(
-    async (id: string | null, label?: string) => {
+    async (id: string | null, label?: string, opts?: { unhide?: boolean }) => {
       peerIdRef.current = id;
       setPeerId(id);
       if (id) {
@@ -982,7 +987,13 @@ export default function App() {
       stopTypingPing();
       const conv = id ? conversationId(identityRef.current.id, id) : null;
       conversationIdRef.current = conv;
-      if (conv && isConversationHidden(conv) && !(id && isContactDeleted(id))) {
+      const allowUnhide = opts?.unhide !== false;
+      if (
+        allowUnhide &&
+        conv &&
+        isConversationHidden(conv) &&
+        !(id && isContactDeleted(id))
+      ) {
         void unhideConversation(conv).then(setHiddenIds);
       }
       await hydrateConversation(conv);
@@ -1233,6 +1244,10 @@ export default function App() {
   };
 
   ingestGroupCallRef.current = (event, payload) => {
+    if (event === 'group_deleted') {
+      applyRemoteGroupDeletedRef.current(payload);
+      return;
+    }
     void groupCallMesh.handleSignal(event, payload);
   };
 
@@ -1294,6 +1309,7 @@ export default function App() {
         }
         await syncPendingRef.current();
         await flushOutboxRef.current();
+        await refreshGroupsRef.current();
         await callInboxRef.current?.ensureAlive?.();
         await p2pRef.current?.ensureSignalingAlive?.(source);
         const conv = conversationIdRef.current;
@@ -2314,10 +2330,21 @@ export default function App() {
         onPeerHello: (peer) => {
           void (async () => {
             if (isContactDeleted(peer.userId)) return;
+            const conv = conversationId(identityRef.current.id, peer.userId);
+            // Delete chat must stay gone until a real message — hello alone
+            // must not unhide or re-open the conversation.
+            if (isConversationHidden(conv)) {
+              if (peerIdRef.current === peer.userId) {
+                setPeerLabel(peer.name);
+                setPeerAvatarUrl(peer.avatarUrl || '');
+                setPeerColor(peer.color);
+              }
+              return;
+            }
             setPeerLabel(peer.name);
             setPeerAvatarUrl(peer.avatarUrl || '');
             setPeerColor(peer.color);
-            await setActivePeer(peer.userId, peer.name);
+            await setActivePeer(peer.userId, peer.name, { unhide: false });
             const next = await upsertContact({
               id: peer.userId,
               name: peer.name,
@@ -2329,6 +2356,36 @@ export default function App() {
             });
             setContacts(next);
           })();
+        },
+        onChatDeleted: ({ conversationId: remoteConv }) => {
+          const peer = peerIdRef.current || guestPeerIdRef.current;
+          const conv =
+            remoteConv ||
+            (peer ? conversationId(identityRef.current.id, peer) : null);
+          if (!conv) return;
+          setHiddenIds((prev) => {
+            const next = new Set(prev);
+            next.add(conv);
+            return next;
+          });
+          if (peer) {
+            setLastPreviews((prev) => {
+              const next = { ...prev };
+              delete next[peer];
+              return next;
+            });
+          }
+          void (async () => {
+            await clearConversationHistory(conv);
+            await clearOutboxForConversation(conv);
+            setHiddenIds(await hideConversation(conv));
+            setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+          })();
+          if (conversationIdRef.current === conv && !activeGroupIdRef.current) {
+            setScreen('home');
+            setMainTab('chats');
+            setMessages([]);
+          }
         },
         onMessage: async (payload) => {
           const key = secretKeyRef.current;
@@ -2865,12 +2922,41 @@ export default function App() {
     }
     try {
       const next = await listMyGroups();
+      const nextIds = new Set(next.map((g) => g.id));
+      const vanished = groupsRef.current.filter((g) => g.id && !nextIds.has(g.id));
       groupsRef.current = next;
       setGroups(next);
+      if (vanished.length === 0) return;
+      for (const g of vanished) {
+        const conv = groupConversationId(g.id);
+        setHiddenIds((prev) => {
+          const ids = new Set(prev);
+          ids.add(conv);
+          return ids;
+        });
+        await clearConversationHistory(conv);
+        await clearOutboxForConversation(conv);
+        await hideConversation(conv);
+        if (activeGroupIdRef.current === g.id) {
+          setGroupMgmtOpen(false);
+          activeGroupIdRef.current = null;
+          setActiveGroupId(null);
+          conversationIdRef.current = null;
+          setSecretKey(null);
+          secretKeyRef.current = null;
+          setMessages([]);
+          setScreen('home');
+          setMainTab('chats');
+        }
+      }
+      setHiddenIds(await loadHiddenIds());
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
     } catch (e) {
       console.warn('[groups] list', e);
     }
   }, []);
+
+  refreshGroupsRef.current = refreshGroups;
 
   const openGroupChat = useCallback(
     async (group: GroupSummary) => {
@@ -3187,18 +3273,47 @@ export default function App() {
     if (!conv) return;
     const peer = peerIdRef.current;
     const groupId = activeGroupIdRef.current;
-    if (!groupId) optimisticHideConv(conv, peer, null);
-    else {
-      setLastPreviews((prev) => {
-        const next = { ...prev };
-        delete next[groupConversationId(groupId)];
-        return next;
-      });
+
+    if (groupId) {
+      const previousGroups = groupsRef.current;
+      setGroups((prev) => prev.filter((g) => g.id !== groupId));
+      groupsRef.current = groupsRef.current.filter((g) => g.id !== groupId);
+      optimisticHideConv(conv, null, groupId);
+      try {
+        await deleteGroup(groupId);
+        await clearConversationHistory(conv);
+        await clearOutboxForConversation(conv);
+        setHiddenIds(await hideConversation(conv));
+        revokeMediaUrls();
+        setMessages([]);
+        setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+        setGroupMgmtOpen(false);
+        activeGroupIdRef.current = null;
+        setActiveGroupId(null);
+        conversationIdRef.current = null;
+        setSecretKey(null);
+        secretKeyRef.current = null;
+        setScreen('home');
+        setMainTab('chats');
+        setMessengerSidebarOpen(false);
+        void refreshGroups();
+      } catch (e) {
+        groupsRef.current = previousGroups;
+        setGroups(previousGroups);
+        setHiddenIds(await loadHiddenIds());
+        setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+        setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
+        throw e;
+      }
+      return;
     }
+
+    optimisticHideConv(conv, peer, null);
     try {
+      p2pRef.current?.sendChatDeleted(conv);
       await clearConversationHistory(conv);
       await clearOutboxForConversation(conv);
-      if (!groupId) setHiddenIds(await hideConversation(conv));
+      setHiddenIds(await hideConversation(conv));
       revokeMediaUrls();
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
@@ -3215,7 +3330,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
       throw e;
     }
-  }, [optimisticHideConv, revokeMediaUrls, t]);
+  }, [optimisticHideConv, refreshGroups, revokeMediaUrls, t]);
 
   const startGroupCall = useCallback(
     async (video: boolean) => {
@@ -3319,6 +3434,44 @@ export default function App() {
     setMainTab('chats');
     void refreshGroups();
   }, [optimisticHideConv, refreshGroups, t, wipeLocalConversation]);
+
+  const applyRemoteGroupDeleted = useCallback(
+    (payload: unknown) => {
+      const groupId =
+        payload && typeof payload === 'object' && payload !== null && 'groupId' in payload
+          ? String((payload as { groupId?: unknown }).groupId || '')
+          : '';
+      if (!groupId) return;
+      const conv = groupConversationId(groupId);
+      setGroups((prev) => prev.filter((g) => g.id !== groupId));
+      groupsRef.current = groupsRef.current.filter((g) => g.id !== groupId);
+      optimisticHideConv(conv, null, groupId);
+      if (activeGroupIdRef.current === groupId) {
+        setGroupMgmtOpen(false);
+        activeGroupIdRef.current = null;
+        setActiveGroupId(null);
+        setSecretKey(null);
+        secretKeyRef.current = null;
+        conversationIdRef.current = null;
+        revokeMediaUrls();
+        setMessages([]);
+        setScreen('home');
+        setMainTab('chats');
+        setMessengerSidebarOpen(false);
+      }
+      void wipeLocalConversation(conv)
+        .then(async (ids) => {
+          setHiddenIds(ids);
+          setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+        })
+        .catch((e) => {
+          console.warn('[groups] remote delete wipe', e);
+        });
+    },
+    [optimisticHideConv, revokeMediaUrls, wipeLocalConversation]
+  );
+
+  applyRemoteGroupDeletedRef.current = applyRemoteGroupDeleted;
 
   /**
    * Явный Hang Up / «Разорвать связь»: закрываем PC и возвращаемся в свой инбокс.
