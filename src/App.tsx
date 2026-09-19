@@ -4717,10 +4717,10 @@ export default function App() {
   const showCallBanner =
     callLive && !callExpanded && !incomingRing && !callFailKind && !selfCallBlocked;
   const showErrorToast = Boolean(error) && !classifyCallFailure(error);
-  const guestConnectBlocked =
-    Boolean(guestPeerId) &&
-    (isContactDeleted(guestPeerId) ||
-      hiddenIds.has(conversationId(identity.id, guestPeerId)));
+  const guestConnectBlocked = guestPeerId
+    ? isContactDeleted(guestPeerId) ||
+      hiddenIds.has(conversationId(identity.id, guestPeerId))
+    : false;
   const showGuestDirectCall =
     Boolean(guestPeerId) &&
     !connected &&
