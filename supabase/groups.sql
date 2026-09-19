@@ -189,8 +189,16 @@ begin
     raise exception 'not a group member';
   end if;
 
-  delete from public.messages
-  where group_id = p_group_id;
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'messages'
+      and column_name = 'group_id'
+  ) then
+    delete from public.messages
+    where group_id = p_group_id;
+  end if;
 
   delete from public.groups
   where id = p_group_id;

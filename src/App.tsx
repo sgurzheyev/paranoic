@@ -2923,12 +2923,25 @@ export default function App() {
     try {
       const next = await listMyGroups();
       const nextIds = new Set(next.map((g) => g.id));
-      const vanished = groupsRef.current.filter((g) => g.id && !nextIds.has(g.id));
+      const staleIds = new Set<string>();
+      for (const g of groupsRef.current) {
+        if (g.id && !nextIds.has(g.id)) staleIds.add(g.id);
+      }
       groupsRef.current = next;
       setGroups(next);
-      if (vanished.length === 0) return;
-      for (const g of vanished) {
-        const conv = groupConversationId(g.id);
+      try {
+        const previews = await loadLastMessagePreviews(identityRef.current.id);
+        for (const key of Object.keys(previews)) {
+          if (!key.startsWith('group:')) continue;
+          const gid = key.slice('group:'.length);
+          if (gid && !nextIds.has(gid)) staleIds.add(gid);
+        }
+      } catch {
+        /* */
+      }
+      if (staleIds.size === 0) return;
+      for (const gid of staleIds) {
+        const conv = groupConversationId(gid);
         setHiddenIds((prev) => {
           const ids = new Set(prev);
           ids.add(conv);
@@ -2937,7 +2950,7 @@ export default function App() {
         await clearConversationHistory(conv);
         await clearOutboxForConversation(conv);
         await hideConversation(conv);
-        if (activeGroupIdRef.current === g.id) {
+        if (activeGroupIdRef.current === gid) {
           setGroupMgmtOpen(false);
           activeGroupIdRef.current = null;
           setActiveGroupId(null);
@@ -3279,8 +3292,10 @@ export default function App() {
       setGroups((prev) => prev.filter((g) => g.id !== groupId));
       groupsRef.current = groupsRef.current.filter((g) => g.id !== groupId);
       optimisticHideConv(conv, null, groupId);
+      let deletedOnServer = false;
       try {
         await deleteGroup(groupId);
+        deletedOnServer = true;
         await clearConversationHistory(conv);
         await clearOutboxForConversation(conv);
         setHiddenIds(await hideConversation(conv));
@@ -3298,8 +3313,10 @@ export default function App() {
         setMessengerSidebarOpen(false);
         void refreshGroups();
       } catch (e) {
-        groupsRef.current = previousGroups;
-        setGroups(previousGroups);
+        if (!deletedOnServer) {
+          groupsRef.current = previousGroups;
+          setGroups(previousGroups);
+        }
         setHiddenIds(await loadHiddenIds());
         setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
         setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));

@@ -29,8 +29,16 @@ begin
 
   -- Drop pending SAF copies for every member before the group row goes away
   -- (messages.group_id is ON DELETE SET NULL, so they would otherwise linger).
-  delete from public.messages
-  where group_id = p_group_id;
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'messages'
+      and column_name = 'group_id'
+  ) then
+    delete from public.messages
+    where group_id = p_group_id;
+  end if;
 
   delete from public.groups
   where id = p_group_id;
