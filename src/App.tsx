@@ -3219,6 +3219,53 @@ export default function App() {
   );
 
   /**
+   * Delete chat/contact success: land on Contacts/Chats, never GuestDirectCall.
+   * Opening a 1:1 sets guestPeerId + ?u= so P2P can join that inbox. Going home
+   * without clearing it is the guest-connect route (Прямой звонок / waiting).
+   */
+  const leaveOpenChatToList = useCallback(
+    (tab: 'chats' | 'contacts', source = 'leaveOpenChatToList') => {
+      abortActiveCallUi(source);
+      chatNavDismissedRef.current = true;
+      setChatNavDismissed(true);
+      screenRef.current = 'home';
+      suppressChatAutoOpenRef.current = true;
+      setUiNavLock(true);
+      setPeerProfileOpen(false);
+      setGroupMgmtOpen(false);
+      setMessengerSidebarOpen(false);
+      activeGroupIdRef.current = null;
+      setActiveGroupId(null);
+
+      clearMagicParamFromUrl();
+      clearRoomParamFromUrl();
+      clearCallSessionResidue();
+      clearEphemeralGuestId();
+      setGuestPeerId(null);
+      guestPeerIdRef.current = null;
+      setHostingSelf(true);
+      setJoining(false);
+      setSignalingStatus('');
+      mirrorSignalingStatus('');
+      void setActivePeer(null);
+      destroyP2PSession();
+      p2pRef.current = null;
+      setP2pStatus('idle');
+      setCallState('idle');
+
+      setScreen('home');
+      setMainTab(tab);
+      setSessionEpoch((n) => n + 1);
+
+      window.setTimeout(() => {
+        suppressChatAutoOpenRef.current = false;
+        setUiNavLock(false);
+      }, 800);
+    },
+    [abortActiveCallUi, mirrorSignalingStatus, setActivePeer]
+  );
+
+  /**
    * Called when the user leaves or deletes a group from within the chat.
    * Closes the management modal, resets group state, and returns home.
    */
@@ -3306,15 +3353,10 @@ export default function App() {
       revokeMediaUrls();
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
-      setGroupMgmtOpen(false);
-      activeGroupIdRef.current = null;
-      setActiveGroupId(null);
       conversationIdRef.current = null;
       setSecretKey(null);
       secretKeyRef.current = null;
-      setScreen('home');
-      setMainTab('chats');
-      setMessengerSidebarOpen(false);
+      leaveOpenChatToList('chats', 'handleDeleteChat');
 
       try {
         await deleteGroup(groupId);
@@ -3341,20 +3383,15 @@ export default function App() {
       revokeMediaUrls();
       setMessages([]);
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
-      setGroupMgmtOpen(false);
-      activeGroupIdRef.current = null;
-      setActiveGroupId(null);
       conversationIdRef.current = null;
-      setScreen('home');
-      setMainTab('chats');
-      setMessengerSidebarOpen(false);
+      leaveOpenChatToList('chats', 'handleDeleteChat');
     } catch (e) {
       setHiddenIds(await loadHiddenIds());
       setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
       setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
       throw e;
     }
-  }, [optimisticHideConv, refreshGroups, revokeMediaUrls, t]);
+  }, [leaveOpenChatToList, optimisticHideConv, refreshGroups, revokeMediaUrls, t]);
 
   const startGroupCall = useCallback(
     async (video: boolean) => {
@@ -4680,11 +4717,16 @@ export default function App() {
   const showCallBanner =
     callLive && !callExpanded && !incomingRing && !callFailKind && !selfCallBlocked;
   const showErrorToast = Boolean(error) && !classifyCallFailure(error);
+  const guestConnectBlocked =
+    Boolean(guestPeerId) &&
+    (isContactDeleted(guestPeerId) ||
+      hiddenIds.has(conversationId(identity.id, guestPeerId)));
   const showGuestDirectCall =
     Boolean(guestPeerId) &&
     !connected &&
     !chatNavDismissed &&
     !selfCallBlocked &&
+    !guestConnectBlocked &&
     screen === 'home';
   const guestCallScreen = showGuestDirectCall;
   const overlayFailure = guestCallScreen ? null : callFailKind;
@@ -4907,14 +4949,9 @@ export default function App() {
       }
       setTrustedIds(loadTrustedIds());
       setBlockedIds(loadBlockedIds());
-      setPeerProfileOpen(false);
-      setScreen('home');
-      setMainTab('contacts');
-      setMessengerSidebarOpen(false);
-      setCallExpanded(false);
       setError(t('safety.deleteSuccess', { name: label }));
-      // Leave peer session / clear selected contact (same as block cleanup).
-      disconnect();
+      // Drop guest/P2P connect state so home is Contacts, not Direct Call.
+      leaveOpenChatToList('contacts', 'handleDeleteContact');
     } catch (e) {
       setContacts(await loadContacts());
       setHiddenIds(await loadHiddenIds());
