@@ -345,6 +345,11 @@ export type TranslationDict = {
     clearHistory: string;
     clearHistoryConfirm: string;
     cleared: string;
+    deleteChat: string;
+    deleteChatConfirm: string;
+    deleteChatConfirmGroup: string;
+    deleteFailed: string;
+    clearFailed: string;
   };
   profileModal: {
     title: string;

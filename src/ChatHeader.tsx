@@ -12,6 +12,7 @@ import {
   PhoneCall,
   ShieldOff,
   Trash2,
+  Eraser,
   UserPen,
   Users,
   Video,
@@ -62,13 +63,15 @@ type ChatHeaderProps = {
   onEditContact?: () => void;
   onToggleMute?: () => void;
   onBlockUser?: () => void;
-  onClearHistory?: () => void;
+  onClearHistory?: () => void | Promise<void>;
+  /** Remove conversation from the chats list + wipe local history. */
+  onDeleteChat?: () => void | Promise<void>;
   /** Group mesh call starters. */
   onGroupAudioCall?: () => void;
   onGroupVideoCall?: () => void;
 };
 
-type DropdownState = 'idle' | 'open' | 'confirm-clear';
+type DropdownState = 'idle' | 'open' | 'confirm-clear' | 'confirm-delete';
 
 /** Chat screen header — back / peer / call / more-options controls. */
 export default function ChatHeader({
@@ -104,11 +107,13 @@ export default function ChatHeader({
   onToggleMute,
   onBlockUser,
   onClearHistory,
+  onDeleteChat,
   onGroupAudioCall,
   onGroupVideoCall,
 }: ChatHeaderProps) {
   const { t } = useLanguage();
   const [ddState, setDdState] = useState<DropdownState>('idle');
+  const [menuBusy, setMenuBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click.
@@ -127,10 +132,23 @@ export default function ChatHeader({
   const faces = groupFaces.slice(0, 3);
 
   const hasMenu = Boolean(
-    !isGroup && (onEditContact || onToggleMute || onBlockUser || onClearHistory)
+    !isGroup && (onEditContact || onToggleMute || onBlockUser || onClearHistory || onDeleteChat)
   ) || Boolean(
-    isGroup && (onGroupAudioCall || onGroupVideoCall || onToggleMute || onClearHistory)
+    isGroup && (onGroupAudioCall || onGroupVideoCall || onToggleMute || onClearHistory || onDeleteChat)
   );
+
+  const runMenuAction = async (fn?: () => void | Promise<void>) => {
+    if (!fn || menuBusy) return;
+    setMenuBusy(true);
+    try {
+      await fn();
+      setDdState('idle');
+    } catch {
+      /* Parent surfaces the error; keep the confirm so success is not implied. */
+    } finally {
+      setMenuBusy(false);
+    }
+  };
 
   return (
     <div className={`chat-top${isGroup ? ' chat-top--group' : ''}`}>
@@ -306,14 +324,21 @@ export default function ChatHeader({
 
           {ddState !== 'idle' && (
             <div className="chat-dropdown" role="menu">
-              {/* ── Confirm: Clear History ──────────────────────── */}
-              {ddState === 'confirm-clear' ? (
+              {/* ── Confirm: Clear History / Delete chat ─────────── */}
+              {ddState === 'confirm-clear' || ddState === 'confirm-delete' ? (
                 <div className="chat-dropdown-confirm">
-                  <span>{t('chatMenu.clearHistoryConfirm')}</span>
+                  <span>
+                    {ddState === 'confirm-delete'
+                      ? isGroup
+                        ? t('chatMenu.deleteChatConfirmGroup')
+                        : t('chatMenu.deleteChatConfirm')
+                      : t('chatMenu.clearHistoryConfirm')}
+                  </span>
                   <div className="chat-dropdown-confirm-btns">
                     <button
                       type="button"
                       className="btn-cancel"
+                      disabled={menuBusy}
                       onClick={() => setDdState('open')}
                     >
                       {t('common.cancel')}
@@ -321,12 +346,18 @@ export default function ChatHeader({
                     <button
                       type="button"
                       className="btn-confirm"
+                      disabled={menuBusy}
                       onClick={() => {
-                        setDdState('idle');
-                        onClearHistory?.();
+                        void runMenuAction(
+                          ddState === 'confirm-delete' ? onDeleteChat : onClearHistory
+                        );
                       }}
                     >
-                      {t('chatMenu.clearHistory')}
+                      {menuBusy
+                        ? t('common.loading')
+                        : ddState === 'confirm-delete'
+                          ? t('chatMenu.deleteChat')
+                          : t('chatMenu.clearHistory')}
                     </button>
                   </div>
                 </div>
@@ -401,7 +432,7 @@ export default function ChatHeader({
                     </button>
                   )}
 
-                  {(!isGroup || onEditContact) && (onToggleMute || onBlockUser || onClearHistory) && (
+                  {(onToggleMute || onBlockUser || onClearHistory || onDeleteChat) && (
                     <div className="chat-dropdown-sep" role="separator" />
                   )}
 
@@ -439,8 +470,21 @@ export default function ChatHeader({
                       className="chat-dropdown-item is-danger"
                       onClick={() => setDdState('confirm-clear')}
                     >
-                      <Trash2 size={15} />
+                      <Eraser size={15} />
                       {t('chatMenu.clearHistory')}
+                    </button>
+                  )}
+
+                  {/* Delete chat (remove from list) */}
+                  {onDeleteChat && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="chat-dropdown-item is-danger"
+                      onClick={() => setDdState('confirm-delete')}
+                    >
+                      <Trash2 size={15} />
+                      {t('chatMenu.deleteChat')}
                     </button>
                   )}
                 </>

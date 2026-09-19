@@ -34,6 +34,40 @@ const contactsDb = localforage.createInstance({
 });
 
 const CONTACTS_KEY = 'contact-list';
+const DELETED_CONTACTS_KEY = 'deleted-contact-ids';
+
+/** In-memory tombstones so hello/SAF auto-upsert cannot revive a deleted contact. */
+let deletedContactCache = new Set<string>();
+
+function rememberDeletedContacts(ids: Set<string>): Set<string> {
+  deletedContactCache = new Set(ids);
+  return new Set(deletedContactCache);
+}
+
+export function isContactDeleted(id: string | null | undefined): boolean {
+  return Boolean(id) && deletedContactCache.has(id as string);
+}
+
+export async function loadDeletedContactIds(): Promise<Set<string>> {
+  const arr = await contactsDb.getItem<string[]>(DELETED_CONTACTS_KEY);
+  return rememberDeletedContacts(new Set(arr ?? []));
+}
+
+export async function markContactDeleted(id: string): Promise<Set<string>> {
+  const ids = await loadDeletedContactIds();
+  ids.add(id);
+  rememberDeletedContacts(ids);
+  await contactsDb.setItem(DELETED_CONTACTS_KEY, [...ids]);
+  return ids;
+}
+
+export async function clearDeletedContact(id: string): Promise<Set<string>> {
+  const ids = await loadDeletedContactIds();
+  ids.delete(id);
+  rememberDeletedContacts(ids);
+  await contactsDb.setItem(DELETED_CONTACTS_KEY, [...ids]);
+  return ids;
+}
 
 export async function loadContacts(): Promise<Contact[]> {
   const rows = await contactsDb.getItem<Contact[]>(CONTACTS_KEY);
@@ -50,8 +84,18 @@ export async function saveContacts(contacts: Contact[]): Promise<void> {
 }
 
 export async function upsertContact(
-  contact: Omit<Contact, 'addedAt'> & { addedAt?: string }
+  contact: Omit<Contact, 'addedAt'> & { addedAt?: string },
+  opts?: { restoreDeleted?: boolean }
 ): Promise<Contact[]> {
+  await loadDeletedContactIds();
+  const restoring =
+    Boolean(opts?.restoreDeleted) || contact.source === 'manual' || contact.source === 'trust';
+  if (isContactDeleted(contact.id) && !restoring) {
+    return loadContacts();
+  }
+  if (restoring && isContactDeleted(contact.id)) {
+    await clearDeletedContact(contact.id);
+  }
   const list = await loadContacts();
   const idx = list.findIndex((c) => c.id === contact.id);
   const trusted = Boolean(contact.trusted) || isTrusted(contact.id);
@@ -93,6 +137,7 @@ export async function removeContact(
   }
   const list = (await loadContacts()).filter((c) => c.id !== id);
   await saveContacts(list);
+  await markContactDeleted(id);
   return list;
 }
 
@@ -225,8 +270,10 @@ export async function validateContactForCall(
   const idChanged = contact.id !== contactId;
   if (idChanged) {
     await removeContact(contactId);
+    await clearDeletedContact(contact.id);
   }
-  await upsertContact(contact);
+  // User-initiated call/chat — restore a previously deleted address-book row.
+  await upsertContact(contact, { restoreDeleted: true });
 
   return { ok: true, contact, idChanged };
 }
@@ -266,6 +313,6 @@ export async function captureHostFromMagicLink(opts: {
     addedAt: new Date().toISOString(),
   };
 
-  await upsertContact(contact);
+  await upsertContact(contact, { restoreDeleted: true });
   return contact;
 }

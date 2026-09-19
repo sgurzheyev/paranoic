@@ -349,6 +349,12 @@ const en: TranslationDict = {
     clearHistory: 'Clear History',
     clearHistoryConfirm: 'Delete all messages in this chat? This cannot be undone.',
     cleared: 'Chat cleared',
+    deleteChat: 'Delete chat',
+    deleteChatConfirm: 'Remove this chat from your list and delete all local messages? This cannot be undone.',
+    deleteChatConfirmGroup:
+      'Remove this group chat from your list and delete local messages? You stay in the group until you leave.',
+    deleteFailed: 'Could not delete this chat.',
+    clearFailed: 'Could not clear this chat.',
   },
   profileModal: {
     title: 'Profile',
@@ -735,6 +741,13 @@ const ru: TranslationDict = {
     clearHistory: 'Очистить историю',
     clearHistoryConfirm: 'Удалить все сообщения в этом чате? Отменить невозможно.',
     cleared: 'Чат очищен',
+    deleteChat: 'Удалить чат',
+    deleteChatConfirm:
+      'Убрать этот чат из списка и удалить все локальные сообщения? Отменить невозможно.',
+    deleteChatConfirmGroup:
+      'Убрать этот групповой чат из списка и удалить локальные сообщения? Вы останетесь в группе, пока не выйдете.',
+    deleteFailed: 'Не удалось удалить чат.',
+    clearFailed: 'Не удалось очистить чат.',
   },
   profileModal: {
     title: 'Профиль',
@@ -1121,6 +1134,13 @@ const pl: TranslationDict = {
     clearHistory: 'Wyczyść historię',
     clearHistoryConfirm: 'Usunąć wszystkie wiadomości? Nie można cofnąć.',
     cleared: 'Czat wyczyszczony',
+    deleteChat: 'Usuń czat',
+    deleteChatConfirm:
+      'Usunąć ten czat z listy i skasować lokalne wiadomości? Tej operacji nie można cofnąć.',
+    deleteChatConfirmGroup:
+      'Usunąć ten czat grupowy z listy i skasować lokalne wiadomości? Pozostaniesz w grupie, dopóki jej nie opuścisz.',
+    deleteFailed: 'Nie udało się usunąć czatu.',
+    clearFailed: 'Nie udało się wyczyścić czatu.',
   },
   profileModal: {
     title: 'Profil',

@@ -146,6 +146,7 @@ import { STORAGE_CLEARED_EVENT } from './storageManagement';
 import { applySettingsSideEffects, loadSettings, saveSettings, type AppSettings } from './settings';
 import { useLanguage } from './i18n';
 import {
+  clearOutboxForConversation,
   enqueueOutbox,
   listOutbox,
   removeOutboxMany,
@@ -183,7 +184,9 @@ import {
 } from './identity';
 import {
   captureHostFromMagicLink,
+  isContactDeleted,
   loadContacts,
+  loadDeletedContactIds,
   removeContact,
   resolvePeerHandle,
   resolvePeerProfile,
@@ -199,9 +202,13 @@ import {
   type LocalContact,
 } from './localContacts';
 import {
+  hideConversation,
+  isConversationHidden,
   isConversationMuted,
+  loadHiddenIds,
   loadMutedIds,
   muteConversation,
+  unhideConversation,
   unmuteConversation,
 } from './localSettings';
 import EditContactModal from './EditContactModal';
@@ -413,6 +420,7 @@ export default function App() {
 
   // ── Per-conversation mute (local-only, IndexedDB) ─────────────────────────
   const [mutedIds, setMutedIds] = useState<Set<string>>(() => new Set());
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
 
   const p2pRef = useRef<P2PConnection | null>(null);
   const secretKeyRef = useRef<CryptoKey | null>(null);
@@ -780,6 +788,8 @@ export default function App() {
   useEffect(() => {
     if (authGate !== 'ok') return;
     void loadMutedIds().then(setMutedIds);
+    void loadHiddenIds().then(setHiddenIds);
+    void loadDeletedContactIds();
     void bootstrapPeerRelations().then(({ trusted, blocked }) => {
       setTrustedIds(trusted);
       setBlockedIds(blocked);
@@ -796,6 +806,8 @@ export default function App() {
     setSessionEpoch((n) => n + 1);
     void loadContacts().then(setContacts);
     void loadMutedIds().then(setMutedIds);
+    void loadHiddenIds().then(setHiddenIds);
+    void loadDeletedContactIds();
     void loadAllLocalContacts().then((lcs) =>
       setLocalContactsMap(new Map(lcs.map((lc) => [lc.id, lc])))
     );
@@ -970,6 +982,9 @@ export default function App() {
       stopTypingPing();
       const conv = id ? conversationId(identityRef.current.id, id) : null;
       conversationIdRef.current = conv;
+      if (conv && isConversationHidden(conv) && !(id && isContactDeleted(id))) {
+        void unhideConversation(conv).then(setHiddenIds);
+      }
       await hydrateConversation(conv);
     },
     [hydrateConversation, stopTypingPing]
@@ -994,6 +1009,9 @@ export default function App() {
       withAge.kind !== 'file-transfer'
     ) {
       await appendStoredMessage(conv, toStored(withAge));
+    }
+    if (conv && isConversationHidden(conv)) {
+      void unhideConversation(conv).then(setHiddenIds);
     }
   }, []);
 
@@ -1108,6 +1126,9 @@ export default function App() {
             createdAt: msg.createdAt,
           };
           await appendStoredMessage(msg.conversationId, row);
+          if (isConversationHidden(msg.conversationId)) {
+            void unhideConversation(msg.conversationId).then(setHiddenIds);
+          }
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage(row, false);
           }
@@ -1142,6 +1163,9 @@ export default function App() {
             createdAt: msg.createdAt,
           };
           await appendStoredMessage(msg.conversationId, row);
+          if (isConversationHidden(msg.conversationId)) {
+            void unhideConversation(msg.conversationId).then(setHiddenIds);
+          }
           if (conversationIdRef.current === msg.conversationId) {
             await addMessage({ ...row, mediaUrl }, false);
           }
@@ -1185,6 +1209,9 @@ export default function App() {
             createdAt: payload.at,
           };
           await appendStoredMessage(conv, row);
+          if (isConversationHidden(conv)) {
+            void unhideConversation(conv).then(setHiddenIds);
+          }
           if (conversationIdRef.current === conv) {
             await addMessage(row, false);
           }
@@ -1360,6 +1387,8 @@ export default function App() {
   useEffect(() => {
     void purgeLegacyGlobalHistory(identityRef.current.id);
     void loadContacts().then(setContacts);
+    void loadDeletedContactIds();
+    void loadHiddenIds().then(setHiddenIds);
     // Снос только residue прошлой сессии (host-флаги legacy ?room= оставляем для F5).
     clearCallResidueState();
   }, []);
@@ -2284,6 +2313,7 @@ export default function App() {
         },
         onPeerHello: (peer) => {
           void (async () => {
+            if (isContactDeleted(peer.userId)) return;
             setPeerLabel(peer.name);
             setPeerAvatarUrl(peer.avatarUrl || '');
             setPeerColor(peer.color);
@@ -2873,6 +2903,9 @@ export default function App() {
         console.warn('[groups] derive key', e);
       }
 
+      if (isConversationHidden(conv)) {
+        void unhideConversation(conv).then(setHiddenIds);
+      }
       await hydrateConversation(conv);
       void syncPendingRef.current();
     },
@@ -3097,14 +3130,75 @@ export default function App() {
     }
   }, [mutedIds]);
 
+  const optimisticHideConv = useCallback(
+    (conv: string, peerId?: string | null, groupId?: string | null) => {
+      setHiddenIds((prev) => {
+        const next = new Set(prev);
+        next.add(conv);
+        return next;
+      });
+      setLastPreviews((prev) => {
+        const next = { ...prev };
+        if (peerId) delete next[peerId];
+        if (groupId) delete next[groupConversationId(groupId)];
+        return next;
+      });
+    },
+    []
+  );
+
+  const wipeLocalConversation = useCallback(async (conv: string) => {
+    await clearConversationHistory(conv);
+    await clearOutboxForConversation(conv);
+    return hideConversation(conv);
+  }, []);
+
   const handleClearHistory = useCallback(async () => {
     const conv = conversationIdRef.current;
     if (!conv) return;
-    await clearConversationHistory(conv);
-    revokeMediaUrls();
-    setMessages([]);
-    void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
-  }, [revokeMediaUrls]);
+    const peer = peerIdRef.current;
+    const groupId = activeGroupIdRef.current;
+    optimisticHideConv(conv, peer, groupId);
+    try {
+      const nextHidden = await wipeLocalConversation(conv);
+      setHiddenIds(nextHidden);
+      revokeMediaUrls();
+      setMessages([]);
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+    } catch (e) {
+      setHiddenIds(await loadHiddenIds());
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+      setError(e instanceof Error ? e.message : t('chatMenu.clearFailed'));
+      throw e;
+    }
+  }, [optimisticHideConv, revokeMediaUrls, t, wipeLocalConversation]);
+
+  const handleDeleteChat = useCallback(async () => {
+    const conv = conversationIdRef.current;
+    if (!conv) return;
+    const peer = peerIdRef.current;
+    const groupId = activeGroupIdRef.current;
+    optimisticHideConv(conv, peer, groupId);
+    try {
+      const nextHidden = await wipeLocalConversation(conv);
+      setHiddenIds(nextHidden);
+      revokeMediaUrls();
+      setMessages([]);
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+      setGroupMgmtOpen(false);
+      activeGroupIdRef.current = null;
+      setActiveGroupId(null);
+      conversationIdRef.current = null;
+      setScreen('home');
+      setMainTab('chats');
+      setMessengerSidebarOpen(false);
+    } catch (e) {
+      setHiddenIds(await loadHiddenIds());
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+      setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
+      throw e;
+    }
+  }, [optimisticHideConv, revokeMediaUrls, t, wipeLocalConversation]);
 
   const startGroupCall = useCallback(
     async (video: boolean) => {
@@ -3180,6 +3274,23 @@ export default function App() {
   }, []);
 
   const handleGroupLeft = useCallback(() => {
+    const groupId = activeGroupIdRef.current;
+    const conv = groupId ? groupConversationId(groupId) : conversationIdRef.current;
+    if (groupId) {
+      setGroups((prev) => prev.filter((g) => g.id !== groupId));
+      groupsRef.current = groupsRef.current.filter((g) => g.id !== groupId);
+    }
+    if (conv) {
+      optimisticHideConv(conv, null, groupId);
+      void wipeLocalConversation(conv)
+        .then(async (ids) => {
+          setHiddenIds(ids);
+          setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+        })
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
+        });
+    }
     setGroupMgmtOpen(false);
     activeGroupIdRef.current = null;
     setActiveGroupId(null);
@@ -3190,8 +3301,7 @@ export default function App() {
     setScreen('home');
     setMainTab('chats');
     void refreshGroups();
-    void loadLastMessagePreviews(identityRef.current.id).then(setLastPreviews);
-  }, [refreshGroups]);
+  }, [optimisticHideConv, refreshGroups, t, wipeLocalConversation]);
 
   /**
    * Явный Hang Up / «Разорвать связь»: закрываем PC и возвращаемся в свой инбокс.
@@ -4435,22 +4545,48 @@ export default function App() {
   );
 
   const chatsOrdered = useMemo(() => {
-    return [...peerContacts].sort((a, b) => {
+    const selfId = identity.id;
+    const known = new Set(peerContacts.map((c) => c.id));
+    const visibleContacts = peerContacts.filter((c) => {
+      const conv = conversationId(selfId, c.id);
+      if (hiddenIds.has(conv)) return false;
+      return Boolean(lastPreviews[c.id]);
+    });
+    const extras: Contact[] = [];
+    for (const [peerId, preview] of Object.entries(lastPreviews)) {
+      if (!peerId || peerId.startsWith('group:')) continue;
+      if (known.has(peerId) || peerId === selfId) continue;
+      if (blockedIds.has(peerId)) continue;
+      if (hiddenIds.has(conversationId(selfId, peerId))) continue;
+      if (!preview) continue;
+      const presence = presenceUsers.find((u) => u.userId === peerId);
+      extras.push({
+        id: peerId,
+        name: presence?.name || peerId.slice(0, 8),
+        color: presence?.color || '#60a5fa',
+        avatarUrl: presence?.avatarUrl || '',
+        addedAt: new Date(preview.createdAt || Date.now()).toISOString(),
+        source: 'hello',
+      });
+    }
+    return [...visibleContacts, ...extras].sort((a, b) => {
       const ta = lastPreviews[a.id]?.createdAt ?? 0;
       const tb = lastPreviews[b.id]?.createdAt ?? 0;
       if (tb !== ta) return tb - ta;
       return a.name.localeCompare(b.name, 'ru');
     });
-  }, [peerContacts, lastPreviews]);
+  }, [blockedIds, hiddenIds, identity.id, lastPreviews, peerContacts, presenceUsers]);
 
   const groupsOrdered = useMemo(() => {
-    return [...(groups ?? [])].sort((a, b) => {
-      const ta = a?.id ? (lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0) : 0;
-      const tb = b?.id ? (lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0) : 0;
-      if (tb !== ta) return tb - ta;
-      return (a?.name ?? '').localeCompare(b?.name ?? '', 'ru');
-    });
-  }, [groups, lastPreviews]);
+    return [...(groups ?? [])]
+      .filter((g) => g?.id && !hiddenIds.has(groupConversationId(g.id)))
+      .sort((a, b) => {
+        const ta = a?.id ? (lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0) : 0;
+        const tb = b?.id ? (lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0) : 0;
+        if (tb !== ta) return tb - ta;
+        return (a?.name ?? '').localeCompare(b?.name ?? '', 'ru');
+      });
+  }, [groups, hiddenIds, lastPreviews]);
 
   const contactsFiltered = useMemo(() => {
     const q = contactsSearchQuery.trim().toLowerCase();
@@ -4547,17 +4683,28 @@ export default function App() {
     applyBlockedPeerSessionStop(peerLabel);
   };
 
-  /** Remove peer from address book + clear active chat selection. */
+  /** Remove peer from address book + wipe local chat so hello/SAF cannot revive the row. */
   const handleDeleteContact = async () => {
     const id = activePeerId;
     if (!id) return;
     const label = peerLabel || 'Контакт';
+    const conv = conversationId(identityRef.current.id, id);
+
+    optimisticHideConv(conv, id, null);
+    setContacts((prev) => prev.filter((c) => c.id !== id));
 
     try {
       // Clear trusted relation in local + Supabase user_peer_relations.
       await untrustUser(id);
       const next = await removeContact(id, { force: true });
       setContacts(next);
+      try {
+        const nextHidden = await wipeLocalConversation(conv);
+        setHiddenIds(nextHidden);
+      } catch (wipeErr) {
+        setError(wipeErr instanceof Error ? wipeErr.message : t('chatMenu.deleteFailed'));
+        throw wipeErr;
+      }
       setTrustedIds(loadTrustedIds());
       setBlockedIds(loadBlockedIds());
       setPeerProfileOpen(false);
@@ -4569,6 +4716,9 @@ export default function App() {
       // Leave peer session / clear selected contact (same as block cleanup).
       disconnect();
     } catch (e) {
+      setContacts(await loadContacts());
+      setHiddenIds(await loadHiddenIds());
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
       setError(e instanceof Error ? e.message : t('safety.deleteFailed'));
       throw e;
     }
@@ -4915,7 +5065,7 @@ export default function App() {
                           <Users size={16} /> {t('groups.createButton')}
                         </button>
                         <span className="contacts-count">
-                          {peerContacts.length + groups.length}
+                          {chatsOrdered.length + groupsOrdered.length}
                         </span>
                       </div>
                     </div>
@@ -4978,7 +5128,7 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {chatsSearchMode ? null : peerContacts.length === 0 && groups.length === 0 ? (
+                    {chatsSearchMode ? null : chatsOrdered.length === 0 && groupsOrdered.length === 0 ? (
                       <p className="empty-contacts">
                         {t('chats.empty')} {t('chats.emptyHint')}
                       </p>
@@ -5157,7 +5307,7 @@ export default function App() {
               </div>
               {sidebarSearchMode ? null : (
               <ul className="messenger-contacts">
-                {peerContacts.length === 0 && groups.length === 0 ? (
+                {chatsOrdered.length === 0 && groupsOrdered.length === 0 ? (
                   <li className="empty-contacts">{t('chats.noContacts')}</li>
                 ) : (
                   <>
@@ -5209,7 +5359,7 @@ export default function App() {
                         </li>
                       );
                     })}
-                    {peerContacts.map((c) => {
+                    {chatsOrdered.map((c) => {
                     const online = onlineIds.has(c.id);
                     const active = !activeGroupId && peerId === c.id;
                     return (
@@ -5320,7 +5470,8 @@ export default function App() {
               onEditContact={!activeGroup && activePeerId ? () => setEditContactOpen(true) : undefined}
               onToggleMute={() => void handleToggleMute()}
               onBlockUser={!activeGroup && activePeerId ? () => void handleBlockPeer() : undefined}
-              onClearHistory={() => void handleClearHistory()}
+              onClearHistory={() => handleClearHistory()}
+              onDeleteChat={() => handleDeleteChat()}
               onGroupAudioCall={activeGroup ? () => void startGroupCall(false) : undefined}
               onGroupVideoCall={activeGroup ? () => void startGroupCall(true) : undefined}
             />

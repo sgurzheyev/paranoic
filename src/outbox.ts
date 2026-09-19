@@ -59,3 +59,10 @@ export async function removeOutboxMany(ids: string[]): Promise<void> {
   const list = (await loadAll()).filter((x) => !drop.has(x.id));
   await saveAll(list);
 }
+
+/** Drop pending outbound packets for a conversation the user just cleared or deleted. */
+export async function clearOutboxForConversation(conversationId: string): Promise<void> {
+  if (!conversationId) return;
+  const list = (await loadAll()).filter((x) => x.conversationId !== conversationId);
+  await saveAll(list);
+}

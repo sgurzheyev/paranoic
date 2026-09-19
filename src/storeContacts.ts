@@ -21,6 +21,7 @@ const mediaDb = localforage.createInstance({
 });
 
 const CONTACTS_KEY = 'contact-list';
+const DELETED_CONTACTS_KEY = 'deleted-contact-ids';
 
 /**
  * Полный сброс локальных чатов и контактов.
@@ -29,6 +30,7 @@ const CONTACTS_KEY = 'contact-list';
 export async function clearLocalChatsAndContacts(): Promise<void> {
   try {
     await contactsDb.setItem(CONTACTS_KEY, []);
+    await contactsDb.setItem(DELETED_CONTACTS_KEY, []);
   } catch (e) {
     console.warn('[storeContacts] clear contacts', e);
   }
