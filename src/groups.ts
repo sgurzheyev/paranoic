@@ -503,16 +503,15 @@ function isMissingRpcError(message: string | undefined): boolean {
 export async function deleteGroup(groupId: string): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const uid = await requireUid();
-  try {
-    await broadcastGroupEvent(groupId, 'group_deleted', {
-      type: 'group_deleted',
-      groupId,
-      deletedBy: uid,
-      at: Date.now(),
-    });
-  } catch (e) {
+  // Do not block delete on Realtime subscribe (empty groups have no traffic).
+  void broadcastGroupEvent(groupId, 'group_deleted', {
+    type: 'group_deleted',
+    groupId,
+    deletedBy: uid,
+    at: Date.now(),
+  }).catch((e) => {
     console.warn('[groups] group_deleted broadcast', e);
-  }
+  });
 
   const ch = liveGroupChannels.get(groupId);
   if (ch) {

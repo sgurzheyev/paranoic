@@ -163,6 +163,7 @@ import {
   createGroup,
   deleteGroup,
   groupRoomId,
+  leaveGroup,
   listMyGroups,
   subscribeGroupChannel,
   unsubscribeAllGroupChannels,
@@ -2921,14 +2922,20 @@ export default function App() {
       return;
     }
     try {
+      const hidden = await loadHiddenIds();
+      setHiddenIds(hidden);
       const next = await listMyGroups();
       const nextIds = new Set(next.map((g) => g.id));
       const staleIds = new Set<string>();
       for (const g of groupsRef.current) {
         if (g.id && !nextIds.has(g.id)) staleIds.add(g.id);
       }
-      groupsRef.current = next;
-      setGroups(next);
+      // Membership still lists empty groups we tombstoned — do not put them back.
+      const visible = next.filter(
+        (g) => g?.id && !hidden.has(groupConversationId(g.id)) && !isConversationHidden(groupConversationId(g.id))
+      );
+      groupsRef.current = visible;
+      setGroups(visible);
       try {
         const previews = await loadLastMessagePreviews(identityRef.current.id);
         for (const key of Object.keys(previews)) {
@@ -3288,40 +3295,40 @@ export default function App() {
     const groupId = activeGroupIdRef.current;
 
     if (groupId) {
-      const previousGroups = groupsRef.current;
+      // Tombstone first (IndexedDB + cache) so a concurrent listMyGroups
+      // refresh cannot rebuild an empty membership-backed row.
+      setHiddenIds(await hideConversation(conv));
       setGroups((prev) => prev.filter((g) => g.id !== groupId));
       groupsRef.current = groupsRef.current.filter((g) => g.id !== groupId);
       optimisticHideConv(conv, null, groupId);
-      let deletedOnServer = false;
+      await clearConversationHistory(conv);
+      await clearOutboxForConversation(conv);
+      revokeMediaUrls();
+      setMessages([]);
+      setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
+      setGroupMgmtOpen(false);
+      activeGroupIdRef.current = null;
+      setActiveGroupId(null);
+      conversationIdRef.current = null;
+      setSecretKey(null);
+      secretKeyRef.current = null;
+      setScreen('home');
+      setMainTab('chats');
+      setMessengerSidebarOpen(false);
+
       try {
         await deleteGroup(groupId);
-        deletedOnServer = true;
-        await clearConversationHistory(conv);
-        await clearOutboxForConversation(conv);
-        setHiddenIds(await hideConversation(conv));
-        revokeMediaUrls();
-        setMessages([]);
-        setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
-        setGroupMgmtOpen(false);
-        activeGroupIdRef.current = null;
-        setActiveGroupId(null);
-        conversationIdRef.current = null;
-        setSecretKey(null);
-        secretKeyRef.current = null;
-        setScreen('home');
-        setMainTab('chats');
-        setMessengerSidebarOpen(false);
-        void refreshGroups();
       } catch (e) {
-        if (!deletedOnServer) {
-          groupsRef.current = previousGroups;
-          setGroups(previousGroups);
+        // RPC not applied / not allowed: drop MY membership so listMyGroups
+        // cannot rebuild the row. Other members keep the group in that case.
+        try {
+          await leaveGroup(groupId);
+        } catch (leaveErr) {
+          console.warn('[groups] delete fallback leave', leaveErr);
+          setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
         }
-        setHiddenIds(await loadHiddenIds());
-        setLastPreviews(await loadLastMessagePreviews(identityRef.current.id));
-        setError(e instanceof Error ? e.message : t('chatMenu.deleteFailed'));
-        throw e;
       }
+      void refreshGroups();
       return;
     }
 
@@ -4766,7 +4773,13 @@ export default function App() {
 
   const groupsOrdered = useMemo(() => {
     return [...(groups ?? [])]
-      .filter((g) => g?.id && !hiddenIds.has(groupConversationId(g.id)))
+      .filter((g) => {
+        if (!g?.id) return false;
+        const conv = groupConversationId(g.id);
+        // Empty groups have no lastPreview; membership alone must not keep a
+        // tombstoned row on Chats (Contacts ↔ Chats rebuild).
+        return !hiddenIds.has(conv) && !isConversationHidden(conv);
+      })
       .sort((a, b) => {
         const ta = a?.id ? (lastPreviews[groupConversationId(a.id)]?.createdAt ?? 0) : 0;
         const tb = b?.id ? (lastPreviews[groupConversationId(b.id)]?.createdAt ?? 0) : 0;
