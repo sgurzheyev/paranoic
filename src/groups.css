@@ -58,3 +58,52 @@
 .chat-top--group .chat-peer--btn {
   cursor: default;
 }
+
+.chat-top--group .chat-peer-meta {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.chat-top--group .chat-peer-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  On a phone the group header also shows the sidebar toggle, back control,
+  two call buttons, attach, and the menu. Those controls are flex-shrink: 0,
+  and the title column (flex-basis 0) was squeezed to a few pixels. The
+  clipped ellipsis looked like a single dot while the subtitle still painted
+  because it was not clipped. Give the name its own row so it stays readable.
+*/
+@media (max-width: 860px) {
+  .chat-top--group {
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 2px;
+  }
+
+  .chat-top--group .chat-peer {
+    flex: 1 1 100%;
+    order: -1;
+    min-width: 0;
+  }
+
+  .chat-top--group .chat-back-home {
+    gap: 0;
+    padding-inline: 2px;
+  }
+
+  .chat-top--group .chat-back-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
