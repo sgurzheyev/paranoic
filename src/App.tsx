@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import ContactListRow from './ContactListRow';
 import ChatHeader from './ChatHeader';
+import { resolveChatTitle } from './chatTitle';
 import ChatSearchPanel from './ChatSearchPanel';
 import ContactsSearchPanel from './ContactsSearchPanel';
 import CreateGroupModal from './CreateGroupModal';
@@ -5700,7 +5701,13 @@ export default function App() {
             <div className="messenger-pane chat">
             <ChatHeader
               backLabel={t('chat.back')}
-              peerLabel={peerLabel}
+              peerLabel={
+                activeGroup
+                  ? resolveChatTitle(activeGroup.name, t('groups.fallbackName'))
+                  : activeGroupId
+                    ? resolveChatTitle(peerLabel, t('groups.fallbackName'))
+                    : resolveChatTitle(peerLabel, t('chat.unnamedPeer'))
+              }
               peerColor={peerColor}
               peerAvatarUrl={peerAvatarUrl}
               peerTyping={peerTyping}

@@ -1095,9 +1095,11 @@ svg.lucide {
 
 .chat-peer-meta {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .chat-peer-name {
@@ -1107,6 +1109,9 @@ svg.lucide {
 }
 
 .chat-peer-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--muted);

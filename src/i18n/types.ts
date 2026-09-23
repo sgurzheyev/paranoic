@@ -191,6 +191,7 @@ export type TranslationDict = {
     call: string;
     returnToCall: string;
     attach: string;
+    unnamedPeer: string;
     empty: string;
     placeholder: string;
     send: string;
@@ -295,6 +296,7 @@ export type TranslationDict = {
     noContacts: string;
     maxMembers: string;
     memberCount: string;
+    fallbackName: string;
     openAria: string;
     createFailed: string;
     empty: string;

@@ -176,7 +176,8 @@ export default function ChatHeader({
           onBack(e);
         }}
       >
-        <ArrowLeft size={16} /> {backLabel}
+        <ArrowLeft size={16} />
+        <span className="chat-back-label">{backLabel}</span>
       </button>
 
       <button
