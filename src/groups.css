@@ -59,6 +59,17 @@
   cursor: default;
 }
 
+.chat-top--group .chat-peer-meta {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.chat-top--group .chat-peer-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /*
   On a phone the group header also shows the sidebar toggle, back control,
   two call buttons, attach, and the menu. Those controls are flex-shrink: 0,
