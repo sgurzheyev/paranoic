@@ -1,0 +1,52 @@
+# Paranoic — Cursor rules
+
+Paranoic is a privacy-first encrypted messenger plus a Family map of "memory gems".
+Stack: React + TypeScript + Vite + Tailwind, Capacitor Android (`men.paranoic.app`), Supabase (Auth, Postgres + RLS, Realtime), Cloudflare R2 for media, Mapbox, WebRTC (P2P chats and calls).
+Prod: https://www.paranoic.men (Vercel, auto-deploys from `main`).
+Status doc for humans: `docs/Paranoic-Status-*.md`. Technical audit: `APP_AUDIT.md`.
+
+## Commands
+- Dev: `npm run dev` · Build: `npm run build` (`tsc -b && vite build`) · Lint: `npm run lint` (oxlint)
+- Every change must pass `npm run build` and `npm run lint` before it is committed.
+
+## Workflow
+- Work on a branch and open a PR; do not push feature code straight to `main`. Merge only when the owner says so.
+- Keep PRs small and scoped to one problem. Do not reformat unrelated files.
+- Never run SQL against the live database from code or scripts. Put SQL in a new file `supabase/migrations/YYYYMMDD_name.sql` and list in the PR description exactly what the owner must run in the Supabase SQL editor, in order.
+- Never run `insert-gems.mjs` (it wipes `memory_gems`). Data imports must merge, never delete.
+- After a user-visible change, update `docs/Paranoic-Status-*.md` in plain language.
+
+## Security (hard rules)
+- NEVER put secrets in `VITE_*` variables. Everything with the `VITE_` prefix is shipped to the browser. Only the Supabase anon key, Supabase URL, Mapbox public token and TURN settings may be `VITE_*`.
+- R2 secret keys live only on the server (Supabase Edge Function / serverless). The client gets presigned URLs for upload and delete; it never signs S3 requests itself.
+- Never select or return `profiles.password` (or any hash) to the client. Use `PROFILE_PUBLIC_COLUMNS`.
+- The client is never the security boundary. Every permission must be enforced by RLS or a `SECURITY DEFINER` function that checks `auth.uid()`.
+- Admin rights come only from `profiles.role = 'admin'` checked by `public.is_admin()` in the database. No username-based admin checks.
+- Admin writes go through RPCs (`admin_set_ban`, `admin_delete_capsule`, `admin_resolve_report`) that raise an error when 0 rows change and write to `admin_audit_log`. Add new admin actions the same way.
+- Privileged columns (`role`, `is_banned`) are protected by the `profiles_guard_privileged` trigger. Do not add policies that let users update them.
+- No RLS policy may use `using (true)` for update or delete. Owner-only: `owner_id::text = auth.uid()::text`.
+- Banned users must be blocked in the database too, not only in the UI.
+
+## Supabase / SQL
+- `profiles.id` is `uuid`, while many other id columns are `text`. Compare ids as `a::text = b::text` (or cast both to uuid). Never compare uuid to text directly (error 42883).
+- Wrap migrations in `begin; ... commit;` and make them re-runnable (`create or replace`, `drop policy if exists`, `if not exists`).
+- Supabase `update`/`delete` returns no error when RLS blocks it and 0 rows change. Always check the affected rows (`.select()` after the write, or an RPC that raises) before showing success.
+
+## Frontend
+- Show success only after the server confirms the write. On failure, show a clear message in the user's language, not a raw Postgres error; map `42501` to "no permission" and `P0002` to "not found".
+- Delete in this order: database row first, then media in R2. Never leave a row pointing at deleted media.
+- No `window.alert` / `confirm` for results; use inline messages. Destructive actions need a confirm step.
+- Mobile first: layouts must work at 360px wide, use `100dvh`, and tap targets of at least 40px.
+- All user-facing text goes through i18n (`src/i18n`). Add keys for en and ru at least; keep RTL working for `ar`.
+- Lists that can grow (users, gems, reports, messages) must be paginated or limited; never `select('*')` without a limit.
+
+## Media and Family map
+- Gem photos must be stored in R2 under `memory-gems/...` and referenced by the public R2 URL. Never store or hotlink `googleusercontent.com` or other third-party image URLs (they 403 and show 💎).
+- Photo import scripts live in `scripts/maps-import/`; they append to `media_urls` and dedupe, never delete.
+
+## Calls and messaging
+- 1:1 calls first, group mesh calls second. Test on mobile data; calls need a TURN server (`VITE_TURN_*`).
+- Messages are end-to-end encrypted in the client; never log plaintext messages or keys.
+
+## Android / Play
+- Build the signed AAB last, after all fixes are merged. Bump `versionCode` each release.
