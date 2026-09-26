@@ -18,9 +18,9 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles p
-    where p.id = auth.uid()::text
+    where p.id::text = auth.uid()::text
       and p.role = 'admin'
-      and not p.is_banned
+      and not coalesce(p.is_banned, false)
   );
 $$;
 revoke all on function public.is_admin() from public;
@@ -64,7 +64,7 @@ begin
   end if;
 
   -- DELETE
-  if old.is_banned and not public.is_admin() then
+  if coalesce(old.is_banned, false) and not public.is_admin() then
     raise exception 'banned profiles cannot be deleted by the user' using errcode = '42501';
   end if;
   return old;
@@ -115,7 +115,7 @@ begin
   if p_target = auth.uid()::text then
     raise exception 'cannot ban yourself';
   end if;
-  update public.profiles set is_banned = p_banned where id = p_target;
+  update public.profiles set is_banned = p_banned where id::text = p_target;
   get diagnostics n = row_count;
   if n = 0 then
     raise exception 'profile % not found', p_target using errcode = 'P0002';
