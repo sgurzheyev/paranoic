@@ -1,8 +1,9 @@
+-- superseded by migrations/20260927_admin_hardening.sql; promote admins with SQL editor only
 /**
  * Admin roles + ban flags for Paranoic.
  * Run in Supabase SQL Editor after profiles.sql / usernames.sql.
  *
- * Promote yourself:
+ * Promote yourself (SQL editor only — the API cannot change profiles.role):
  *   update public.profiles set role = 'admin' where id = 'YOUR_USER_ID';
  */
 
@@ -16,9 +17,3 @@ comment on column public.profiles.role is
   'Access role: user | admin. Admins see Admin Panel.';
 comment on column public.profiles.is_banned is
   'When true, client must block call_offer and P2P connections.';
-
-drop policy if exists "profiles_delete_anon" on public.profiles;
-create policy "profiles_delete_anon"
-  on public.profiles for delete
-  to anon
-  using (true);

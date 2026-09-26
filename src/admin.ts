@@ -1,5 +1,5 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { AVATARS_BUCKET, PROFILES_TABLE, PROFILE_COLUMNS, type RemoteProfile } from './profile';
+import { PROFILES_TABLE, PROFILE_PUBLIC_COLUMNS, type RemoteProfile } from './profile';
 
 export type ProfileRole = 'user' | 'admin';
 
@@ -13,7 +13,20 @@ export type MyAccessFlags = {
   isBanned: boolean;
 };
 
-const PROFILE_ADMIN_SELECT = PROFILE_COLUMNS;
+const PROFILE_ADMIN_SELECT = PROFILE_PUBLIC_COLUMNS;
+
+type AdminDbError = { message?: string; code?: string } | null;
+
+/** Map Postgres admin-RPC failures to a message the panel can show. */
+export function mapAdminDbError(error: AdminDbError, fallback: string): Error {
+  if (error?.code === '42501') {
+    return new Error('Нет прав администратора (проверьте profiles.role)');
+  }
+  if (error?.code === 'P0002') {
+    return new Error('Запись не найдена (возможно, уже удалена)');
+  }
+  return new Error(error?.message || fallback);
+}
 
 function normalizeRole(raw: unknown): ProfileRole {
   return raw === 'admin' ? 'admin' : 'user';
@@ -72,35 +85,15 @@ export async function listAllProfiles(): Promise<AdminUserRow[]> {
   return ((data as Record<string, unknown>[] | null) ?? []).map(mapAdminRow);
 }
 
-/** Ban / Unban. */
+/** Ban / Unban through admin_set_ban (fails loudly; writes the audit log). */
 export async function setUserBanned(userId: string, banned: boolean): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const sb = getSupabase();
-  const { error } = await sb
-    .from(PROFILES_TABLE)
-    .update({ is_banned: banned })
-    .eq('id', userId);
-  if (error) throw new Error(error.message || 'Не удалось изменить бан');
-}
-
-/** Мгновенное удаление профиля (+ попытка убрать аватар). */
-export async function deleteUserAccount(userId: string): Promise<void> {
-  if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
-  const sb = getSupabase();
-
-  try {
-    await sb.storage.from(AVATARS_BUCKET).remove([
-      `${userId}/avatar.jpg`,
-      `${userId}/avatar.png`,
-      `${userId}/avatar.webp`,
-      `${userId}/avatar.gif`,
-    ]);
-  } catch {
-    /* avatar optional */
-  }
-
-  const { error } = await sb.from(PROFILES_TABLE).delete().eq('id', userId);
-  if (error) throw new Error(error.message || 'Не удалось удалить аккаунт');
+  const { error } = await sb.rpc('admin_set_ban', {
+    p_target: userId,
+    p_banned: banned,
+  });
+  if (error) throw mapAdminDbError(error, 'Не удалось изменить бан');
 }
 
 export function formatRegisteredAt(iso: string | null | undefined): string {

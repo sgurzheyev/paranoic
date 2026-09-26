@@ -34,9 +34,7 @@ import GlobeLobby, { type MapPerson } from './GlobeLobby';
 import Avatar from './Avatar';
 import ProfileModal from './ProfileModal';
 import PeerProfileModal from './PeerProfileModal';
-import AdminDashboard from './AdminDashboard';
 import AdminPanel from './AdminPanel';
-import { isSuperAdminUsername } from './adminModeration';
 import CallOverlay, { ActiveCallBanner } from './CallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import LiquidNavigationBar, { type LiquidNavTab } from './LiquidNavigationBar';
@@ -5154,15 +5152,13 @@ export default function App() {
               </button>
             </div>
           )}
-          {adminOpen && isSuperAdminUsername(identity.username) && (
+          {adminOpen && isAdmin && (
             <AdminPanel
+              isAdmin={isAdmin}
               username={identity.username}
               currentUserId={identity.id}
               onClose={() => setAdminOpen(false)}
             />
-          )}
-          {adminOpen && isAdmin && !isSuperAdminUsername(identity.username) && (
-            <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
           )}
           {incomingRing && (
             <IncomingCallModal
@@ -5245,15 +5241,13 @@ export default function App() {
           onClose={() => setPeerProfileOpen(false)}
         />
       )}
-      {adminOpen && isSuperAdminUsername(identity.username) && (
+      {adminOpen && isAdmin && (
         <AdminPanel
+          isAdmin={isAdmin}
           username={identity.username}
           currentUserId={identity.id}
           onClose={() => setAdminOpen(false)}
         />
-      )}
-      {adminOpen && isAdmin && !isSuperAdminUsername(identity.username) && (
-        <AdminDashboard currentUserId={identity.id} onClose={() => setAdminOpen(false)} />
       )}
       <header className="app-header flex items-center">
         <div className="brand">
@@ -5263,7 +5257,7 @@ export default function App() {
           </div>
         </div>
         <div className="app-header-right">
-          {(isAdmin || isSuperAdminUsername(identity.username)) && (
+          {isAdmin && (
             <button
               type="button"
               className="admin-panel-btn"

@@ -1,25 +1,26 @@
 /**
  * Moderation helpers for AdminPanel (UGC / Play compliance).
- * Client-gated to @sgurzheyev; DB still needs RLS that allows this admin.
+ * Writes go through SECURITY DEFINER RPCs. The panel is gated on profiles.role.
  */
 
 import { getAuthUserId, getSupabase, hasSupabaseConfig } from './lib/supabase';
-import {
-  listAllProfiles,
-  setUserBanned,
-  type AdminUserRow,
-} from './admin';
-import { BLOCKED_USERS_TABLE, REPORTS_TABLE } from './userSafety';
+import { listAllProfiles, mapAdminDbError, type AdminUserRow } from './admin';
+import { REPORTS_TABLE } from './userSafety';
 import { MEMORY_GEMS_TABLE, mapMemoryGemRow } from './memoryGems';
 import { deleteGemMedia } from './s3Storage';
 import type { MapGem } from './mapGems';
 
 export const SUPER_ADMIN_USERNAME = 'sgurzheyev';
 
-/** Username gate: "@sgurzheyev" / "sgurzheyev" / casing variants. */
+/** Username check kept for display / back-compat. Access is profiles.role. */
 export function isSuperAdminUsername(username?: string | null): boolean {
   const raw = (username || '').trim().replace(/^@+/, '').toLowerCase();
   return raw === SUPER_ADMIN_USERNAME;
+}
+
+/** True when profiles.role is admin. No username fallback. */
+export function isAdminRole(role?: string | null): boolean {
+  return role === 'admin';
 }
 
 export type ModerationReport = {
@@ -43,13 +44,20 @@ export type AdminCapsule = {
   created_at: string;
 };
 
+export type AdminAuditEntry = {
+  id: string;
+  actor_id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
 export async function listModerationUsers(): Promise<AdminUserRow[]> {
   return listAllProfiles();
 }
 
-/**
- * Ban: profiles.is_banned + blocked_users row for the acting admin.
- */
 export async function banUserForModeration(targetUserId: string): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const target = targetUserId.trim();
@@ -59,19 +67,9 @@ export async function banUserForModeration(targetUserId: string): Promise<void> 
   if (!uid) throw new Error('Нужна сессия Auth');
   if (uid === target) throw new Error('Нельзя заблокировать себя');
 
-  await setUserBanned(target, true);
-
   const sb = getSupabase();
-  const { error } = await sb.from(BLOCKED_USERS_TABLE).upsert(
-    {
-      user_id: uid,
-      blocked_user_id: target,
-    },
-    { onConflict: 'user_id,blocked_user_id' }
-  );
-  if (error) {
-    console.warn('[paranoic admin] blocked_users upsert', error.message);
-  }
+  const { error } = await sb.rpc('admin_set_ban', { p_target: target, p_banned: true });
+  if (error) throw mapAdminDbError(error, 'Не удалось забанить');
 }
 
 export async function unbanUserForModeration(targetUserId: string): Promise<void> {
@@ -79,20 +77,9 @@ export async function unbanUserForModeration(targetUserId: string): Promise<void
   const target = targetUserId.trim();
   if (!target) throw new Error('Нет ID пользователя');
 
-  await setUserBanned(target, false);
-
-  try {
-    const uid = await getAuthUserId();
-    if (!uid) return;
-    const sb = getSupabase();
-    await sb
-      .from(BLOCKED_USERS_TABLE)
-      .delete()
-      .eq('user_id', uid)
-      .eq('blocked_user_id', target);
-  } catch (e) {
-    console.warn('[paranoic admin] blocked_users delete', e);
-  }
+  const sb = getSupabase();
+  const { error } = await sb.rpc('admin_set_ban', { p_target: target, p_banned: false });
+  if (error) throw mapAdminDbError(error, 'Не удалось разбанить');
 }
 
 /** Public (and unknown-visibility) map capsules for moderation. */
@@ -167,23 +154,21 @@ export async function listPublicCapsules(): Promise<AdminCapsule[]> {
 export async function deleteCapsuleAsAdmin(capsule: AdminCapsule): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const sb = getSupabase();
+  const { data, error } = await sb.rpc('admin_delete_capsule', {
+    p_source: capsule.source,
+    p_id: capsule.id,
+  });
+  if (error) throw mapAdminDbError(error, 'Не удалось удалить капсулу');
 
-  if (capsule.media_url) {
+  const returnedMediaUrl = typeof data === 'string' ? data : null;
+  const mediaUrl = returnedMediaUrl ?? capsule.media_url;
+  if (mediaUrl) {
     try {
-      await deleteGemMedia(capsule.media_url);
+      await deleteGemMedia(mediaUrl);
     } catch (e) {
       console.warn('[paranoic admin] media delete', e);
     }
   }
-
-  if (capsule.source === 'memory_gems') {
-    const { error } = await sb.from(MEMORY_GEMS_TABLE).delete().eq('id', capsule.id);
-    if (error) throw new Error(error.message || 'Не удалось удалить капсулу');
-    return;
-  }
-
-  const { error } = await sb.from('map_gems').delete().eq('id', capsule.id);
-  if (error) throw new Error(error.message || 'Не удалось удалить капсулу');
 }
 
 export async function listModerationReports(): Promise<ModerationReport[]> {
@@ -224,11 +209,8 @@ export async function listModerationReports(): Promise<ModerationReport[]> {
 export async function markReportResolved(reportId: string): Promise<void> {
   if (!hasSupabaseConfig()) throw new Error('Supabase не настроен');
   const sb = getSupabase();
-  const { error } = await sb
-    .from(REPORTS_TABLE)
-    .update({ resolved_at: new Date().toISOString() })
-    .eq('id', reportId);
-  if (error) throw new Error(error.message || 'Не удалось пометить жалобу');
+  const { error } = await sb.rpc('admin_resolve_report', { p_id: reportId });
+  if (error) throw mapAdminDbError(error, 'Не удалось пометить жалобу');
 }
 
 /** Delete public capsules authored by the reported user. */
@@ -236,15 +218,47 @@ export async function deleteReportedUserContent(reportedId: string): Promise<num
   const capsules = await listPublicCapsules();
   const mine = capsules.filter((c) => c.author_id === reportedId);
   let removed = 0;
+  const failed: string[] = [];
   for (const c of mine) {
     try {
       await deleteCapsuleAsAdmin(c);
       removed += 1;
     } catch (e) {
       console.warn('[paranoic admin] delete reported content', c.id, e);
+      failed.push(c.id);
     }
   }
+  if (failed.length > 0) {
+    throw new Error(`Не удалось удалить: ${failed.join(', ')}`);
+  }
   return removed;
+}
+
+export async function listAdminAuditLog(limit = 100): Promise<AdminAuditEntry[]> {
+  if (!hasSupabaseConfig()) return [];
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('admin_audit_log')
+    .select('id,actor_id,action,target_type,target_id,details,created_at')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw mapAdminDbError(error, 'Не удалось загрузить журнал');
+  return ((data as Record<string, unknown>[] | null) ?? []).map((row) => {
+    const detailsRaw = row.details;
+    const details =
+      detailsRaw && typeof detailsRaw === 'object' && !Array.isArray(detailsRaw)
+        ? (detailsRaw as Record<string, unknown>)
+        : {};
+    return {
+      id: String(row.id ?? ''),
+      actor_id: String(row.actor_id ?? ''),
+      action: String(row.action ?? ''),
+      target_type: String(row.target_type ?? ''),
+      target_id: String(row.target_id ?? ''),
+      details,
+      created_at: String(row.created_at ?? ''),
+    };
+  });
 }
 
 /** Re-export MapGem type usage if needed by UI. */
