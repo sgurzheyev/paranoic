@@ -1,0 +1,233 @@
+{
+  "nodes": [
+    {
+      "id": "hub",
+      "type": "file",
+      "file": "paranoic.md",
+      "x": 0,
+      "y": 0,
+      "width": 420,
+      "height": 320,
+      "color": "4"
+    },
+    {
+      "id": "arch",
+      "type": "file",
+      "file": "Paranoic/Architecture.md",
+      "x": -520,
+      "y": -360,
+      "width": 360,
+      "height": 280,
+      "color": "1"
+    },
+    {
+      "id": "stack",
+      "type": "file",
+      "file": "Paranoic/Stack.md",
+      "x": 520,
+      "y": -360,
+      "width": 360,
+      "height": 280,
+      "color": "1"
+    },
+    {
+      "id": "msg",
+      "type": "file",
+      "file": "Paranoic/Messenger.md",
+      "x": -620,
+      "y": 80,
+      "width": 360,
+      "height": 280,
+      "color": "2"
+    },
+    {
+      "id": "calls",
+      "type": "file",
+      "file": "Paranoic/Calls.md",
+      "x": 0,
+      "y": 420,
+      "width": 360,
+      "height": 300,
+      "color": "3"
+    },
+    {
+      "id": "fam",
+      "type": "file",
+      "file": "Paranoic/Family Map.md",
+      "x": 620,
+      "y": 80,
+      "width": 360,
+      "height": 280,
+      "color": "5"
+    },
+    {
+      "id": "data",
+      "type": "file",
+      "file": "Paranoic/Data Security.md",
+      "x": -320,
+      "y": 420,
+      "width": 360,
+      "height": 280,
+      "color": "6"
+    },
+    {
+      "id": "risk",
+      "type": "file",
+      "file": "Paranoic/Risks Tasks.md",
+      "x": 320,
+      "y": 420,
+      "width": 360,
+      "height": 280,
+      "color": "3"
+    },
+    {
+      "id": "title",
+      "type": "text",
+      "text": "# Paranoic Graph\nЧитаемая карта продукта · фильтр Graph: `tag:#paranoic`",
+      "x": -100,
+      "y": -520,
+      "width": 500,
+      "height": 120,
+      "color": "4"
+    },
+    {
+      "id": "works",
+      "type": "file",
+      "file": "Paranoic/What Works.md",
+      "x": -700,
+      "y": -200,
+      "width": 360,
+      "height": 260,
+      "color": "2"
+    },
+    {
+      "id": "audit",
+      "type": "file",
+      "file": "Paranoic/Audit 2026-09-12.md",
+      "x": 700,
+      "y": -200,
+      "width": 360,
+      "height": 260,
+      "color": "1"
+    },
+    {
+      "id": "feat",
+      "type": "file",
+      "file": "Paranoic/Feature Resolution.md",
+      "x": 0,
+      "y": -280,
+      "width": 360,
+      "height": 260,
+      "color": "3"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "fromNode": "hub",
+      "toNode": "arch",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "e2",
+      "fromNode": "hub",
+      "toNode": "stack",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "e3",
+      "fromNode": "hub",
+      "toNode": "msg",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "e4",
+      "fromNode": "hub",
+      "toNode": "calls",
+      "label": "P0 fix",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e5",
+      "fromNode": "hub",
+      "toNode": "fam",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "e6",
+      "fromNode": "hub",
+      "toNode": "data",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e7",
+      "fromNode": "hub",
+      "toNode": "risk",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e8",
+      "fromNode": "msg",
+      "toNode": "calls",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "e9",
+      "fromNode": "msg",
+      "toNode": "data",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e10",
+      "fromNode": "calls",
+      "toNode": "risk",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "e11",
+      "fromNode": "fam",
+      "toNode": "data",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "e12",
+      "fromNode": "arch",
+      "toNode": "msg",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e13",
+      "fromNode": "stack",
+      "toNode": "calls",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e-works",
+      "fromNode": "hub",
+      "toNode": "works"
+    },
+    {
+      "id": "e-audit",
+      "fromNode": "hub",
+      "toNode": "audit"
+    },
+    {
+      "id": "e-feat",
+      "fromNode": "hub",
+      "toNode": "feat"
+    }
+  ]
+}
