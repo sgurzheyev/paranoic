@@ -1,0 +1,83 @@
+{
+ "nodes": [
+  {
+   "id": "hub",
+   "type": "text",
+   "x": 0,
+   "y": 0,
+   "width": 420,
+   "height": 140,
+   "text": "# Paranoic\n27.09.2026\nМессенджер + карта Family",
+   "color": "6"
+  },
+  {
+   "id": "done",
+   "type": "text",
+   "x": -700,
+   "y": 260,
+   "width": 560,
+   "height": 420,
+   "text": "## ✅ Сделано\n- Админка защищена базой (PR #12)\n- Журнал действий + фильтр жалоб\n- ~225 фото Google Maps на карте (R2)\n- Чат удаляется у всех\n- Название группы в заголовке\n- Иконка V1 Glass P, HyperOS Хранилище\n- Цвет карты = Zip Lift\n- Play: тексты, иконка, баннер",
+   "color": "4"
+  },
+  {
+   "id": "now",
+   "type": "text",
+   "x": -60,
+   "y": 260,
+   "width": 540,
+   "height": 420,
+   "text": "## 📱 Умеет сейчас\n- Шифрованные чаты 1:1, медиа, голос, кружки\n- Офлайн-очередь\n- Группы до 20\n- Звонки 1:1 (группы нестабильно)\n- Контакты, поиск по @нику\n- Блок, жалобы, Ghost Mode, 24ч удаление\n- Карта, кристаллы с фото, лайки\n- 10 языков, темы Zip Lift\n- Админка + журнал",
+   "color": "5"
+  },
+  {
+   "id": "todo",
+   "type": "text",
+   "x": 560,
+   "y": 260,
+   "width": 560,
+   "height": 420,
+   "text": "## ⚠️ Дальше\n1. 🔴 Перевыпустить ключ R2\n2. 🔴 Скрыть хэши паролей\n3. 🟠 Закрыть правку map_gems\n4. 🟠 Бан в базе\n5. 🟡 TURN для звонков\n6. 🟡 Групповые звонки\n7. 🟢 Play: анкеты, тестеры, AAB v4",
+   "color": "1"
+  },
+  {
+   "id": "doc",
+   "type": "file",
+   "file": "docs/Paranoic-Status-2026-09-27.md",
+   "x": -60,
+   "y": 760,
+   "width": 540,
+   "height": 120
+  }
+ ],
+ "edges": [
+  {
+   "id": "edone",
+   "fromNode": "hub",
+   "fromSide": "bottom",
+   "toNode": "done",
+   "toSide": "top"
+  },
+  {
+   "id": "enow",
+   "fromNode": "hub",
+   "fromSide": "bottom",
+   "toNode": "now",
+   "toSide": "top"
+  },
+  {
+   "id": "etodo",
+   "fromNode": "hub",
+   "fromSide": "bottom",
+   "toNode": "todo",
+   "toSide": "top"
+  },
+  {
+   "id": "edoc",
+   "fromNode": "now",
+   "fromSide": "bottom",
+   "toNode": "doc",
+   "toSide": "top"
+  }
+ ]
+}
