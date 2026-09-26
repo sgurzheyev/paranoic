@@ -4,6 +4,7 @@ import {
   Ban,
   CheckCircle2,
   Flag,
+  History,
   MapPin,
   RefreshCw,
   Search,
@@ -18,12 +19,13 @@ import {
   banUserForModeration,
   deleteCapsuleAsAdmin,
   deleteReportedUserContent,
-  isSuperAdminUsername,
+  listAdminAuditLog,
   listModerationReports,
   listModerationUsers,
   listPublicCapsules,
   markReportResolved,
   unbanUserForModeration,
+  type AdminAuditEntry,
   type AdminCapsule,
   type ModerationReport,
 } from './adminModeration';
@@ -31,15 +33,17 @@ import {
 type AdminPanelProps = {
   username?: string | null;
   currentUserId: string;
+  isAdmin: boolean;
   onClose: () => void;
 };
 
-type TabId = 'users' | 'capsules' | 'reports';
+type TabId = 'users' | 'capsules' | 'reports' | 'audit';
 
 const TABS: { id: TabId; label: string; icon: typeof Users }[] = [
   { id: 'users', label: 'Пользователи', icon: Users },
   { id: 'capsules', label: 'Капсулы', icon: MapPin },
   { id: 'reports', label: 'Жалобы', icon: Flag },
+  { id: 'audit', label: 'Журнал', icon: History },
 ];
 
 function shortId(id: string): string {
@@ -62,18 +66,26 @@ function formatWhen(iso: string): string {
 }
 
 /**
- * UGC moderation console — client-gated to @sgurzheyev only.
+ * UGC moderation console — opened only when profiles.role is admin.
  */
-export default function AdminPanel({ username, currentUserId, onClose }: AdminPanelProps) {
-  const allowed = isSuperAdminUsername(username);
+export default function AdminPanel({
+  username,
+  currentUserId,
+  isAdmin,
+  onClose,
+}: AdminPanelProps) {
+  const allowed = isAdmin;
 
   const [tab, setTab] = useState<TabId>('users');
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [capsules, setCapsules] = useState<AdminCapsule[]>([]);
   const [reports, setReports] = useState<ModerationReport[]>([]);
+  const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
+  const [reportsFilter, setReportsFilter] = useState<'open' | 'all'>('open');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
@@ -91,20 +103,27 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
     setReports(rows);
   }, []);
 
+  const loadAudit = useCallback(async () => {
+    const rows = await listAdminAuditLog();
+    setAudit(rows);
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!allowed) return;
     setLoading(true);
     setError('');
+    setNotice('');
     try {
       if (tab === 'users') await loadUsers();
       else if (tab === 'capsules') await loadCapsules();
-      else await loadReports();
+      else if (tab === 'reports') await loadReports();
+      else await loadAudit();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка загрузки');
     } finally {
       setLoading(false);
     }
-  }, [allowed, tab, loadUsers, loadCapsules, loadReports]);
+  }, [allowed, tab, loadUsers, loadCapsules, loadReports, loadAudit]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -139,13 +158,25 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
   }, [capsules, query]);
 
   const filteredReports = useMemo(() => {
+    const base =
+      reportsFilter === 'open' ? reports.filter((r) => !r.resolved_at) : reports;
     const q = query.trim().toLowerCase();
-    if (!q) return reports;
-    return reports.filter((r) => {
+    if (!q) return base;
+    return base.filter((r) => {
       const hay = `${r.reason} ${r.reporter_id} ${r.reported_id}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [reports, query]);
+  }, [reports, reportsFilter, query]);
+
+  const filteredAudit = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return audit;
+    return audit.filter((row) => {
+      const preview = typeof row.details.content === 'string' ? row.details.content : '';
+      const hay = `${row.action} ${row.target_type} ${row.target_id} ${row.actor_id} ${preview}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [audit, query]);
 
   if (!allowed || typeof document === 'undefined') return null;
 
@@ -171,11 +202,7 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
       }
       return;
     }
-    if (
-      !window.confirm(
-        `Заблокировать ${label}? Пользователь будет забанен в profiles и добавлен в blocked_users.`
-      )
-    ) {
+    if (!window.confirm(`Заблокировать ${label}?`)) {
       return;
     }
     setBusyId(user.id);
@@ -242,6 +269,7 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
     }
     setBusyId(report.id);
     setError('');
+    setNotice('');
     try {
       const n = await deleteReportedUserContent(report.reported_id);
       await markReportResolved(report.id);
@@ -251,7 +279,7 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
         )
       );
       setCapsules((prev) => prev.filter((c) => c.author_id !== report.reported_id));
-      window.alert(`Удалено капсул: ${n}`);
+      setNotice(`Удалено капсул: ${n}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось удалить контент');
     } finally {
@@ -264,7 +292,9 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
       ? 'Поиск: username / ID / имя'
       : tab === 'capsules'
         ? 'Поиск: текст / автор / id'
-        : 'Поиск: причина / id';
+        : tab === 'reports'
+          ? 'Поиск: причина / id'
+          : 'Поиск: действие / id';
 
   return createPortal(
     <div
@@ -356,6 +386,10 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
           {error ? (
             <p className="mt-2 text-[0.78rem] font-medium text-rose-300" role="alert">
               {error}
+            </p>
+          ) : notice ? (
+            <p className="mt-2 text-[0.78rem] font-medium text-emerald-300" role="status">
+              {notice}
             </p>
           ) : null}
         </div>
@@ -493,6 +527,30 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
 
           {tab === 'reports' && (
             <div className="space-y-2">
+              <div className="flex gap-1 pb-1">
+                <button
+                  type="button"
+                  onClick={() => setReportsFilter('open')}
+                  className={`rounded-full border px-3 py-1 text-[0.72rem] font-semibold transition ${
+                    reportsFilter === 'open'
+                      ? 'border-amber-400/40 bg-amber-400/15 text-amber-100'
+                      : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Открытые
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReportsFilter('all')}
+                  className={`rounded-full border px-3 py-1 text-[0.72rem] font-semibold transition ${
+                    reportsFilter === 'all'
+                      ? 'border-white/20 bg-white/[0.1] text-slate-50'
+                      : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Все
+                </button>
+              </div>
               {loading && reports.length === 0 ? (
                 <p className="py-10 text-center text-sm text-slate-500">Загрузка…</p>
               ) : filteredReports.length === 0 ? (
@@ -550,6 +608,51 @@ export default function AdminPanel({ username, currentUserId, onClose }: AdminPa
                             Пометить как решено
                           </button>
                         </div>
+                      ) : null}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {tab === 'audit' && (
+            <div className="space-y-2">
+              {loading && audit.length === 0 ? (
+                <p className="py-10 text-center text-sm text-slate-500">Загрузка…</p>
+              ) : filteredAudit.length === 0 ? (
+                <p className="py-10 text-center text-sm text-slate-500">Действий пока нет</p>
+              ) : (
+                filteredAudit.map((row) => {
+                  const preview =
+                    row.action === 'delete_capsule' && typeof row.details.content === 'string'
+                      ? row.details.content
+                      : '';
+                  return (
+                    <article
+                      key={row.id}
+                      className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <History size={14} className="text-slate-400" aria-hidden />
+                        <span className="text-[0.8rem] font-semibold text-slate-100">
+                          {row.action}
+                        </span>
+                        <span className="text-[0.72rem] text-slate-400">{row.target_type}</span>
+                        <span className="font-mono text-[0.7rem] text-slate-500">
+                          {shortId(row.target_id)}
+                        </span>
+                        <span className="ml-auto text-[0.7rem] text-slate-600">
+                          {formatWhen(row.created_at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 font-mono text-[0.7rem] text-slate-500">
+                        actor: {shortId(row.actor_id)}
+                      </p>
+                      {preview ? (
+                        <p className="mt-2 line-clamp-3 text-[0.84rem] leading-relaxed text-slate-300">
+                          {preview}
+                        </p>
                       ) : null}
                     </article>
                   );
