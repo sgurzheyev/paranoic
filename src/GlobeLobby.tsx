@@ -62,6 +62,7 @@ import {
 import { getP2PSession } from './p2pSession';
 import { isTrusted } from './trust';
 import { loadContacts } from './contacts';
+import { MapSkyButtons, MapSkyCanvas, MapSkyCard, MapSkyProvider } from './map/MapSky';
 
 const ArFootprints = lazy(() =>
   import('./ArFootprints').catch((err) => {
@@ -1144,12 +1145,14 @@ export default function GlobeLobby({
     null;
 
   return (
+    <MapSkyProvider mapRef={mapRef} mapReady={mapReady} active={active}>
     <div className="family-map-root absolute inset-0 h-full w-full overflow-hidden bg-[#05070b] font-[Nunito,system-ui,sans-serif] text-slate-300">
       <div
         ref={containerRef}
         className={`family-mapbox absolute inset-0 h-full w-full${mapBootDone ? ' is-visible' : ''}`}
         style={{ width: '100%', height: '100%', minHeight: '100vh' }}
       />
+      <MapSkyCanvas />
 
       {!tokenMissing && !splashGone && active && (
         <div
@@ -1315,6 +1318,8 @@ export default function GlobeLobby({
               </button>
             </div>
 
+            <MapSkyButtons />
+
             <button
               type="button"
               className={`map-side-dock__fab map-side-dock__fab--memory${isTargetingMode ? ' is-active' : ''}`}
@@ -1428,6 +1433,8 @@ export default function GlobeLobby({
             </p>
           </div>
         )}
+
+        <MapSkyCard />
 
         <div className="map-chrome-bottom mt-auto flex flex-col gap-3 px-4 sm:px-6">
           {isTargetingMode ? (
@@ -1650,5 +1657,6 @@ export default function GlobeLobby({
         </div>
       )}
     </div>
+    </MapSkyProvider>
   );
 }
