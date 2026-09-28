@@ -216,6 +216,26 @@ export type TranslationDict = {
     ar: string;
     secretary: string;
     back: string;
+    weather: string;
+    weatherAria: string;
+    weatherLive: string;
+    weatherClear: string;
+    weatherRain: string;
+    weatherSand: string;
+    weatherHint: string;
+    weatherUnavailable: string;
+    weatherCooling: string;
+    weatherDemo: string;
+    rush: string;
+    rushAria: string;
+    rushShips: string;
+    rushPlanes: string;
+    rushNeedKey: string;
+    rushDemo: string;
+    craftAltitude: string;
+    craftSpeed: string;
+    craftCourse: string;
+    craftClose: string;
   };
   call: {
     incoming: string;
