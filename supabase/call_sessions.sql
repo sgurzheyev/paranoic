@@ -1,3 +1,4 @@
+-- SUPERSEDED: legacy demo policies (using (true)). Do not run; see migrations/20260321_harden_rls_policies.sql and migrations/20260928_rls_lockdown.sql.
 /**
  * Call sessions — статус звонка в Supabase (ringing / cancelled / …).
  * Run in Supabase SQL Editor after profiles.sql.
