@@ -1,3 +1,4 @@
+-- SUPERSEDED: legacy demo policies (using (true)). Do not run; see migrations/20260321_harden_rls_policies.sql and migrations/20260928_rls_lockdown.sql.
 /**
  * Memory GEMs — импортированные капсулы с массивом media_urls.
  * Run in Supabase SQL Editor.

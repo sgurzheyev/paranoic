@@ -15,24 +15,29 @@ create policy "map_gems_select_anon"
   to anon, authenticated
   using (true);
 
+-- Writes are owner-only (see migrations/20260928_rls_lockdown.sql); no using (true) update/delete.
 drop policy if exists "map_gems_insert_anon" on public.map_gems;
-create policy "map_gems_insert_anon"
-  on public.map_gems for insert
-  to anon, authenticated
-  with check (author_id is not null and length(trim(author_id)) > 0);
-
 drop policy if exists "map_gems_update_anon" on public.map_gems;
-create policy "map_gems_update_anon"
-  on public.map_gems for update
-  to anon, authenticated
-  using (true)
-  with check (true);
-
 drop policy if exists "map_gems_delete_anon" on public.map_gems;
-create policy "map_gems_delete_anon"
+
+drop policy if exists "map_gems_insert_author" on public.map_gems;
+create policy "map_gems_insert_author"
+  on public.map_gems for insert
+  to authenticated
+  with check (author_id::text = auth.uid()::text);
+
+drop policy if exists "map_gems_update_author" on public.map_gems;
+create policy "map_gems_update_author"
+  on public.map_gems for update
+  to authenticated
+  using (author_id::text = auth.uid()::text)
+  with check (author_id::text = auth.uid()::text);
+
+drop policy if exists "map_gems_delete_author" on public.map_gems;
+create policy "map_gems_delete_author"
   on public.map_gems for delete
-  to anon, authenticated
-  using (true);
+  to authenticated
+  using (author_id::text = auth.uid()::text);
 
 -- Storage bucket
 insert into storage.buckets (id, name, public)
@@ -47,20 +52,15 @@ create policy "map_gems_public_read"
 
 drop policy if exists "map_gems_anon_upload" on storage.objects;
 drop policy if exists "map_gems_authenticated_upload" on storage.objects;
-create policy "map_gems_anon_upload"
-  on storage.objects for insert
-  to anon, authenticated
-  with check (bucket_id = 'map-gems');
-
--- Explicit authenticated INSERT (requested for Drop a Gem media upload)
 create policy "map_gems_authenticated_upload"
   on storage.objects for insert
   to authenticated
   with check (bucket_id = 'map-gems');
 
 drop policy if exists "map_gems_anon_update" on storage.objects;
-create policy "map_gems_anon_update"
+drop policy if exists "map_gems_owner_update" on storage.objects;
+create policy "map_gems_owner_update"
   on storage.objects for update
-  to anon, authenticated
-  using (bucket_id = 'map-gems')
-  with check (bucket_id = 'map-gems');
+  to authenticated
+  using (bucket_id = 'map-gems' and owner_id = auth.uid()::text)
+  with check (bucket_id = 'map-gems' and owner_id = auth.uid()::text);

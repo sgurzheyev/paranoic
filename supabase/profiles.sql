@@ -27,31 +27,13 @@ create unique index if not exists profiles_username_unique
 
 alter table public.profiles enable row level security;
 
--- Demo policies: anon read/upsert (no auth in the app yet).
+-- Legacy demo policies (anon read/insert/update/delete with using (true)) were removed.
+-- Profile RLS lives in migrations/20260321_harden_rls_policies.sql and
+-- migrations/20260928_rls_lockdown.sql (owner-only writes, column-level SELECT without password).
 drop policy if exists "profiles_select_anon" on public.profiles;
-create policy "profiles_select_anon"
-  on public.profiles for select
-  to anon
-  using (true);
-
 drop policy if exists "profiles_upsert_anon" on public.profiles;
-create policy "profiles_upsert_anon"
-  on public.profiles for insert
-  to anon
-  with check (true);
-
 drop policy if exists "profiles_update_anon" on public.profiles;
-create policy "profiles_update_anon"
-  on public.profiles for update
-  to anon
-  using (true)
-  with check (true);
-
 drop policy if exists "profiles_delete_anon" on public.profiles;
-create policy "profiles_delete_anon"
-  on public.profiles for delete
-  to anon
-  using (true);
 
 -- Storage bucket
 insert into storage.buckets (id, name, public)
@@ -65,14 +47,16 @@ create policy "avatars_public_read"
   using (bucket_id = 'avatars');
 
 drop policy if exists "avatars_anon_upload" on storage.objects;
-create policy "avatars_anon_upload"
+drop policy if exists "avatars_authenticated_upload" on storage.objects;
+create policy "avatars_authenticated_upload"
   on storage.objects for insert
-  to anon, authenticated
+  to authenticated
   with check (bucket_id = 'avatars');
 
 drop policy if exists "avatars_anon_update" on storage.objects;
-create policy "avatars_anon_update"
+drop policy if exists "avatars_owner_update" on storage.objects;
+create policy "avatars_owner_update"
   on storage.objects for update
-  to anon, authenticated
-  using (bucket_id = 'avatars')
-  with check (bucket_id = 'avatars');
+  to authenticated
+  using (bucket_id = 'avatars' and owner_id = auth.uid()::text)
+  with check (bucket_id = 'avatars' and owner_id = auth.uid()::text);

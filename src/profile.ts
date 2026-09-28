@@ -1,5 +1,4 @@
 import { getSupabase, hasSupabaseConfig } from './lib/supabase';
-import { hashPassword } from './passwordAuth';
 import {
   getOrCreateIdentity,
   isValidUuid,
@@ -19,13 +18,12 @@ export type RemoteProfile = {
   avatar_url: string | null;
   theme_fon: string | null;
   username: string | null;
-  password?: string | null;
   role?: string | null;
   is_banned?: boolean | null;
 };
 
 export type SyncProfileOptions = {
-  /** Новый пароль — хэшируется и сохраняется в profiles.password. */
+  /** Новый пароль входа — меняется в Supabase Auth (не в profiles). */
   password?: string;
 };
 
@@ -33,16 +31,7 @@ export type SyncProfileOptions = {
 export const PROFILE_PUBLIC_COLUMNS =
   'id,name,color,avatar_url,theme_fon,username,role,is_banned';
 
-/** Колонки profiles в production Supabase (включая password для входа). */
-export const PROFILE_COLUMNS = `${PROFILE_PUBLIC_COLUMNS},password`;
-
 const PROFILE_SELECT = PROFILE_PUBLIC_COLUMNS;
-
-/** Прочитать сохранённый пароль из строки profiles (колонка `password`). */
-export function readStoredPassword(row: Record<string, unknown> | RemoteProfile): string {
-  const raw = row.password;
-  return typeof raw === 'string' ? raw.trim() : '';
-}
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const MAX_EDGE = 512;
@@ -363,21 +352,24 @@ export async function syncProfileToSupabase(
       theme_fon: identity.themeFon || null,
       username,
     };
-    if (opts?.password?.trim()) {
-      row.password = await hashPassword(opts.password);
-    }
+    // profiles.password is legacy and not readable via the API (20260928_rls_lockdown.sql);
+    // login passwords live in Supabase Auth only.
     const { error } = await sb.from(PROFILES_TABLE).upsert(row, { onConflict: 'id' });
     if (error) {
       if (/username|unique|duplicate/i.test(error.message)) {
         throw new Error('Имя занято');
       }
-      if (opts?.password?.trim()) {
-        throw new Error(`Не удалось сохранить пароль: ${error.message}`);
-      }
       console.warn('[paranoic] profiles upsert', error.message);
     }
+    const newPassword = opts?.password?.trim();
+    if (newPassword) {
+      const { error: pwErr } = await sb.auth.updateUser({ password: newPassword });
+      if (pwErr) {
+        throw new Error(`Не удалось сохранить пароль: ${pwErr.message}`);
+      }
+    }
   } catch (e) {
-    if (e instanceof Error && /никнейм|username/i.test(e.message)) throw e;
+    if (e instanceof Error && /никнейм|username|пароль/i.test(e.message)) throw e;
     console.warn('[paranoic] profiles sync skipped', e);
   }
 }
