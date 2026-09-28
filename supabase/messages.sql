@@ -1,3 +1,4 @@
+-- SUPERSEDED: legacy demo policies (using (true)). Do not run; see migrations/20260321_harden_rls_policies.sql and migrations/20260928_rls_lockdown.sql.
 /**
  * Store-and-Forward: encrypted offline messages + files.
  *
